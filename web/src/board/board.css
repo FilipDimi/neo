@@ -44,6 +44,7 @@
 .gate.ok { color: var(--done); border: 1px solid rgba(124, 240, 191, 0.4); } .gate.bad { color: var(--silent); border: 1px solid var(--silent-edge); }
 .tabs { display: flex; gap: 8px; }
 .feed { flex: 1 0 180px; min-height: 180px; overflow-y: auto; background: var(--ground); border: 1px solid var(--line); border-radius: var(--card); padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; line-height: 17px; }
+.cards .earlier { margin-top: 10px; color: var(--dim); }
 .feed.files details { border-bottom: 1px solid var(--line); padding: 6px 0; }
 .feed.files summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .feed.files code { font: 11px/16px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }

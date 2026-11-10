@@ -31,6 +31,10 @@ export function Board() {
                 <Card key={card.taskId} card={card} />
               ))}
               {column.more > 0 && <div className="more">+ {column.more} more</div>}
+              {column.earlier.length > 0 && <div className="label earlier">Earlier</div>}
+              {column.earlier.map((card) => (
+                <Card key={card.taskId} card={card} />
+              ))}
             </div>
           </section>
         ))}

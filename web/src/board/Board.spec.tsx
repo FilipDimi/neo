@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { company, employee, T0, task, team } from '../../../test/rows.ts';
 import { storyAt } from '../fixtures/story.ts';
 import { fromSnapshot } from '../store/reduce.ts';
-import { mount } from '../testing.tsx';
+import { fakeUi, mount } from '../testing.tsx';
 import { Board } from './Board.tsx';
 
 const base = { version: 1, company: company(), repos: [], teams: [team()], employees: [employee()], runs: [], requests: [], decisions: [], messages: [], health: null, planUsage: null, spend: { company: 0, byTeam: {}, byEmployee: {} }, lastEventId: 1, now: T0.toISOString() };
@@ -40,6 +40,21 @@ describe('Board', () => {
     const { ui } = mount(<Board />, { store: fromSnapshot({ ...base, tasks: [task()] }), now: T0 });
     await userEvent.click(screen.getByRole('button', { name: /Do the thing/ }));
     expect(ui.asked).toEqual([['openTask', 'task1', undefined]]);
+  });
+
+  it('lists what finished before today under Earlier, and opens it like any card', async () => {
+    const { store, now } = storyAt('cards_answered');
+    const nextDay = new Date(now.getTime() + 24 * 3600_000);
+    const ui = fakeUi();
+    mount(<Board />, { store, now: nextDay, ui });
+    const done = screen.getByRole('region', { name: 'Done today' });
+    expect(within(done).getByTestId('count').textContent).toBe('0');
+    expect(within(done).getByText('Earlier')).toBeTruthy();
+    const cards = within(done).getAllByRole('button');
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.length).toBeLessThanOrEqual(5);
+    await userEvent.click(cards[0]!);
+    expect(ui.asked[0]![0]).toBe('openTask');
   });
 
   it('counts what Done today does not show', () => {

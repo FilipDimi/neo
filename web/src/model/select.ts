@@ -74,10 +74,12 @@ export function deck(store: Store, now: Date): DeckCard[] {
 
 export type ColumnKey = 'queued' | 'briefing' | 'running' | 'review' | 'blocked' | 'done';
 export type BoardCard = { taskId: string; title: string; line2: string; line3: string | null; attention: Attention; failed: boolean };
-export type Column = { key: ColumnKey; title: string; count: number; cards: BoardCard[]; more: number };
+/** `earlier` is only ever filled for the last column: the last few things that finished before today. They are not in `count`. */
+export type Column = { key: ColumnKey; title: string; count: number; cards: BoardCard[]; more: number; earlier: BoardCard[] };
 
 const COLUMNS: [ColumnKey, string][] = [['queued', 'Queued'], ['briefing', 'Briefing'], ['running', 'Running'], ['review', 'Review'], ['blocked', 'Blocked'], ['done', 'Done today']];
 const DONE_SHOWN = 8;
+const EARLIER_SHOWN = 5;
 
 function card(store: Store, task: Task, now: Date): BoardCard {
   const runs = runsOf(store, task.id);
@@ -124,13 +126,18 @@ export function board(store: Store, now: Date): Column[] {
   return COLUMNS.map(([key, title]) => {
     if (key !== 'done') {
       const tasks = work.filter((task) => task.state === key).sort(byOrder);
-      return { key, title, count: tasks.length, cards: tasks.map((task) => card(store, task, now)), more: 0 };
+      return { key, title, count: tasks.length, cards: tasks.map((task) => card(store, task, now)), more: 0, earlier: [] };
     }
     // Done and failed today. A failed task is what needs seeing, so it goes first; then the latest.
     const finished = work
       .filter((task) => (task.state === 'done' || task.state === 'failed') && task.updatedAt >= midnight)
       .sort((a, b) => Number(b.state === 'failed') - Number(a.state === 'failed') || b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
-    return { key, title, count: finished.length, cards: finished.slice(0, DONE_SHOWN).map((task) => card(store, task, now)), more: Math.max(0, finished.length - DONE_SHOWN) };
+    // Yesterday's work does not vanish at midnight: the newest of it stays within reach, so what it produced can still be opened.
+    const before = work
+      .filter((task) => (task.state === 'done' || task.state === 'failed') && task.updatedAt < midnight)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id))
+      .slice(0, EARLIER_SHOWN);
+    return { key, title, count: finished.length, cards: finished.slice(0, DONE_SHOWN).map((task) => card(store, task, now)), more: Math.max(0, finished.length - DONE_SHOWN), earlier: before.map((task) => card(store, task, now)) };
   });
 }
 

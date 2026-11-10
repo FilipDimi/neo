@@ -128,6 +128,17 @@ describe('board', () => {
     expect(done).toMatchObject({ count: 11, more: 3 });
     expect(done.cards.map((c) => c.taskId)).toEqual(['d10', 'd9', 'd8', 'd7', 'd6', 'd5', 'd4', 'd3']);
   });
+
+  it('keeps the last few things that finished before today within reach, apart from today and not counted in it', () => {
+    const today = new Date(2026, 10, 10, 0, 13);
+    const old = Array.from({ length: 7 }, (_, i) => task({ id: `y${i}`, state: i === 0 ? 'failed' : 'done', updatedAt: new Date(2026, 10, 9, 20, i).toISOString() }));
+    const store = fromSnapshot(snapshot({ tasks: [...old, task({ id: 'now', state: 'done', updatedAt: new Date(2026, 10, 10, 0, 5).toISOString() }), task({ id: 'open', state: 'running' })] }));
+    const done = column(store, 'done', today);
+    expect(done.count).toBe(1);
+    expect(done.cards.map((c) => c.taskId)).toEqual(['now']);
+    expect(done.earlier.map((c) => c.taskId)).toEqual(['y6', 'y5', 'y4', 'y3', 'y2']);
+    expect(column(store, 'running', today).earlier).toEqual([]);
+  });
 });
 
 describe('orgChart', () => {
