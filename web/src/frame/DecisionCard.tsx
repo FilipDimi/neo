@@ -41,6 +41,7 @@ export function DecisionCard({ card, onAside, onGone }: { card: DeckCard; onAsid
         {card.team ? ` · ${card.team}` : ''}
       </div>
       <p className="decision-text">{card.text}</p>
+      {card.asker && <p className="decision-note">{`Your answer goes back to ${card.asker} as words. It changes no tools and no limits.`}</p>}
       {card.freeText && (
         <>
           <label htmlFor={field} className="sr-only">

@@ -33,6 +33,8 @@ export function chat(sup: Supervisor, text: string): Message {
 export function messageEmployee(sup: Supervisor, employeeId: string, text: string): Message {
   const employee = store.getEmployee(sup.db, employeeId);
   if (!employee || employee.fired) throw new Error(`there is no employee ${employeeId}`);
+  // Writing to the chief of staff is the company chat, whichever box it was typed in: it answers or routes, and nothing is ticked off as a task.
+  if (store.getCompany(sup.db)?.chiefOfStaffId === employeeId) return chat(sup, text);
   if (store.liveRuns(sup.db).some((run) => run.employeeId === employeeId)) return sup.send({ employeeId }, text.trim(), 'user');
   // Nobody is idle with orders unread: for an idle employee the message is work, so it becomes a task on the board.
   const task = sup.createTask({ teamId: employee.teamId, assigneeId: employee.id, title: titleOf(text), brief: text.trim() });

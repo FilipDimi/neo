@@ -3,14 +3,14 @@
  */
 import { z } from 'zod';
 import type { RuntimeEvent, ToolCall } from '../shared/runtime.ts';
-import { RunMode } from '../shared/types.ts';
+import { Capability, RunMode } from '../shared/types.ts';
 
-export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'set_status', 'run_gate', 'create_task'] as const;
+export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task'] as const;
 export const EngineTool = z.enum(ENGINE_TOOLS);
 export type EngineTool = z.infer<typeof EngineTool>;
 
 /** A tool call that ends a run's work: after one of these is accepted, the session takes no further turn. */
-export const CLOSING_TOOLS: ReadonlySet<EngineTool> = new Set(['propose_subtasks', 'report_done', 'submit_review', 'request_decision']);
+export const CLOSING_TOOLS: ReadonlySet<EngineTool> = new Set(['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools']);
 
 export const WorkerJob = z.object({
   runId: z.string(),
@@ -61,6 +61,7 @@ export type ToWorker = z.infer<typeof ToWorker>;
 
 /** The input each engine tool takes. The worker validates before forwarding; the supervisor validates again. */
 export const TOOL_INPUT = {
+  request_tools: z.object({ capabilities: z.array(Capability).min(1), reason: z.string().min(1) }),
   propose_subtasks: z.object({
     subtasks: z
       .array(

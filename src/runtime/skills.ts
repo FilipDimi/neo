@@ -13,7 +13,6 @@ export type SkillDirs = { userSkills: string; pluginCache: string; companySkills
 /** Skills that ship inside Claude Code and suit an employee. They need no mounting. */
 const BUNDLED: [string, string][] = [
   ['dataviz', 'Charts and data visualisation that read as one system.'],
-  ['deep-research', 'Research across many sources, written up as a report.'],
   ['code-review', 'Reviews a diff for correctness bugs.'],
   ['simplify', 'Reviews changed code for reuse and simplification, then applies the fixes.'],
   ['debug', 'Systematic debugging.'],

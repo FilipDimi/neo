@@ -100,6 +100,38 @@ describe('the company chat', () => {
     expect(fixture.jobs[1]!.firstTurn).toContain('Second.');
   });
 
+  it('puts the state of the board in front of the chief of staff with every message, so it never has to guess', async () => {
+    const turns: string[] = [];
+    const { w, fixture } = company(async (s) => {
+      if (s.mode === 'route') return void turns.push(s.input.prompt);
+      await s.engine('set_status', { text: 'docking the glass row' });
+      await new Promise(() => {}); // Ada keeps working
+    });
+    const working = w.sup.createTask({ teamId: 'ios', assigneeId: 'ada', title: 'Dock the glass row', brief: 'Do it.' });
+    w.sup.createTask({ teamId: 'marketing', assigneeId: 'mw', title: 'App Store description', brief: 'Write it.' });
+    await w.sup.tick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    chat(w.sup, 'Is the iOS team working on something?');
+    await w.sup.tick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(store.getTask(w.db, working.id)!.state).toBe('running');
+    const turn = turns.at(-1)!;
+    expect(turn).toContain('The company right now');
+    expect(turn).toMatch(/Engineering iOS:\n- "Dock the glass row" \(running\): Ada is working on it \("docking the glass row"\)/);
+    expect(turn).toMatch(/Marketing:\n- "App Store description"/);
+    expect(turn).toMatch(/answer it from "The company right now"/);
+    expect(turn).not.toContain('Is the iOS team working on something?" (');
+  });
+
+  it('treats a direct message to the chief of staff as chat, not as a task that gets ticked off', async () => {
+    const { w } = company(() => {});
+    const message = messageEmployee(w.sup, 'neo', 'Keep an eye on the iOS team for me.');
+    expect(message.toId).toBe('neo');
+    expect(store.listTasks(w.db)).toMatchObject([{ kind: 'chat', assigneeId: 'neo' }]);
+    expect(store.openRequests(w.db)).toMatchObject([{ mode: 'route', employeeId: 'neo' }]);
+  });
+
   it('says so when there is no chief of staff', () => {
     const fixture = inProcess(staged(() => {}));
     const w = (open = world(fixture.spawn, { teams, employees: people }));

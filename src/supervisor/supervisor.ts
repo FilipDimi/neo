@@ -13,12 +13,13 @@ import type { RuntimeEvent } from '../shared/runtime.ts';
 import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task, Team } from '../shared/types.ts';
 import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
 import { GateQueue, type GateLimits } from '../git/gates.ts';
-import { commandLimits, envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
+import { availableCapabilities, CAPABILITIES, commandLimits, envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
 import { budgetFor, costOf, isUsageLimit } from './budget.ts';
 import * as decisions from './decisions.ts';
 import type { TeamView } from './definition.ts';
 import { Flow } from './flow.ts';
 import { checkHealth, realProbes, type Probes } from './health.ts';
+import { companyNow } from './companyNow.ts';
 import { buildJob, folderOf, sessionEnv } from './jobs.ts';
 import { canTransition } from './taskState.ts';
 import { remember } from './memory.ts';
@@ -425,6 +426,7 @@ export class Supervisor {
         repo: (prepared.repoId && store.getRepo(this.db, prepared.repoId)) || null,
         teammates: everyone.filter((e) => e.teamId === team.id),
         teams,
+        board: request.mode === 'route' ? companyNow(this.db, now) : undefined,
         remainingUsd: Math.max(0, task.capUsd - store.spentOn(this.db, task.id)),
         envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)),
         maxBudgetUsd: budget,
@@ -652,10 +654,53 @@ export class Supervisor {
         this.reports.set(run.id, TOOL_INPUT.report_done.parse(input).summary);
         return { ok: true, text: 'Recorded. End your turn now: the engine takes it from here.' };
       }
+      case 'request_tools': {
+        const { capabilities, reason } = TOOL_INPUT.request_tools.parse(input);
+        const employee = store.getEmployee(this.db, run.employeeId);
+        const task = store.getTask(this.db, run.taskId);
+        const team = task && store.getTeam(this.db, task.teamId);
+        if (!employee || !task || !team) return { ok: false, text: 'This run has lost its task.' };
+        const offered = availableCapabilities(team).filter((capability) => !employee.capabilities.includes(capability));
+        const wanted = [...new Set(capabilities)];
+        const has = wanted.filter((capability) => employee.capabilities.includes(capability));
+        if (has.length === wanted.length) return { ok: false, text: `You already have ${decisions.capabilityNames(has)}. Use it.` };
+        const missing = wanted.filter((capability) => !employee.capabilities.includes(capability));
+        const refused = missing.filter((capability) => !offered.includes(capability));
+        if (refused.length > 0) return { ok: false, text: `Nobody on your team can be given ${decisions.capabilityNames(refused)}. What you can be given: ${offered.map((capability) => CAPABILITIES[capability].label).join(', ') || 'nothing more'}.` };
+        const names = decisions.capabilityNames(missing);
+        apply(
+          this.db,
+          (tx) =>
+            decisions.raise(tx, this.db, now, {
+              taskId: task.id,
+              runId: run.id,
+              employeeId: employee.id,
+              kind: 'capability',
+              text: `${employee.name} cannot do "${task.title}" with the tools it has. It asks for ${names}: ${reason.trim()}`,
+              options: [
+                { id: 'grant', label: `Give ${employee.name} ${names}`, effect: 'grant_capabilities', params: { employeeId: employee.id, capabilities: missing } },
+                { id: 'without', label: 'Carry on without', effect: 'resume_with_answer', params: { text: `The user decided you will not get ${names}. Do what you can without, and say in your report what you could not do.` } },
+                { id: 'stop', label: 'Stop it', effect: 'stop_task' },
+              ],
+            }),
+          now,
+        );
+        this.planned.set(run.id, { outcome: 'stopped', reason: 'tools' });
+        return { ok: true, text: 'Your request is on the user\'s desk. End your turn now: you will be resumed with the answer.' };
+      }
       case 'request_decision': {
         const { question, options } = TOOL_INPUT.request_decision.parse(input);
         const employee = store.getEmployee(this.db, run.employeeId);
         const task = store.getTask(this.db, run.taskId);
+        // An employee that keeps asking is missing something an answer cannot give it. The third question in a row says so,
+        // and the buttons it wrote itself go: they have been pressed twice and changed nothing.
+        const earlier = store.runsOf(this.db, run.taskId).filter((other) => other.id !== run.id && other.endedAt !== null);
+        let inARow = 1;
+        for (const other of earlier.reverse()) {
+          if (other.reason !== 'question') break;
+          inARow += 1;
+        }
+        const looping = inARow >= 3;
         apply(
           this.db,
           (tx) =>
@@ -664,9 +709,11 @@ export class Supervisor {
               runId: run.id,
               employeeId: run.employeeId,
               kind: 'question',
-              text: `${employee?.name ?? 'An employee'} asks about "${task?.title ?? 'a task'}": ${question}`,
+              text: looping
+                ? `${employee?.name ?? 'An employee'} has asked ${inARow} times in a row about "${task?.title ?? 'a task'}" and done no work in between. It is probably missing something an answer cannot give it: a tool, a file, or a clearer task. Its question this time: ${question}`
+                : `${employee?.name ?? 'An employee'} asks about "${task?.title ?? 'a task'}": ${question}`,
               freeText: true,
-              options: decisions.optionsFor('question', { choices: options }),
+              options: decisions.optionsFor('question', { choices: looping ? [] : options }),
             }),
           now,
         );

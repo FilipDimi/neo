@@ -85,3 +85,16 @@ describe('Deck', () => {
     expect(screen.queryByRole('article')).toBeNull();
   });
 });
+
+describe('a question from an employee', () => {
+  it('says that its buttons only send words back, so nobody presses one expecting it to change a tool', () => {
+    const { store, now } = storyAt('cards_open');
+    mount(<Deck />, { store, now });
+    const question = [...store.decisions.values()].find((d) => d.kind === 'question' && d.answeredAt === null)!;
+    const card = screen.getByRole('article', { name: `Decision: ${question.text}` });
+    expect(card.textContent).toMatch(/Your answer goes back to .+ as words\. It changes no tools and no limits\./);
+    const merge = [...store.decisions.values()].find((d) => d.kind === 'merge' && d.answeredAt === null)!;
+    expect(screen.getByRole('article', { name: `Decision: ${merge.text}` }).textContent).not.toMatch(/as words/);
+  });
+});
+

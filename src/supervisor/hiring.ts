@@ -19,6 +19,7 @@ export type HireForm = { name: string; teamId: string; role: string; model: stri
 export type HireInput = HireForm | { preset: PresetId; name: string; teamId: string };
 
 function checkKit(ctx: HireCtx, team: Team, skills: string[], capabilities: Capability[]): void {
+  if (capabilities.length === 0) throw new Error('give the employee at least one tool: with none it can read nothing and do nothing but ask');
   const missing = skills.find((id) => !ctx.skills.some((skill) => skill.id === id));
   if (missing) throw new Error(`the skill "${missing}" is not installed on this machine`);
   const allowed = availableCapabilities(team);

@@ -6,7 +6,8 @@
 import { apply, type Tx } from '../db/apply.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
-import type { Decision, DecisionKind, DecisionOption, Effect, Run, RunRequest, Task } from '../shared/types.ts';
+import { Capability, type Decision, type DecisionKind, type DecisionOption, type Effect, type Run, type RunRequest, type Task } from '../shared/types.ts';
+import { CAPABILITIES } from './blastRadius.ts';
 import { requestFor } from './scheduler.ts';
 import { canTransition, transition, type TaskEvent } from './taskState.ts';
 
@@ -49,6 +50,9 @@ export function optionsFor(kind: DecisionKind, context: { leaseMinutes?: number;
       return [{ id: 'recheck', label: 'Check again', effect: 'recheck' }];
     case 'usage_limit':
       return [{ id: 'resume', label: 'Resume now', effect: 'resume_company' }];
+    case 'capability':
+      // Written where the card is raised: its first option names the employee and the tools it asks for.
+      return [STOP];
   }
 }
 
@@ -133,6 +137,9 @@ function unblock(tx: Tx, task: Task, now: Date, patch: Partial<Task> = {}): Task
   return canTransition(task, 'unblock') ? move(tx, task, 'unblock', now, patch) : task;
 }
 
+/** "web search and run commands": capabilities as the hire form names them. */
+export const capabilityNames = (list: Capability[]): string => list.map((capability) => CAPABILITIES[capability].label).join(' and ');
+
 /** Queues another run of the same employee in the same mode, picking the session up where it stopped. */
 function requestAgain(tx: Tx, db: Db, now: Date, task: Task, last: Run | undefined, reason: RunRequest['reason'], firstTurn: string, more: Partial<RunRequest> = {}): void {
   // Whoever ran it last carries on, unless they no longer work here: then it goes to whoever the task is assigned to now, from the start.
@@ -187,6 +194,13 @@ function applyEffect(tx: Tx, db: Db, now: Date, decision: Decision, option: Deci
     case 'retry': {
       const leaseMinutes = typeof option.params?.leaseMinutes === 'number' ? option.params.leaseMinutes : null;
       return requestAgain(tx, db, now, unblock(tx, task, now), last, 'retry', 'Your last run was cut short. The files in your folder are as you left them. Carry on with the task.', { leaseMinutes });
+    }
+    case 'grant_capabilities': {
+      // The one answer that changes what an employee can do: the tools are added, and the run it stopped carries on with them.
+      const employee = typeof option.params?.employeeId === 'string' ? store.getEmployee(db, option.params.employeeId) : undefined;
+      const wanted = (Array.isArray(option.params?.capabilities) ? option.params.capabilities : []).filter((value): value is Capability => Capability.safeParse(value).success);
+      if (employee) tx.emit({ kind: 'employee_changed', employee: { ...employee, capabilities: [...new Set([...employee.capabilities, ...wanted])] } });
+      return requestAgain(tx, db, now, unblock(tx, task, now), last, 'resume', `You now have these tools as well: ${capabilityNames(wanted)}. Carry on with the task.`);
     }
     case 'raise_cap': {
       const usd = typeof option.params?.usd === 'number' ? option.params.usd : 0;

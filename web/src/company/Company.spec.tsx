@@ -84,6 +84,16 @@ describe('HireForm', () => {
     expect((screen.getByLabelText('Lead') as HTMLInputElement).disabled).toBe(true);
   });
 
+  it('will not hire someone with every tool unticked, and says why', async () => {
+    const { api } = await form();
+    await userEvent.type(screen.getByLabelText('Name'), 'Pat');
+    await userEvent.type(screen.getByLabelText('Role, in one sentence'), 'Researches the market.');
+    for (const tool of ['read files', 'run commands', 'write code']) await userEvent.click(screen.getByLabelText(tool));
+    expect(screen.getByText(/With no tools this employee can read nothing and do nothing but ask you questions/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Hire Pat' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.calls.some(([method]) => method === 'POST')).toBe(false);
+  });
+
   it('posts the hire form\'s fields and names the button after the person', async () => {
     const { api } = await form();
     await userEvent.type(screen.getByLabelText('Name'), 'Ada');
@@ -91,8 +101,10 @@ describe('HireForm', () => {
     await userEvent.type(screen.getByLabelText('Role, in one sentence'), 'Reads the usage logs and writes a weekly note.');
     await userEvent.selectOptions(screen.getByLabelText('Model'), 'claude-opus-5-5');
     await userEvent.click(screen.getByLabelText('dataviz'));
-    await userEvent.click(screen.getByLabelText('read files'));
-    await userEvent.click(screen.getByLabelText('run commands'));
+    // Reading, running commands and writing are ticked to begin with: an employee with no tools can only ask.
+    for (const tool of ['read files', 'run commands', 'write code']) expect((screen.getByLabelText(tool) as HTMLInputElement).checked, tool).toBe(true);
+    expect((screen.getByLabelText('web search') as HTMLInputElement).checked).toBe(false);
+    await userEvent.click(screen.getByLabelText('write code'));
     await userEvent.click(screen.getByRole('button', { name: 'Hire Ada' }));
     expect(api.calls.at(-1)).toEqual(['POST', '/api/employees', { name: 'Ada', teamId: 'ios', role: 'Reads the usage logs and writes a weekly note.', model: 'claude-opus-5-5', lead: false, skills: ['dataviz'], capabilities: ['read_files', 'run_commands'] }]);
     expect(await screen.findByText('Ada was hired.')).toBeTruthy();

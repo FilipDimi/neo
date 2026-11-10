@@ -14,10 +14,10 @@ import { readIndex } from './memory.ts';
 export const MAX_TURNS: Record<RunMode, number> = { brief: 40, review: 40, route: 20, work: 150, integrate: 150 };
 
 export const ENGINE_TOOLS_FOR: Record<RunMode, EngineTool[]> = {
-  brief: ['propose_subtasks', 'report_done', 'request_decision', 'set_status', 'run_gate'],
-  work: ['report_done', 'request_decision', 'set_status', 'run_gate'],
-  integrate: ['report_done', 'request_decision', 'set_status', 'run_gate'],
-  review: ['submit_review', 'request_decision', 'set_status', 'run_gate'],
+  brief: ['propose_subtasks', 'report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate'],
+  work: ['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate'],
+  integrate: ['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate'],
+  review: ['submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate'],
   route: ['create_task', 'set_status'],
 };
 
@@ -49,6 +49,8 @@ export type JobInput = {
   teammates: Employee[];
   /** Every team, for the chief of staff, who routes work to them. */
   teams: TeamView[];
+  /** The state of every board, for the chief of staff, who is asked about it. */
+  board?: string | undefined;
   remainingUsd: number;
   /** The limit for this run: what the task has left. */
   maxBudgetUsd?: number;
@@ -71,7 +73,7 @@ export function buildJob(input: JobInput): WorkerJob {
   const cwd = folderOf(input.paths, task);
   fs.mkdirSync(cwd, { recursive: true });
   const shape = sessionShape({ task, team, employee, mode: run.mode, folder: cwd, company, envFiles: input.envFiles, protect: engineFiles(input.paths) });
-  const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams });
+  const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams, board: input.board });
   // A command may run long, but never longer than the lease: the Bash timeout sits two minutes under it.
   const bashTimeout = String(Math.max(1, run.leaseMinutes - 2) * 60_000);
   return {

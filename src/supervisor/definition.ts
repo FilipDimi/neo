@@ -3,7 +3,8 @@
  * skills, memory. The first user turn is the work: brief, done-condition, gates, and what this
  * run is for. Both are generated from rows; nobody hand-edits them.
  */
-import type { Company, Employee, GateResult, Repo, RunMode, Task, Team } from '../shared/types.ts';
+import { availableCapabilities, CAPABILITIES } from './blastRadius.ts';
+import type { Capability, Company, Employee, GateResult, Repo, RunMode, Task, Team } from '../shared/types.ts';
 
 const usd = (amount: number): string => `$${amount.toFixed(2)}`;
 
@@ -18,7 +19,8 @@ export function buildSystemPrompt(input: { company: Company; team: Team; employe
     `You are ${employee.name}, ${leads ? 'the lead of' : 'a member of'} the ${team.name} team at ${company.name}.\nYour role: ${employee.role}`,
 
     `## How work reaches you
-A supervisor program runs this company. It starts you for one piece of work at a time, in a folder of your own, and records what you do. You have no inbox and you never wait for anyone. Do the work in front of you, tell the engine the outcome with one of its tools, and stop. If you need something you may not decide or do yourself, ask with mcp__engine__request_decision and stop: you will be resumed with the answer.
+A supervisor program runs this company. It starts you for one piece of work at a time, in a folder of your own, and records what you do. You have no inbox and you never wait for anyone. Do the work in front of you, tell the engine the outcome with one of its tools, and stop.
+Decide what you can decide. When something is unclear, make the reasonable assumption, say so in your report, and carry on: the user reads reports, and would rather correct an assumption than answer a question. Ask with mcp__engine__request_decision only when carrying on would be wrong whatever you assumed: the task contradicts itself, a step cannot be undone, or it needs something only the user has. Ask once, with everything you need in the one question. An answer is only words: it cannot give you a tool or lift a limit.
 Say what you are doing with mcp__engine__set_status when you start and when your focus changes, in a few plain words.`,
 
     `## Company rules\n${company.rules.trim() || 'None written yet.'}`,
@@ -38,12 +40,29 @@ ${may(team.mayPay, 'spend money')}
 ${may(team.mayDelete, 'delete anything outside your task folder')}
 - Secrets are never readable: .env files, keys, tokens. Do not look for them and do not print them.`,
 
+    `## Your tools
+${toolLines(employee, team)}`,
+
     employee.skills.length > 0 ? `## Skills\nBefore anything else, load these with the Skill tool: ${employee.skills.join(', ')}.` : '',
 
     `## What you remember\n${input.memoryIndex.trim() || 'Nothing yet. This is your first run.'}`,
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+/** What this employee can and cannot do, said outright, so it never has to find out by being refused. */
+function toolLines(employee: Employee, team: Team): string {
+  const offered = availableCapabilities(team);
+  const has = offered.filter((capability) => employee.capabilities.includes(capability));
+  const lacks = offered.filter((capability) => !employee.capabilities.includes(capability));
+  const names = (list: Capability[]) => list.map((capability) => CAPABILITIES[capability].label).join(', ');
+  return [
+    `You can: ${names(has) || 'nothing but talk to the engine'}.`,
+    lacks.length > 0 ? `You cannot: ${names(lacks)}. If the task cannot be done without one of those, call mcp__engine__request_tools once, naming it and saying why, instead of asking a question or working around it.` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; notes?: string; mergeState?: string };
@@ -53,7 +72,7 @@ export function gateLines(results: GateResult[]): string {
   return results.map((r) => `- ${r.name}: ${r.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${r.exitCode})${r.output.trim() ? `\n\`\`\`\n${r.output.trim().slice(-1500)}\n\`\`\`` : ''}`).join('\n');
 }
 
-export function buildFirstTurn(input: { task: Task; mode: RunMode; team: Team; repo: Repo | null; teammates: Employee[]; remainingUsd: number; material?: Material; teams?: TeamView[] }): string {
+export function buildFirstTurn(input: { task: Task; mode: RunMode; team: Team; repo: Repo | null; teammates: Employee[]; remainingUsd: number; material?: Material; teams?: TeamView[]; board?: string | undefined }): string {
   const { task, mode, team, repo, material = {} } = input;
   const gates = task.gates.map((name) => {
     const gate = repo?.gates.find((g) => g.name === name);
@@ -69,10 +88,13 @@ export function buildFirstTurn(input: { task: Task; mode: RunMode; team: Team; r
 
 ${task.brief}
 
-Turn this into work. For each separate piece, call mcp__engine__create_task on the team it belongs to, with a brief that stands on its own and a done-condition someone can check. Do not do the work yourself and do not invent work the message does not ask for. If the message is a question, answer it instead.
+Turn this into work. For each separate piece, call mcp__engine__create_task on the team it belongs to, with a brief that stands on its own and a done-condition someone can check. Do not do the work yourself and do not invent work the message does not ask for. If the message is a question, answer it instead. If it asks what the company or a team is doing, answer it from "The company right now" below: that is the engine's own record and it is current, so do not look in files or in your notes for it.
 
 The teams:
 ${teams.join('\n') || '- (no teams yet)'}
+
+The company right now:
+${input.board?.trim() || '(nothing on any board)'}
 
 End with one or two plain sentences to the user: what you created and for whom, or your answer.`;
   }

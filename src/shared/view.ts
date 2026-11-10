@@ -36,6 +36,7 @@ export const WHY: Record<Decision['kind'], string> = {
   failed: 'the run failed',
   cap: 'over its cap',
   tool: 'a call was refused',
+  capability: 'needs a tool',
   merge: 'ready to merge',
   question: 'has a question',
   briefing: 'its split was refused',

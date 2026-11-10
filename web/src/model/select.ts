@@ -46,7 +46,7 @@ export function spendToday(store: Store, now?: Date): { company: number; byTeam:
 // ---------- the decision deck ----------
 
 export type LocalAction = 'open_diff' | 'read_first' | 'not_now';
-export type DeckCard = { id: string; kind: Decision['kind']; age: string; team: string | null; text: string; freeText: boolean; options: { id: string; label: string; primary: boolean }[]; taskId: string | null; local: LocalAction[] };
+export type DeckCard = { id: string; kind: Decision['kind']; age: string; team: string | null; /** Who is waiting for the answer, when the card is an employee's own question. */ asker: string | null; text: string; freeText: boolean; options: { id: string; label: string; primary: boolean }[]; taskId: string | null; local: LocalAction[] };
 
 export function deck(store: Store, now: Date): DeckCard[] {
   return openDecisions(store)
@@ -60,6 +60,7 @@ export function deck(store: Store, now: Date): DeckCard[] {
         kind: decision.kind,
         age: ago(decision.askedAt, now),
         team: task ? (store.teams.get(task.teamId)?.name ?? null) : null,
+        asker: decision.kind === 'question' && decision.employeeId ? (store.employees.get(decision.employeeId)?.name ?? null) : null,
         text: decision.text,
         freeText: decision.freeText === true,
         options: decision.options.map((option, index) => ({ id: option.id, label: option.label, primary: index === 0 })),

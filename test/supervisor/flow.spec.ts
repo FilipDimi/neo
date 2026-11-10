@@ -292,6 +292,23 @@ describe('work and review', () => {
     expect(fs.existsSync(outside)).toBe(false);
   });
 
+  it('says on the merge card when nobody reviewed the work and no gate checked it', async () => {
+    // The lead does the task itself. Nobody reviews a lead's own work, and this task has no gates.
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'review') throw new Error('nobody should be reviewing this');
+        s.write('GREETING.md', 'hello\n');
+        await s.engine('report_done', { summary: 'Wrote it myself.' });
+      },
+      { mergeTarget: null },
+    );
+    parentTask(setup.w, { assigneeId: 'lead', gates: [] });
+    await drain(setup);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'merge' });
+    expect(card!.text).toMatch(/Nobody reviewed it and no gate checked it/);
+  });
+
   it('run_gate lets an employee run a named gate and see the real result', async () => {
     const seen: string[] = [];
     const setup = ledWorld(

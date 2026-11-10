@@ -346,7 +346,10 @@ export class Flow {
     if (!target) {
       const gates = lastRun?.gateResults ?? [];
       const green = gates.length === 0 ? 'no gates' : gates.every((g) => g.exitCode === 0) ? `gates green (${gates.map((g) => g.name).join(', ')})` : 'gates NOT green';
-      return ask(`Merge "${task.title}" into ${site.teamRepo.baseBranch}? ${green}, diff ${lastRun?.diffLines ?? 0} lines. Merging there is outside the team's limits.`, site.teamRepo.baseBranch);
+      // The card says how much stands behind the work, so Merge is never pressed on something nobody looked at without knowing it.
+      const reviewed = store.runsOf(this.db, task.id).some((run) => run.mode === 'review' && run.outcome === 'done');
+      const checked = reviewed ? `reviewed, ${green}` : gates.length === 0 ? 'Nobody reviewed it and no gate checked it' : `nobody reviewed it, ${green}`;
+      return ask(`Merge "${task.title}" into ${site.teamRepo.baseBranch}? ${checked}; the diff is ${lastRun?.diffLines ?? 0} lines. Merging there is outside the team's limits.`, site.teamRepo.baseBranch);
     }
     let failedGate: GateResult | undefined;
     const recheck = async () => {

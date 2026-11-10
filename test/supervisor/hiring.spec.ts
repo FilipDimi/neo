@@ -53,6 +53,12 @@ describe('hire', () => {
     expect(() => hire(ctx, { ...form, teamId: 'nowhere' })).toThrow(/team/);
   });
 
+  it('refuses to hire someone with no tools at all: such an employee can do nothing but ask', () => {
+    const { ctx } = setup();
+    expect(() => hire(ctx, { name: 'Pat', teamId: 'ios', role: 'Researches the market.', model: 'claude-sonnet-5-5', lead: false, skills: [], capabilities: [] })).toThrow(/at least one tool/);
+    expect(() => edit(ctx, hire(ctx, { preset: 'engineer', name: 'Ada', teamId: 'ios' }).id, { capabilities: [] })).toThrow(/at least one tool/);
+  });
+
   it('refuses a second lead, and a lead for a self-managed team', () => {
     const { ctx } = setup();
     hire(ctx, { preset: 'engineering_lead', name: 'Priya', teamId: 'ios' });

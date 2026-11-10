@@ -26,6 +26,13 @@ function installed() {
 }
 
 describe('listSkills', () => {
+  it('does not offer deep-research: only a person can start that skill, so an employee given it can only stop', () => {
+    const empty = tempDir();
+    const offered = listSkills({ userSkills: empty, pluginCache: empty, companySkills: empty }).map((skill) => skill.id);
+    expect(offered).not.toContain('deep-research');
+    expect(offered).toContain('dataviz');
+  });
+
   it('lists bundled, user, plugin and company skills with stable ids and their descriptions', () => {
     const { dirs, current } = installed();
     const skills = listSkills(dirs);

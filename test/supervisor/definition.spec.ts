@@ -33,6 +33,20 @@ describe('buildSystemPrompt', () => {
     expect(p).not.toContain('You may not merge');
   });
 
+  it('says which tools the employee has and which it has not, and how to ask for one', () => {
+    const text = buildSystemPrompt({ company: company(), team: led, employee: { ...ada, capabilities: ['read_files', 'write_code'] }, teammates: [lead, ada], memoryIndex: '' });
+    expect(text).toMatch(/You can: read files, write code\./);
+    expect(text).toMatch(/You cannot: run commands, web search\./);
+    expect(text).toContain('mcp__engine__request_tools');
+  });
+
+  it('tells the employee to assume and carry on, and to ask only when carrying on would be wrong', () => {
+    const text = prompt();
+    expect(text).toMatch(/make the reasonable assumption, say so in your report, and carry on/);
+    expect(text).toMatch(/Ask once/);
+    expect(text).toMatch(/An answer is only words/);
+  });
+
   it('lists the skills to load first, and says nothing about skills when there are none', () => {
     expect(prompt()).toContain('user:postgresql');
     expect(prompt()).toContain('Skill tool');

@@ -381,6 +381,77 @@ describe('Supervisor', () => {
     expect(() => w.sup.editTask(task.id, { assigneeId: 'emp2' })).toThrow(/reassigned/);
   });
 
+  it('gives an employee a tool it lacks from a card whose button really does it', async () => {
+    const fake = scripted((worker) => {
+      if (fake.workers.length > 1) return;
+      worker.say(started);
+      worker.say({ t: 'tool', askId: 'need', name: 'request_tools', input: { capabilities: ['web_search', 'run_commands'], reason: 'to look up the competitors' } });
+      worker.say(exit('stopped', 'asked', 'sess-1'));
+    });
+    const w = track(world(fake.spawn, { employees: [employee({ capabilities: ['read_files'] }), employee({ id: 'emp2', name: 'Grace' })] }));
+    const task = newTask(w);
+    await w.sup.tick();
+    await w.sup.settle();
+
+    expect(fake.workers[0]!.received.find((m) => m.t === 'tool_result')).toMatchObject({ ok: true });
+    expect(store.runsOf(w.db, task.id)).toMatchObject([{ outcome: 'stopped', reason: 'tools' }]);
+    const [card] = store.openDecisions(w.db);
+    expect(card).toMatchObject({ kind: 'capability', taskId: task.id, employeeId: 'emp1' });
+    expect(card!.text).toMatch(/Ada .*web search and run commands.*to look up the competitors/);
+    expect(card!.options.map((option) => option.effect)).toEqual(['grant_capabilities', 'resume_with_answer', 'stop_task']);
+    expect(card!.options[0]!.label).toBe('Give Ada web search and run commands');
+
+    w.sup.answer(card!.id, { optionId: card!.options[0]!.id });
+    expect(store.getEmployee(w.db, 'emp1')!.capabilities).toEqual(['read_files', 'web_search', 'run_commands']);
+    await w.sup.tick();
+    expect(fake.workers).toHaveLength(2);
+    expect(fake.workers[1]!.job.resumeSessionId).toBe('sess-1');
+    expect(fake.workers[1]!.job.tools).toEqual(expect.arrayContaining(['Read', 'Bash', 'WebSearch', 'WebFetch']));
+    expect(fake.workers[1]!.job.firstTurn).toMatch(/You now have .*web search and run commands/);
+  });
+
+  it('answers a request for a tool nobody on the team can have, or one it already has, without a card', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn, { employees: [employee({ capabilities: ['read_files'] }), employee({ id: 'emp2', name: 'Grace' })] }));
+    newTask(w);
+    await w.sup.tick();
+    fake.workers[0]!.say(started);
+    fake.workers[0]!.say({ t: 'tool', askId: 'a', name: 'request_tools', input: { capabilities: ['git_push'], reason: 'to publish' } });
+    fake.workers[0]!.say({ t: 'tool', askId: 'b', name: 'request_tools', input: { capabilities: ['read_files'], reason: 'to read' } });
+    await w.sup.settle();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const replies = fake.workers[0]!.received.filter((m) => m.t === 'tool_result');
+    expect(replies).toMatchObject([{ askId: 'a', ok: false }, { askId: 'b', ok: false }]);
+    expect((replies[0] as { text: string }).text).toMatch(/can be given: run commands, write code, web search/);
+    expect((replies[1] as { text: string }).text).toMatch(/already have/);
+    expect(store.openDecisions(w.db)).toEqual([]);
+    expect(store.liveRuns(w.db)).toHaveLength(1);
+  });
+
+  it("says so when an employee asks a third question in a row, and drops the buttons it wrote itself", async () => {
+    const fake = scripted((worker) => {
+      worker.say(started);
+      worker.say({ t: 'tool', askId: 'q', name: 'request_decision', input: { question: `Question ${fake.workers.length}?`, options: ['Re-run me with more tools', 'Drop it'] } });
+      worker.say(exit('stopped', 'asked', 'sess-1'));
+    });
+    const w = track(world(fake.spawn));
+    const task = newTask(w);
+    for (let round = 1; round <= 3; round++) {
+      await w.sup.tick();
+      await w.sup.settle();
+      const [card] = store.openDecisions(w.db);
+      expect(card, `round ${round}`).toMatchObject({ kind: 'question', taskId: task.id });
+      if (round < 3) {
+        expect(card!.options.map((option) => option.label)).toEqual(['Re-run me with more tools', 'Drop it', 'Answer', 'Stop it']);
+        w.sup.answer(card!.id, { optionId: card!.options[0]!.id });
+      } else {
+        expect(card!.text).toMatch(/^Ada has asked 3 times in a row about "Write the note" and done no work in between\./);
+        expect(card!.text).toContain('Question 3?');
+        expect(card!.options.map((option) => option.label)).toEqual(['Answer', 'Stop it']);
+      }
+    }
+  });
+
   it('stopRun ends the run as stopped, uses no retry, and asks what to do with the task', async () => {
     const fake = scripted();
     const w = track(world(fake.spawn));

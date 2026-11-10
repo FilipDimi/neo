@@ -23,7 +23,8 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
   const [model, setModel] = useState('');
   const [lead, setLead] = useState(false);
   const [skills, setSkills] = useState<string[]>([]);
-  const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  // Ticked to begin with: what most work needs. An employee with no tools can read nothing and do nothing but ask.
+  const [capabilities, setCapabilities] = useState<Capability[]>(['read_files', 'run_commands', 'write_code']);
   const [allSkills, setAllSkills] = useState(false);
   const [find, setFind] = useState('');
   const [presetsOpen, setPresetsOpen] = useState(false);
@@ -46,6 +47,7 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
   const leadTaken = Boolean(team?.selfManaged || (currentLead && !currentLead.fired));
   const available = (team && options?.availableByTeam[team.id]) || [];
   if (!options) return <div className="hire muted">{error ?? 'Loading…'}</div>;
+  const noTools = capabilities.filter((capability) => available.includes(capability)).length === 0;
 
   const chosenFirst = [...options.skills.filter((s) => skills.includes(s.id)), ...options.skills.filter((s) => !skills.includes(s.id))];
   const matching = find.trim() ? chosenFirst.filter((s) => `${s.id} ${s.description}`.toLowerCase().includes(find.trim().toLowerCase())) : chosenFirst;
@@ -171,6 +173,8 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
         </div>
       </div>
 
+      {noTools && <p className="muted small">With no tools this employee can read nothing and do nothing but ask you questions. Tick at least one.</p>}
+
       {error && (
         <p className="error" role="alert">
           {error}
@@ -179,7 +183,7 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
       {hired && <p role="status">{hired} was hired.</p>}
       <div className="grow" />
       <div className="hire-actions">
-        <button type="submit" className="pill on">
+        <button type="submit" className="pill on" disabled={noTools}>
           {`Hire ${name.trim()}`.trim()}
         </button>
         <button type="button" className="pill" aria-expanded={presetsOpen} onClick={() => setPresetsOpen((open) => !open)}>

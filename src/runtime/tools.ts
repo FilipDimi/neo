@@ -16,7 +16,9 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
   submit_review:
     'Give your verdict on the work you were asked to review: "approve", "send_back" with notes the author can act on, or "escalate" when a person has to decide. Then stop.',
   request_decision:
-    'Ask the user to decide something you may not decide yourself, or that you were refused. Give the question and up to four options. Your run stops here; you are resumed with the answer.',
+    'Ask the user to decide something you may not decide yourself, or that you were refused. Give the question and up to four options. Your run stops here; you are resumed with the answer. An answer is only words: it cannot give you a tool or lift a limit, so never offer an option that says it will. For a missing tool there is mcp__engine__request_tools.',
+  request_tools:
+    'Ask for a kind of tool you do not have and cannot do the task without: "read_files", "run_commands", "write_code" or "web_search". Say in one sentence what you need it for. Your run stops here; if the user agrees you are resumed with the tool.',
   set_status: 'Say in a few plain words what you are doing right now (at most 60 characters), for the office view. Call it when you start and when your focus changes.',
   run_gate: 'Run one of this task\'s named gates in your folder and get its real exit code and output. Use it to check your work before you report.',
   create_task: 'Put a task on a team\'s board. Leave the assignee out for a led team, so its lead briefs the task; a self-managed team needs an assignee.',
