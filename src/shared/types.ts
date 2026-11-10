@@ -218,7 +218,7 @@ export const HealthReport = z.object({
   login: z.enum(['ok', 'missing', 'wrong_method', 'expiring']),
   repos: z.array(z.object({ repoId: id, ok: z.boolean(), problem: z.string().nullable() })),
   services: z.array(z.object({ name: z.string(), ok: z.boolean() })),
-  failures: z.array(z.object({ key: z.string(), scope: z.union([z.literal('company'), z.object({ repoId: id })]), text: z.string() })),
+  failures: z.array(z.object({ key: z.string(), scope: z.union([z.literal('company'), z.literal('warning'), z.object({ repoId: id })]), text: z.string() })),
 });
 export type HealthReport = z.infer<typeof HealthReport>;
 

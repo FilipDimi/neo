@@ -19,7 +19,7 @@ function liveWorld() {
   const dir = tempDir('vs-live-');
   const db = openDb(paths(dir).db);
   apply(db, (tx) => {
-    tx.emit({ kind: 'company_changed', company: company() });
+    tx.emit({ kind: 'company_changed', company: company({ minFreeGb: 1 }) });
     tx.emit({ kind: 'team_changed', team: team({ selfManaged: true }) });
     tx.emit({ kind: 'employee_changed', employee: employee({ model: MODEL, capabilities: ['read_files', 'write_code'], memoryDir: path.join(dir, 'memory', 'emp1') }) });
   });

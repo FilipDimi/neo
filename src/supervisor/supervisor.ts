@@ -7,15 +7,18 @@ import { paths as pathsOf, type Paths } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import type { RuntimeEvent } from '../shared/runtime.ts';
-import type { Message, Run, RunOutcome, RunRequest, Task } from '../shared/types.ts';
+import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task } from '../shared/types.ts';
 import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
 import { GateQueue } from '../git/gates.ts';
 import { envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
+import { budgetFor, costOf, isUsageLimit } from './budget.ts';
 import * as decisions from './decisions.ts';
 import type { TeamView } from './definition.ts';
 import { Flow } from './flow.ts';
-import { buildJob, folderOf } from './jobs.ts';
+import { checkHealth, realProbes, type Probes } from './health.ts';
+import { buildJob, folderOf, sessionEnv } from './jobs.ts';
 import { remember } from './memory.ts';
+import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
 import { pickNext, requestFor } from './scheduler.ts';
@@ -31,6 +34,8 @@ export type SupervisorOptions = {
   /** A module exporting `startSession`, for running the engine without a model. */
   runtimeModule?: string;
   processes?: Processes;
+  /** How machine health is measured. Tests substitute these. */
+  probes?: Probes;
 };
 
 export type NewTaskInput = Pick<Task, 'teamId' | 'title' | 'brief'> &
@@ -59,6 +64,10 @@ export class Supervisor {
   private timer: NodeJS.Timeout | undefined;
   private ticking = false;
   protected readonly flow: Flow;
+  private readonly probes: Probes;
+  private readonly dataDir: string;
+  private healthTimer: NodeJS.Timeout | undefined;
+  private blockedRepos = new Set<string>();
 
   constructor(options: SupervisorOptions) {
     this.db = options.db;
@@ -67,6 +76,8 @@ export class Supervisor {
     this.tickMs = options.tickMs ?? 2000;
     this.runtimeModule = options.runtimeModule;
     this.processes = options.processes ?? processes;
+    this.dataDir = options.dataDir;
+    this.probes = options.probes ?? realProbes(() => sessionEnv(store.getCompany(this.db) ?? { auth: 'subscription' }));
     this.spawn = options.spawn ?? forkSpawn(options.workerEntry ?? DEFAULT_WORKER, { logDir: this.paths.logs });
     this.flow = new Flow({
       db: this.db,
@@ -78,13 +89,20 @@ export class Supervisor {
     });
   }
 
+  /** Picks up after whatever the last process left, then starts the loop and the health checks. */
   start(): void {
-    this.timer ??= setInterval(() => void this.tick().catch((error) => console.error('tick failed:', error)), this.tickMs);
+    if (this.timer) return;
+    recover(this.db, this.now(), this.processes);
+    const health = () => void this.checkHealth().catch((error) => console.error('health check failed:', error));
+    health();
+    this.healthTimer = setInterval(health, 60_000);
+    this.timer = setInterval(() => void this.tick().catch((error) => console.error('tick failed:', error)), this.tickMs);
   }
 
   /** Stops the loop and every worker. Runs left in flight are picked up by recovery at the next start. */
   async stop(): Promise<void> {
     clearInterval(this.timer);
+    clearInterval(this.healthTimer);
     this.timer = undefined;
     for (const link of this.links.values()) link.kill();
     this.links.clear();
@@ -101,6 +119,7 @@ export class Supervisor {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      this.liftPauseIfDue();
       this.expireLeases();
       this.checkInvariant();
       await this.startRuns();
@@ -176,6 +195,8 @@ export class Supervisor {
         if (state === 'failed') this.endRunNow(run, 'stopped', 'task_stopped');
       }
     }
+    // "Check again" on a health card: check now, and raise it again if it still fails.
+    if (answered.decision.kind === 'health') void this.checkHealth().catch(() => {});
     this.flow.afterAnswer(answered);
   }
 
@@ -234,7 +255,7 @@ export class Supervisor {
 
   /** Repositories that machine health has blocked. */
   protected blockedRepoIds(): Set<string> {
-    return new Set();
+    return this.blockedRepos;
   }
 
   private dropRequest(request: RunRequest, problem: 'fired' | 'stale'): void {
@@ -257,6 +278,12 @@ export class Supervisor {
     const employee = store.getEmployee(this.db, request.employeeId)!;
     const company = store.getCompany(this.db)!;
     try {
+      // A task that has spent its cap does not start another run: the user decides.
+      const budget = budgetFor(task, store.spentOn(this.db, task.id));
+      if (budget === 'exhausted') {
+        this.change((tx) => tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: task.id }));
+        return this.raiseCap(task, store.runsOf(this.db, task.id).at(-1));
+      }
       // The engine readies the task's folder first; for an integration it also merges the children.
       const ready = await this.flow.prepare(task, request);
       const prepared: Task = Object.keys(ready.task).length > 0 ? { ...task, ...ready.task } : task;
@@ -279,6 +306,7 @@ export class Supervisor {
         teams,
         remainingUsd: Math.max(0, task.capUsd - store.spentOn(this.db, task.id)),
         envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)),
+        maxBudgetUsd: budget,
         messages,
         nameOf: (id) => this.nameOf(id),
         ...(this.runtimeModule ? { runtimeModule: this.runtimeModule } : {}),
@@ -344,7 +372,9 @@ export class Supervisor {
         this.links.delete(runId);
         link.kill(); // Nothing the session started may outlive the run.
         const planned = this.planned.get(runId);
-        return this.finishRun(runId, planned?.outcome ?? message.outcome, planned?.reason ?? message.reason, { sessionId: message.sessionId ?? run.sessionId, summary: this.reports.get(runId) ?? message.summary });
+        // The SDK stopped the session at the run's budget: not a failure to retry, a cap for the user to decide on.
+        const outcome = planned?.outcome ?? (message.reason === 'error_max_budget_usd' ? 'over_budget' : message.outcome);
+        return this.finishRun(runId, outcome, planned?.reason ?? message.reason, { sessionId: message.sessionId ?? run.sessionId, summary: this.reports.get(runId) ?? message.summary });
       }
     }
   }
@@ -371,12 +401,79 @@ export class Supervisor {
   }
 
   /** A turn's usage with its cost filled in when the SDK reported none. */
-  protected priced(_run: Run, event: RuntimeEvent): RuntimeEvent {
-    return event;
+  protected priced(run: Run, event: RuntimeEvent): RuntimeEvent {
+    if (event.kind !== 'usage' || event.costUsd > 0) return event;
+    return { ...event, costUsd: costOf(event, store.getEmployee(this.db, run.employeeId)?.model ?? '') };
   }
 
-  /** Reactions to what a session reported, beyond recording it (budgets, the usage limit). */
-  protected afterRuntimeEvent(_run: Run, _event: RuntimeEvent): void {}
+  /** Reactions to what a session reported, beyond recording it. */
+  protected afterRuntimeEvent(_run: Run, event: RuntimeEvent): void {
+    const limit = isUsageLimit(event);
+    if (limit) this.pauseForUsageLimit(limit.until);
+  }
+
+  /**
+   * The subscription's own limit was reached. That is nobody's failure: every live run is ended
+   * without spending a retry, the company pauses with one card, and each run resumes afterwards.
+   */
+  private pauseForUsageLimit(until: string | null): void {
+    const company = store.getCompany(this.db);
+    if (!company || company.paused?.reason === 'usage_limit') return;
+    const when = until ? `until ${new Date(until).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}, and resumes by itself then` : 'until you resume it';
+    this.change((tx, now) => {
+      tx.emit({ kind: 'company_changed', company: { ...company, paused: { reason: 'usage_limit', until } } });
+      decisions.raise(tx, this.db, now, { taskId: null, kind: 'usage_limit', text: `The Claude plan's usage limit was reached. Every run is paused ${when}. Nothing was lost and no retry was spent.`, options: decisions.optionsFor('usage_limit'), subject: { key: 'usage_limit' } });
+    });
+    for (const live of store.liveRuns(this.db)) {
+      this.endRunNow(live, 'usage_limit', 'usage_limit');
+      const ended = store.getRun(this.db, live.id)!;
+      const firstTurn = ended.sessionId ? 'You were paused because the plan\'s usage limit was reached. The files in your folder are as you left them. Carry on with the task.' : null;
+      this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: ended.taskId, mode: ended.mode, employeeId: ended.employeeId, reason: 'resume', attempt: ended.attempt, resumeSessionId: ended.sessionId, firstTurn }, now) }));
+    }
+  }
+
+  /** A pause for the usage limit ends by itself at the reset time, if the limit gave one. */
+  private liftPauseIfDue(): void {
+    const company = store.getCompany(this.db);
+    if (company?.paused?.reason !== 'usage_limit' || !company.paused.until || this.now() < new Date(company.paused.until)) return;
+    this.change((tx, now) => {
+      tx.emit({ kind: 'company_changed', company: { ...company, paused: null } });
+      for (const card of store.openDecisions(this.db).filter((d) => d.kind === 'usage_limit')) decisions.close(tx, card, now);
+    });
+  }
+
+  private raiseCap(task: Task, run: Run | undefined): void {
+    const spent = store.spentOn(this.db, task.id);
+    this.change((tx, now) =>
+      decisions.raise(tx, this.db, now, {
+        taskId: task.id,
+        runId: run?.id ?? null,
+        employeeId: run?.employeeId ?? null,
+        kind: 'cap',
+        text: `"${task.title}" has spent $${spent.toFixed(2)} of its $${task.capUsd.toFixed(2)} cap. Raise the cap, or stop the task?`,
+        options: decisions.optionsFor('cap', { capUsd: task.capUsd }),
+      }),
+    );
+  }
+
+  /** Checks the machine. A company-wide failure pauses the company; a repository's failure blocks its tasks; each raises one card while it lasts. */
+  async checkHealth(): Promise<HealthReport | null> {
+    const company = store.getCompany(this.db);
+    if (!company) return null;
+    const report = await checkHealth({ repos: store.allRepos(this.db), minFreeGb: company.minFreeGb, auth: company.auth, services: company.services, dataDir: this.dataDir, now: this.now(), probe: this.probes });
+    this.blockedRepos = new Set(report.failures.flatMap((failure) => (typeof failure.scope === 'object' ? [failure.scope.repoId] : [])));
+    const companyWide = report.failures.some((failure) => failure.scope === 'company');
+    const same = (a: HealthReport | undefined, b: HealthReport) => a !== undefined && JSON.stringify([a.diskFreeGb, a.login, a.repos, a.services, a.failures]) === JSON.stringify([b.diskFreeGb, b.login, b.repos, b.services, b.failures]);
+    this.change((tx, now) => {
+      if (!same(store.getHealth(this.db), report)) tx.emit({ kind: 'health_changed', report });
+      const current = store.getCompany(this.db)!;
+      if (companyWide && !current.paused) tx.emit({ kind: 'company_changed', company: { ...current, paused: { reason: 'health', until: null } } });
+      if (!companyWide && current.paused?.reason === 'health') tx.emit({ kind: 'company_changed', company: { ...current, paused: null } });
+      for (const card of store.openDecisions(this.db).filter((d) => d.kind === 'health')) if (!report.failures.some((failure) => failure.key === card.subject?.key)) decisions.close(tx, card, now);
+      for (const failure of report.failures) decisions.raise(tx, this.db, now, { taskId: null, kind: 'health', text: failure.text, options: decisions.optionsFor('health'), subject: { key: failure.key } });
+    });
+    return report;
+  }
 
   /** May this tool call run? Asked for every call of every session. A refusal that needs the user stops the run and raises a card. */
   protected judge(run: Run, call: { id: string; tool: string; input: unknown }): { allow: boolean; reason?: string; stop?: boolean } {
@@ -515,8 +612,10 @@ export class Supervisor {
       case 'stopped':
         if (run.reason === 'stopped_by_user') this.raiseForRun(run, task, 'failed', (name) => `You stopped ${name}'s run on "${task.title}". Run it again, or stop the task?`);
         return;
+      case 'over_budget':
+        return this.raiseCap(store.getTask(this.db, task.id)!, run);
       default:
-        return; // refused, over budget, usage limit: the card was raised when it happened.
+        return; // refused, usage limit: the card was raised when it happened.
     }
   }
 

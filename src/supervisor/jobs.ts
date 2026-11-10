@@ -45,6 +45,8 @@ export type JobInput = {
   /** Every team, for the chief of staff, who routes work to them. */
   teams: TeamView[];
   remainingUsd: number;
+  /** The limit for this run: what the task has left. */
+  maxBudgetUsd?: number;
   /** .env files of the registered repositories: hidden from commands as well as from the Read tool. */
   envFiles: string[];
   messages: Message[];
@@ -80,6 +82,7 @@ export function buildJob(input: JobInput): WorkerJob {
     additionalDirectories: shape.additionalDirectories,
     sandbox: shape.sandbox,
     maxTurns: MAX_TURNS[run.mode],
+    ...(input.maxBudgetUsd !== undefined ? { maxBudgetUsd: input.maxBudgetUsd } : {}),
     ...(request.resumeSessionId ? { resumeSessionId: request.resumeSessionId } : {}),
     ...(input.runtimeModule ? { runtimeModule: input.runtimeModule } : {}),
   };
