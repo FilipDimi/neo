@@ -26,11 +26,21 @@ describe('the engine commits in a folder an employee has worked in', () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it("does not run a command named in the folder's git settings", async () => {
+  it("will not run git in a folder whose git settings are not the ones the engine wrote", async () => {
+    // A filter, a file watcher, a hooks folder: each is a program git would start. Any change to the settings is refused whole.
+    for (const [key, value] of [['filter.x.clean', 'touch MARKER'], ['core.fsmonitor', 'touch MARKER; false'], ['core.hooksPath', '/tmp'], ['remote.origin.uploadpack', 'touch MARKER'], ['user.name', 'harmless but not ours']] as const) {
+      const { dir, marker } = await folder();
+      gitIn(dir, 'config', key, value.replace('MARKER', `"${marker}"`));
+      fs.writeFileSync(path.join(dir, '.gitattributes'), '* filter=x\n');
+      fs.writeFileSync(path.join(dir, 'work.md'), 'done\n');
+      await expect(commitAll(dir, AUTHOR, 'Work', 'task/thing-abc123'), key).rejects.toThrow(/git settings/);
+      expect(fs.existsSync(marker), key).toBe(false);
+    }
+  });
+
+  it("still commits when the settings are as the engine left them, whatever sits in the hooks folder or the attributes", async () => {
     const { dir, marker } = await folder();
-    gitIn(dir, 'config', 'core.fsmonitor', `touch "${marker}"; false`);
-    gitIn(dir, 'config', 'core.hooksPath', path.dirname(marker));
-    fs.writeFileSync(path.join(path.dirname(marker), 'pre-commit'), `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, '.gitattributes'), '* filter=x diff=y merge=z\n');
     fs.writeFileSync(path.join(dir, 'work.md'), 'done\n');
     expect(await commitAll(dir, AUTHOR, 'Work', 'task/thing-abc123')).toMatch(/^[0-9a-f]{40}$/);
     expect(fs.existsSync(marker)).toBe(false);

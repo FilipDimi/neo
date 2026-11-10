@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { GateQueue, runGate } from '../../src/git/gates.ts';
 import type { Gate } from '../../src/shared/types.ts';
@@ -40,6 +41,56 @@ describe('a gate is confined like any other command', () => {
     expect(result.output).toContain('REFUSED');
     expect(result.output).toContain('REFUSED-TOO');
     expect(fs.existsSync(path.join(dir, '.git/hooks/pre-commit'))).toBe(false);
+  });
+
+  it('cannot move its own folder away and back, which would take its git directory out from under the rule that protects it', async () => {
+    const dir = tempDir();
+    fs.mkdirSync(path.join(dir, '.git'));
+    fs.writeFileSync(path.join(dir, '.git/config'), '[core]\n');
+    const result = await runGate(gate('move', 'mv "$PWD" "$TMPDIR/moved" && echo "[filter \\"x\\"]" >> "$TMPDIR/moved/.git/config" && mv "$TMPDIR/moved" "$OLDPWD" ; echo done; cat .git/config'), dir, { denyWrite: [path.join(dir, '.git')] });
+    expect(fs.readFileSync(path.join(dir, '.git/config'), 'utf8')).toBe('[core]\n');
+    expect(result.output).toMatch(/not permitted/i);
+    // Ordinary work inside the folder is untouched by that rule.
+    expect((await runGate(gate('work', 'mkdir -p a/b && echo x > a/b/c && mv a z && rm -r z && echo fine'), dir)).output).toContain('fine');
+  });
+
+  it('cannot signal a process that is not its own', async () => {
+    const outside = spawn('sleep', ['30']);
+    try {
+      const result = await runGate(gate('kill', `kill -9 ${outside.pid} && echo KILLED-OUTSIDE; sleep 20 & kill $! && echo killed-own`), tempDir());
+      expect(result.output).not.toContain('KILLED-OUTSIDE');
+      expect(result.output).toContain('killed-own');
+      expect(outside.exitCode).toBeNull();
+      expect(() => process.kill(outside.pid!, 0)).not.toThrow();
+    } finally {
+      outside.kill('SIGKILL');
+    }
+  });
+
+  it('cannot look a name up off this machine, write a preference, send an Apple Event or launch an app', async () => {
+    const lookup = (name: string) => `node -e "require('dns').lookup('${name}',(e,a)=>console.log(e?'${name} refused':'${name} RESOLVED'))"`;
+    const result = await runGate(
+      gate('reach', `${lookup('localhost')}; ${lookup('example.com')}; defaults write com.example.vs-gate-test marker yes && echo WROTE-PREF; osascript -e 'tell application "Finder" to get name of startup disk' && echo SENT-EVENT; open -g -a Calculator && echo LAUNCHED; true`),
+      tempDir(),
+    );
+    expect(result.output).toContain('localhost RESOLVED');
+    expect(result.output).toContain('example.com refused');
+    for (const word of ['WROTE-PREF', 'SENT-EVENT', 'LAUNCHED']) expect(result.output, word).not.toContain(word);
+    // The same write from this process, outside the gate, goes through: so it is the gate's profile that refuses it, not this machine.
+    const read = (domain: string): string => {
+      try {
+        return execFileSync('defaults', ['read', domain, 'marker'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      } catch {
+        return 'absent';
+      }
+    };
+    try {
+      expect(read('com.example.vs-gate-test')).toBe('absent');
+      execFileSync('defaults', ['write', 'com.example.vs-gate-control', 'marker', 'yes']);
+      expect(read('com.example.vs-gate-control')).toBe('yes');
+    } finally {
+      for (const domain of ['com.example.vs-gate-test', 'com.example.vs-gate-control']) spawnSync('defaults', ['delete', domain]);
+    }
   });
 
   it('cannot read what is denied, and reads everything else', async () => {

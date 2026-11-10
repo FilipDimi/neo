@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -17,6 +18,22 @@ export function assertOwnGitDir(dir: string): void {
   const gitDir = path.join(dir, '.git');
   const stat = fs.lstatSync(gitDir, { throwIfNoEntry: false });
   if (!stat?.isDirectory() || fs.existsSync(path.join(gitDir, 'commondir'))) throw new Error(`the git directory of ${dir} is not the one the engine made, so the engine will not run git there`);
+  // Every program git can be told to start (a filter, a watcher, a transport, a hooks folder) is named in its settings.
+  const record = settingsRecord(dir);
+  if (fs.existsSync(record) && fs.readFileSync(record, 'utf8').trim() !== settingsHash(dir)) throw new Error(`the git settings of ${dir} were changed after the engine wrote them, so the engine will not run git there`);
+}
+
+// Kept beside the folder, not in it: nothing that works inside the folder can write there.
+const settingsRecord = (dir: string): string => `${dir.replace(/\/+$/, '')}.git-settings`;
+const settingsHash = (dir: string): string => createHash('sha256').update(fs.readFileSync(path.join(dir, '.git', 'config'))).digest('hex');
+
+/** Notes what git's settings are in a folder the engine has just made. `assertOwnGitDir` holds every later use to it. */
+export function recordGitSettings(dir: string): void {
+  fs.writeFileSync(settingsRecord(dir), `${settingsHash(dir)}\n`);
+}
+
+export function forgetGitSettings(dir: string): void {
+  fs.rmSync(settingsRecord(dir), { force: true });
 }
 
 /** Runs git and never throws for a non-zero exit: the caller decides what a failure means. Never prompts. */

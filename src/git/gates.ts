@@ -41,12 +41,24 @@ export function gateProfile(cwd: string, tmp: string, limits: GateLimits): strin
     '(allow default)',
     '(deny file-write*)',
     `(allow file-write* ${under([cwd, tmp, ...(limits.allowWrite ?? [])])} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper") (regex #"^/dev/ttys[0-9]+$") (regex #"^/dev/fd/"))`,
+    // The folder itself stays where it is: moved away, nothing below would protect its git directory, and it could be moved back changed.
+    `(deny file-write-unlink (literal ${quoted(real(cwd))}))`,
     ...(limits.denyWrite?.length ? [`(deny file-write* ${under(limits.denyWrite)})`] : []),
     ...(limits.denyRead?.length ? [`(deny file-read* ${under(limits.denyRead)})`] : []),
-    // This machine only, and no socket files (the Docker daemon and the key agent listen on those), except the name service.
+    // This machine only, and no socket files: the Docker daemon and the key agent listen on those, and the name service
+    // would carry whatever is put in a name out to the network. `localhost` resolves without it.
     '(deny network-outbound)',
-    '(allow network-outbound (remote ip "localhost:*") (literal "/private/var/run/mDNSResponder") (literal "/private/var/run/syslog"))',
+    '(allow network-outbound (remote ip "localhost:*") (literal "/private/var/run/syslog"))',
     ...(limits.blockPorts ?? []).map((port) => `(deny network-outbound (remote ip "localhost:${port}"))`),
+    // Nothing reaches other programs: no signal to a process that is not the gate's own, no change to any program's
+    // preferences, no Apple Event, and no launching an application (each is a way to have something run outside).
+    '(deny signal)',
+    '(allow signal (target same-sandbox))',
+    '(deny user-preference-write)',
+    // The preferences service writes on a caller's behalf, wherever the file is. Without it a program reads the files itself, and cannot write them.
+    '(deny mach-lookup (global-name "com.apple.cfprefsd.daemon") (global-name "com.apple.cfprefsd.agent"))',
+    '(deny appleevent-send)',
+    '(deny lsopen)',
   ].join('\n');
 }
 

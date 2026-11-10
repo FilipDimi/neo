@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Task } from '../shared/types.ts';
-import { assertOwnGitDir, must } from './git.ts';
+import { assertOwnGitDir, forgetGitSettings, must, recordGitSettings } from './git.ts';
 
 export function branchName(task: Pick<Task, 'id' | 'title'>): string {
   const slug = task.title
@@ -30,6 +30,7 @@ export async function createFolder(input: { repoPath: string; dir: string; branc
     fs.rmSync(input.dir, { recursive: true, force: true });
     throw new Error(`cannot start a task from "${input.startPoint}": ${error instanceof Error ? error.message : String(error)}`);
   }
+  recordGitSettings(input.dir);
 }
 
 /** Copies the task branch into the user's repository, so it outlives the folder. Never touches a checkout. */
@@ -41,4 +42,5 @@ export async function publish(repoPath: string, dir: string, branch: string): Pr
 /** Removes the folder only. The branch stays until it is merged or discarded. */
 export async function removeFolder(dir: string): Promise<void> {
   await fs.promises.rm(dir, { recursive: true, force: true });
+  forgetGitSettings(dir);
 }
