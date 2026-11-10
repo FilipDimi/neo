@@ -26,11 +26,25 @@ function installed() {
 }
 
 describe('listSkills', () => {
+  it('leaves out an installed skill that only a person may start', () => {
+    const mine = tempDir();
+    const empty = tempDir();
+    skill(mine, 'rust-skills', 'Rust rules.');
+    fs.mkdirSync(path.join(mine, 'ship-it'), { recursive: true });
+    fs.writeFileSync(path.join(mine, 'ship-it', 'SKILL.md'), '---\nname: ship-it\ndescription: Deploys.\ndisable-model-invocation: true\n---\n\nBody.\n');
+    const offered = listSkills({ userSkills: mine, pluginCache: empty, companySkills: empty }).map((s) => s.id);
+    expect(offered).toContain('user:rust-skills');
+    expect(offered).not.toContain('user:ship-it');
+  });
+
   it('does not offer deep-research: only a person can start that skill, so an employee given it can only stop', () => {
     const empty = tempDir();
     const offered = listSkills({ userSkills: empty, pluginCache: empty, companySkills: empty }).map((skill) => skill.id);
     expect(offered).not.toContain('deep-research');
-    expect(offered).toContain('dataviz');
+    // Checked with a live session on 2026-11-10: these two are refused to a model as well.
+    expect(offered).not.toContain('debug');
+    expect(offered).not.toContain('verify');
+    expect(offered).toEqual(['dataviz', 'code-review', 'simplify', 'claude-api']);
   });
 
   it('lists bundled, user, plugin and company skills with stable ids and their descriptions', () => {

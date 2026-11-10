@@ -10,17 +10,20 @@ import path from 'node:path';
 export type SkillRef = { id: string; label: string; description: string; source: 'bundled' | 'user' | 'plugin' | 'company'; path: string | null };
 export type SkillDirs = { userSkills: string; pluginCache: string; companySkills: string };
 
-/** Skills that ship inside Claude Code and suit an employee. They need no mounting. */
+/**
+ * Skills that ship inside Claude Code, need no mounting, and that an employee can start. Each was
+ * tried from a live session (2026-11-10): `debug`, `verify` and `deep-research` also ship, but
+ * only a person may start those, so they are not offered. An employee told to load a skill it
+ * cannot start has nothing to do but stop.
+ */
 const BUNDLED: [string, string][] = [
   ['dataviz', 'Charts and data visualisation that read as one system.'],
   ['code-review', 'Reviews a diff for correctness bugs.'],
   ['simplify', 'Reviews changed code for reuse and simplification, then applies the fixes.'],
-  ['debug', 'Systematic debugging.'],
-  ['verify', 'Verifies that a change really works before calling it done.'],
   ['claude-api', 'Reference for the Claude API and the Agent SDK.'],
 ];
 
-function frontMatter(file: string): { name?: string; description?: string } {
+function frontMatter(file: string): { name?: string; description?: string; personOnly?: boolean } {
   let text: string;
   try {
     text = fs.readFileSync(file, 'utf8').slice(0, 4000);
@@ -29,7 +32,8 @@ function frontMatter(file: string): { name?: string; description?: string } {
   }
   const block = /^---\n([\s\S]*?)\n---/.exec(text)?.[1] ?? '';
   const field = (key: string) => new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(block)?.[1]?.trim().replace(/^["']|["']$/g, '');
-  return { name: field('name'), description: field('description') };
+  // A skill marked like this is refused to a model: only a person may start it.
+  return { name: field('name'), description: field('description'), personOnly: field('disable-model-invocation') === 'true' };
 }
 
 const dirsIn = (dir: string): string[] => {
@@ -45,6 +49,7 @@ function skillsIn(dir: string, prefix: string, source: SkillRef['source'], mount
     const file = path.join(dir, name, 'SKILL.md');
     if (!fs.existsSync(file)) return [];
     const front = frontMatter(file);
+    if (front.personOnly) return [];
     // Claude Code names a plugin's skill by its front matter; a mounted folder is named by the folder.
     const label = source === 'plugin' ? (front.name ?? name) : name;
     return [{ id: `${prefix}:${label}`, label, description: front.description ?? '', source, path: mountPath ?? path.join(dir, name) }];
