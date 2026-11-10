@@ -79,6 +79,17 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
     case 'route': {
       await s.engine('set_status', { text: 'reading your message' });
       await wait();
+      // Written to directly, someone who is not the chief of staff answers a question from the board, and puts work on its own team's board.
+      if (prompt.startsWith('The user wrote to you directly')) {
+        const said = /^The user wrote to you directly:\n\n([\s\S]*?)\n\nThis is a conversation/m.exec(prompt)?.[1]?.trim() ?? '';
+        const own = /^- (.+?) \(teamId: ([^;]+); (self-managed|led)/m.exec(prompt);
+        const board = prompt.split('The company right now:\n')[1]?.trim() ?? '';
+        const mine = own ? (new RegExp(`^${own[1]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\n((?:- .*\\n?)*)`, 'm').exec(board)?.[1]?.trim() ?? '') : '';
+        if (said.endsWith('?') || !own) return s.say(mine && !/nothing on the board/i.test(mine) ? `Here is my team's board right now:\n${mine}` : 'Nothing right now: my team has nothing on its board.');
+        const assigneeId = own[3] === 'self-managed' ? /^Assigned to you: (\S+)$/m.exec(prompt)?.[1] : undefined;
+        const made = await s.engine('create_task', { teamId: own[2]!, ...(assigneeId ? { assigneeId } : {}), title: said.slice(0, 60), brief: said, priority: 2, doneCondition: `"${said.slice(0, 60)}" is done and reported.`, capUsd: 2 });
+        return s.say(made.ok ? 'That is work, so I put it on my team\'s board.' : `I could not put that on the board: ${made.text}`);
+      }
       const teams = [...prompt.matchAll(/^- (.+?) \(teamId: ([^;]+); (self-managed|led)[^\n]*\n((?: {4}- .*\n?)*)/gm)].filter((team) => !/^Office$/i.test(team[1]!));
       const asked = /^The user wrote[^\n]*\n\n([\s\S]*?)\n\nTurn this into work/m.exec(prompt)?.[1]?.trim() ?? 'the request';
       let written = 0;

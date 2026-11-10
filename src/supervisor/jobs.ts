@@ -73,7 +73,7 @@ export function buildJob(input: JobInput): WorkerJob {
   const cwd = folderOf(input.paths, task);
   fs.mkdirSync(cwd, { recursive: true });
   const shape = sessionShape({ task, team, employee, mode: run.mode, folder: cwd, company, envFiles: input.envFiles, protect: engineFiles(input.paths) });
-  const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams, board: input.board });
+  const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams, board: input.board, chief: company.chiefOfStaffId === employee.id, self: employee });
   // A command may run long, but never longer than the lease: the Bash timeout sits two minutes under it.
   const bashTimeout = String(Math.max(1, run.leaseMinutes - 2) * 60_000);
   return {

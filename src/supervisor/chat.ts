@@ -1,7 +1,7 @@
 /**
  * Talking to the company. What the user types in the company chat goes to the chief of staff,
  * who turns it into tasks on the right teams and replies. Any employee can also be written to
- * directly: a busy one gets the message as its next turn, an idle one gets it as a task.
+ * directly: a busy one gets the message as its next turn, an idle one answers it as a conversation.
  */
 import { apply } from '../db/apply.ts';
 import * as store from '../db/store.ts';
@@ -36,7 +36,8 @@ export function messageEmployee(sup: Supervisor, employeeId: string, text: strin
   // Writing to the chief of staff is the company chat, whichever box it was typed in: it answers or routes, and nothing is ticked off as a task.
   if (store.getCompany(sup.db)?.chiefOfStaffId === employeeId) return chat(sup, text);
   if (store.liveRuns(sup.db).some((run) => run.employeeId === employeeId)) return sup.send({ employeeId }, text.trim(), 'user');
-  // Nobody is idle with orders unread: for an idle employee the message is work, so it becomes a task on the board.
-  const task = sup.createTask({ teamId: employee.teamId, assigneeId: employee.id, title: titleOf(text), brief: text.trim() });
+  // A message is a conversation, whoever it is to. It is answered in words; it has no branch, no review and nothing to merge.
+  // If it asks for work, the one who was asked puts that on its own team's board, where it is worked like any other task.
+  const task = sup.createTask({ teamId: employee.teamId, assigneeId: employee.id, kind: 'chat', title: titleOf(text), brief: text.trim(), repoId: null, capUsd: 1 });
   return record(sup, employee.id, task.id, text.trim());
 }

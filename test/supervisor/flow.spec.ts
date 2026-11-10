@@ -795,6 +795,43 @@ describe('integration and landing', () => {
     expect(card!.text).toMatch(/: STRAY\.md\.$/);
   });
 
+  it('never asks to merge a task that changed nothing: it is done, and what was reported is its result', async () => {
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        await s.engine('report_done', { summary: 'I looked: the greeting is already right, so nothing needed changing.' });
+      },
+      { mergeTarget: null },
+    );
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: [] });
+    await drain(setup);
+    expect(store.openDecisions(setup.w.db).map((card) => [card.kind, card.text])).toEqual([]);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: null });
+    expect(store.runsOf(setup.w.db, task.id).at(0)!.summary).toContain('nothing needed changing');
+  });
+
+  it('takes away a merge card that asks about nothing, left from before, and finishes its task', async () => {
+    const setup = ledWorld(
+      async (s) => {
+        s.write('GREETING.md', 'hello\n');
+        await s.engine('report_done', { summary: 'Wrote it.' });
+      },
+      { selfManaged: true, mergeTarget: null },
+    );
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: [] });
+    await drain(setup);
+    expect(store.openDecisions(setup.w.db)).toMatchObject([{ kind: 'merge', taskId: task.id }]);
+    // A card with something behind it stays.
+    await setup.w.sup.settleStaleCards();
+    expect(store.openDecisions(setup.w.db)).toMatchObject([{ kind: 'merge', taskId: task.id }]);
+    // The same card over a branch with nothing on it: what an older engine raised for a question.
+    const folder = store.getTask(setup.w.db, task.id)!.folder!;
+    gitIn(folder, 'reset', '-q', '--hard', 'origin/team');
+    await setup.w.sup.settleStaleCards();
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: null });
+  });
+
   it('raises a merge card when the team has no merge target; Merge lands it', async () => {
     const setup = ledWorld(straight, { mergeTarget: null });
     const parent = parentTask(setup.w);

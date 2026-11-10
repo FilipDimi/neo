@@ -153,12 +153,48 @@ describe('a message to an employee', () => {
     expect(fixture.toWorker).toContainEqual(expect.objectContaining({ t: 'message', text: expect.stringContaining('Keep it under 100 words.') }));
   });
 
-  it('becomes a task assigned to an idle employee', async () => {
-    const { w } = company(() => {});
-    const message = messageEmployee(w.sup, 'mw', 'Draft three taglines for the launch.');
+  it('is a conversation with an idle employee: answered in words, with nothing put on the board and nothing to merge', async () => {
+    let turn = '';
+    const { w, fixture } = company((s) => {
+      if (s.mode !== 'route') throw new Error(`a question must not become ${s.mode}`);
+      turn = s.input.prompt;
+      s.say('Nothing right now: the iOS board is empty.');
+    });
+    const message = messageEmployee(w.sup, 'lead', 'yo, what are we working on?');
     const [task] = store.listTasks(w.db);
-    expect(task).toMatchObject({ assigneeId: 'mw', teamId: 'marketing', brief: 'Draft three taglines for the launch.', createdBy: 'user', kind: 'work' });
-    expect(message).toMatchObject({ toId: 'mw', taskId: task!.id, state: 'delivered' });
-    expect(store.openRequests(w.db)).toMatchObject([{ mode: 'work', employeeId: 'mw' }]);
+    // A chat, with no repository behind it: there is no branch, so nothing can ever ask to be merged.
+    expect(task).toMatchObject({ kind: 'chat', assigneeId: 'lead', teamId: 'ios', repoId: null, brief: 'yo, what are we working on?' });
+    expect(message).toMatchObject({ toId: 'lead', taskId: task!.id, state: 'delivered' });
+    expect(store.openRequests(w.db)).toMatchObject([{ mode: 'route', employeeId: 'lead' }]);
+    await drain(w, fixture);
+    expect(store.runsOf(w.db, task!.id).map((run) => [run.mode, run.employeeId, run.outcome])).toEqual([['route', 'lead', 'done']]);
+    expect(store.openDecisions(w.db)).toEqual([]);
+    expect(store.getTask(w.db, task!.id)!.state).toBe('done');
+    // The answer comes back as a message from the one who was asked.
+    expect(store.recentMessages(w.db, 10).at(-1)).toMatchObject({ fromId: 'lead', toId: 'user', text: 'Nothing right now: the iOS board is empty.' });
+    // It was told that it was written to directly, to answer from the board, and where work would go if it were asked for.
+    expect(turn).toContain('The user wrote to you directly');
+    expect(turn).toContain('yo, what are we working on?');
+    expect(turn).toContain('The company right now');
+    expect(turn).toContain('teamId: ios');
+    expect(turn).not.toContain('teamId: marketing');
+  });
+
+  it('lets an employee that is asked for work put it on its own board, and on no other', async () => {
+    const replies: { ok: boolean; text: string }[] = [];
+    const { w, fixture } = company(async (s) => {
+      if (s.mode !== 'route') return;
+      const base = { priority: 2, doneCondition: 'Done.', capUsd: 1, title: 'Fix the roster', brief: 'The roster drops the last row.' };
+      replies.push(await s.engine('create_task', { ...base, teamId: 'marketing', assigneeId: 'mw' }));
+      replies.push(await s.engine('create_task', { ...base, teamId: 'ios' }));
+      s.say('It is on the iOS board.');
+    });
+    messageEmployee(w.sup, 'lead', 'Fix the roster, it drops the last row.');
+    await w.sup.tick();
+    await fixture.idle();
+    await w.sup.settle();
+    expect(replies[0]).toMatchObject({ ok: false, text: expect.stringMatching(/your own team/) });
+    expect(replies[1]).toMatchObject({ ok: true });
+    expect(store.listTasks(w.db).filter((task) => task.kind === 'work')).toMatchObject([{ teamId: 'ios', title: 'Fix the roster', createdBy: 'lead' }]);
   });
 });

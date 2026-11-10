@@ -18,6 +18,15 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
   const team = useStore((store) => (employee ? store.teams.get(employee.teamId) : undefined), [employee?.teamId]);
   const status = useStore((store) => personStatus(store, employeeId), [employeeId]);
   const tasks = useStore((store) => store.tasks);
+  // What was said between the user and this person, most recent last.
+  const talk = useStore(
+    (store) =>
+      [...store.messages.values()]
+        .filter((message) => (message.fromId === 'user' && message.toId === employeeId) || (message.fromId === employeeId && message.toId === 'user'))
+        .sort((a, b) => a.at.localeCompare(b.at))
+        .slice(-6),
+    [employeeId],
+  );
   const [detail, setDetail] = useState<Detail | null>(null);
   const [text, setText] = useState('');
   const [note, setNote] = useState<string | null>(null);
@@ -64,7 +73,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
     if (!text.trim()) return;
     try {
       const reply = await api.post<{ message: Message }>(`/api/employees/${employeeId}/message`, { text: text.trim() });
-      setNote(reply.message.taskId ? `${employee!.name} was idle, so your message became a task on the board.` : `Your message goes to ${employee!.name} as the next turn of the run in progress.`);
+      setNote(reply.message.taskId ? `${employee!.name} will answer here. If you asked for work, it goes on the ${team?.name ?? 'team'} board.` : `Your message goes to ${employee!.name} as the next turn of the run in progress.`);
       setText('');
     } catch (failure) {
       fail(failure);
@@ -196,6 +205,16 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
         <p className="error" role="alert">
           {error}
         </p>
+      )}
+      {talk.length > 0 && (
+        <section>
+          <div className="label">Conversation</div>
+          {talk.map((message) => (
+            <p key={message.id} className={message.fromId === 'user' ? 'said muted' : 'said'}>
+              {`${message.fromId === 'user' ? 'You' : employee.name}: ${message.text}`}
+            </p>
+          ))}
+        </section>
       )}
       <form className="drawer-message" onSubmit={(event) => void send(event)}>
         <label htmlFor="person-message" className="sr-only">

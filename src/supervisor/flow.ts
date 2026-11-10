@@ -17,7 +17,7 @@ import type { Identity } from '../git/git.ts';
 import { isMerged, landOn, mergeInto } from '../git/merge.ts';
 import { outside } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
-import type { Employee, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
+import type { Decision, Employee, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import * as decisions from './decisions.ts';
@@ -509,9 +509,26 @@ export class Flow {
     return gateCount === 0 ? 'nobody reviewed it and no gate checked it' : `nobody reviewed it, ${green}`;
   }
 
+  /** A merge card over a branch that changes nothing asks about nothing: it is closed and its task is done. */
+  async settleEmptyMerge(card: Decision): Promise<void> {
+    const task = card.taskId ? store.getTask(this.db, card.taskId) : undefined;
+    if (!task || task.state !== 'blocked' || !this.site(task) || !task.folder || !fs.existsSync(task.folder)) return;
+    const changed = await this.changed(task).catch(() => null); // a folder that cannot be read is left for the user
+    if (changed === null || changed.length > 0) return;
+    this.change((tx, now) => {
+      decisions.close(tx, card, now);
+      const current = store.getTask(this.db, task.id)!;
+      if (canTransition(current, 'unblock')) decisions.move(tx, current, 'unblock', now);
+    });
+    await this.complete(task.id);
+  }
+
   /** Lands the task's branch on a target, or asks. Without a merge target every merge is the user's decision. */
   async land(task: Task, onto?: string): Promise<void> {
     const site = this.site(task)!;
+    // Nothing to land: the task changed no file (a question answered, a look that found nothing to change). It is
+    // done, and what was reported is its result. Nobody is asked to merge nothing.
+    if ((await this.changed(task)).length === 0) return this.complete(task.id);
     const target = onto ?? site.teamRepo.mergeTarget;
     const lastRun = store.runsOf(this.db, task.id).filter(authored).at(-1);
     const ask = (text: string, to: string) =>

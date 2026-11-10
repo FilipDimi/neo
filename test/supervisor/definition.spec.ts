@@ -66,6 +66,11 @@ describe('buildSystemPrompt', () => {
     expect(text).toMatch(/An answer is only words/);
   });
 
+  it('does not have skills loaded for a conversation', () => {
+    expect(prompt()).toContain('load these with the Skill tool');
+    expect(prompt({ mode: 'route' })).not.toContain('load these with the Skill tool');
+  });
+
   it('says to carry on when a skill cannot be loaded', () => {
     expect(prompt()).toMatch(/If one cannot be loaded, carry on without it/);
   });
@@ -166,6 +171,18 @@ describe('buildFirstTurn', () => {
     expect(turn).toMatch(/"Half two", by Grace, in \/data\/folders\/bbb/);
     expect(turn).toMatch(/no files/);
     expect(turn).toContain('mcp__engine__report_done');
+  });
+
+  it('a route turn for someone who is not the chief of staff is a conversation about its own team', () => {
+    const other = team({ id: 'team2', name: 'Marketing', selfManaged: true });
+    const turn = buildFirstTurn({ ...base, task: task({ kind: 'chat', brief: 'yo, what are we working on?' }), mode: 'route', chief: false, self: lead, teams: [{ team: led, lead, members: [lead, ada] }, { team: other, lead: null, members: [] }], board: 'Engineering iOS:\n- nothing on the board' });
+    expect(turn).toContain('The user wrote to you directly');
+    expect(turn).toContain('yo, what are we working on?');
+    expect(turn).toMatch(/answer from "The company right now"/);
+    expect(turn).toMatch(/do not open files/i);
+    expect(turn).toContain('teamId: team1');
+    expect(turn).not.toContain('team2');
+    expect(turn).toContain('nothing on the board');
   });
 
   it('a route turn lists the teams with their ids and asks for a reply', () => {

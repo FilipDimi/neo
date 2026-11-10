@@ -43,7 +43,8 @@ ${may(team.mayDelete, 'delete anything outside your task folder')}
     `## Your tools
 ${toolLines(employee, team, input.mode ?? 'work')}`,
 
-    employee.skills.length > 0 ? `## Skills\nBefore anything else, load these with the Skill tool: ${employee.skills.join(', ')}. If one cannot be loaded, carry on without it and say so in your report: a skill is a help, not a condition.` : '',
+    // Skills are for doing work. A conversation is answered from what the employee is told and remembers: loading them first would only make it slow.
+    employee.skills.length > 0 && input.mode !== 'route' ? `## Skills\nBefore anything else, load these with the Skill tool: ${employee.skills.join(', ')}. If one cannot be loaded, carry on without it and say so in your report: a skill is a help, not a condition.` : '',
 
     `## What you remember\n${input.memoryIndex.trim() || 'Nothing yet. This is your first run.'}`,
   ]
@@ -88,7 +89,20 @@ function stillFailing(results: GateResult[] = []): string {
   return `\nThe gate ${failing.join(', ')} still fails after the author was sent back for it once, so it is yours to judge. If what fails is in this task's own files, send it back and say exactly what to fix. If it only needs another part of the larger task, approve this part: the gates of the whole are run when the parts are put together.\n`;
 }
 
-export function buildFirstTurn(input: { task: Task; mode: RunMode; team: Team; repo: Repo | null; teammates: Employee[]; remainingUsd: number; material?: Material; teams?: TeamView[]; board?: string | undefined }): string {
+export function buildFirstTurn(input: {
+  task: Task;
+  mode: RunMode;
+  team: Team;
+  repo: Repo | null;
+  teammates: Employee[];
+  remainingUsd: number;
+  material?: Material;
+  teams?: TeamView[];
+  board?: string | undefined;
+  /** In a chat: false when the one written to is not the chief of staff. It then speaks for its own team only. */
+  chief?: boolean;
+  self?: Employee;
+}): string {
   const { task, mode, team, repo, material = {} } = input;
   const gates = task.gates.map((name) => {
     const gate = repo?.gates.find((g) => g.name === name);
@@ -100,6 +114,24 @@ export function buildFirstTurn(input: { task: Task; mode: RunMode; team: Team; r
       ({ team: t, lead, members }) =>
         `- ${t.name} (teamId: ${t.id}; ${t.selfManaged ? 'self-managed, a task needs an assignee' : `led by ${lead?.name ?? 'nobody yet'}, leave the assignee out`}): ${t.purpose}\n${members.map((m) => `    - ${m.name} (id: ${m.id}): ${m.role}`).join('\n')}`,
     );
+    // Anyone can be written to. Only the chief of staff routes work across the company; everyone else answers for itself and its own team.
+    if (input.chief === false) {
+      const own = teams.filter((line) => line.includes(`(teamId: ${team.id};`));
+      return `The user wrote to you directly:
+
+${task.brief}
+
+This is a conversation, not a task: answer in a few plain sentences. Nothing you say here is reviewed or merged.
+- If it asks what you, your team or the company is working on, answer from "The company right now" below. That is the engine's own record and it is current: do not open files, notes or git history for it.
+- If it asks for work to be done, do not do it here. Call mcp__engine__create_task to put it on your own team's board (teamId: ${team.id}), with a brief that stands on its own and a done-condition someone can check, then say in one sentence what you created. You can put work on your own team's board only.
+- If a good answer needs a look at the code or the documents, say what you know for certain, say that the rest needs a look, and offer to make that a task. Do not guess.
+
+Your team:
+${own.join('\n') || `- ${team.name} (teamId: ${team.id})`}
+
+The company right now:
+${input.board?.trim() || '(nothing on any board)'}`;
+    }
     return `The user wrote to you in the company chat:
 
 ${task.brief}

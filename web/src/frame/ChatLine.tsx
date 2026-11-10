@@ -13,6 +13,8 @@ export function ChatLine() {
   const chief = useStore((store) => (store.company?.chiefOfStaffId ? store.employees.get(store.company.chiefOfStaffId) : undefined));
   const reply = useStore((store) => [...store.messages.values()].filter((message) => message.toId === 'user').sort((a, b) => a.at.localeCompare(b.at)).at(-1));
   const fresh = reply && now.getTime() - new Date(reply.at).getTime() < REPLY_SHOWN_MS;
+  // Anyone who was written to can answer here, so the answer carries the name of whoever gave it.
+  const from = useStore((store) => (reply ? store.employees.get(reply.fromId)?.name : undefined), [reply?.fromId]);
   const ready = Boolean(chief && !chief.fired);
   const label = ready ? `Tell ${chief!.name} what to do next` : 'Hire a chief of staff to use the chat';
 
@@ -31,7 +33,7 @@ export function ChatLine() {
 
   return (
     <form className="chat" onSubmit={(event) => void send(event)}>
-      {fresh && <div className="chat-reply">{`${chief?.name ?? 'Chief of staff'}: ${reply.text}`}</div>}
+      {fresh && <div className="chat-reply">{`${from ?? chief?.name ?? 'Chief of staff'}: ${reply.text}`}</div>}
       {error && (
         <div className="chat-reply error" role="alert">
           {error}

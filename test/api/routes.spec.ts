@@ -251,13 +251,14 @@ describe('company, teams and people', () => {
     expect(store.getCompany(w.db)?.concurrency).toBe(2);
   });
 
-  it('chat goes to the chief of staff, and a message to an idle employee becomes a task', async () => {
+  it('chat goes to the chief of staff, and a message to an idle employee is a chat with that employee', async () => {
     const { call, w } = await fresh(scripted().spawn, { company: { chiefOfStaffId: 'emp1' } });
     const sent = await call('POST', '/api/chat', { text: 'Make the open seamless.' });
     expect(sent.json.message).toMatchObject({ fromId: 'user', toId: 'emp1' });
     expect(store.listTasks(w.db)).toMatchObject([{ kind: 'chat' }]);
     const direct = await call('POST', '/api/employees/emp2/message', { text: 'Draft three taglines.' });
     expect(direct.json.message).toMatchObject({ toId: 'emp2', state: 'delivered' });
+    expect(store.listTasks(w.db).map((task) => [task.kind, task.assigneeId])).toEqual([['chat', 'emp1'], ['chat', 'emp2']]);
     expect((await call('GET', '/api/snapshot')).json.messages).toHaveLength(2);
   });
 

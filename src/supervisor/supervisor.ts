@@ -123,10 +123,17 @@ export class Supervisor {
   start(): void {
     if (this.timer) return;
     recover(this.db, this.now(), this.processes);
+    void this.settleStaleCards();
     const health = () => void this.checkHealth().catch((error) => console.error('health check failed:', error));
     health();
     this.healthTimer = setInterval(health, 60_000);
     this.timer = setInterval(() => void this.tick().catch((error) => console.error('tick failed:', error)), this.tickMs);
+  }
+
+  /** Cards that ask about nothing (a merge with nothing to merge, raised by an older engine) are taken away and their tasks finished. */
+  async settleStaleCards(): Promise<void> {
+    for (const card of store.openDecisions(this.db)) if (card.kind === 'merge' && card.taskId) this.engineWork(card.taskId, () => this.flow.settleEmptyMerge(card));
+    await this.settle();
   }
 
   /** Stops the loop and every worker. Runs left in flight are picked up by recovery at the next start. */
@@ -809,7 +816,18 @@ export class Supervisor {
       }
       case 'create_task': {
         const wanted = TOOL_INPUT.create_task.parse(input);
-        const created = this.createTask({ ...wanted, createdBy: run.employeeId });
+        // The chief of staff routes work to any team. Anyone else who is written to puts work on its own team's board and nowhere else.
+        const author = store.getEmployee(this.db, run.employeeId);
+        const chiefId = store.getCompany(this.db)?.chiefOfStaffId ?? null;
+        if (author && author.id !== chiefId && wanted.teamId !== author.teamId) {
+          return { ok: false, text: `You can put work on your own team's board only (teamId: ${author.teamId}). For another team, tell the user to ask ${chiefId ? this.nameOf(chiefId) : 'the chief of staff'}.` };
+        }
+        let created: Task;
+        try {
+          created = this.createTask({ ...wanted, createdBy: run.employeeId });
+        } catch (failure) {
+          return { ok: false, text: `That task could not be created: ${failure instanceof Error ? failure.message : String(failure)}.` };
+        }
         const count = (this.routed.get(run.id) ?? 0) + 1;
         this.routed.set(run.id, count);
         apply(this.db, (tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, text: `writing ${count} task${count === 1 ? '' : 's'} from your chat` }), now);

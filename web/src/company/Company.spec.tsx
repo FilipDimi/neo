@@ -233,6 +233,18 @@ describe('PersonPage', () => {
     expect(api.calls.some(([method]) => method === 'PATCH')).toBe(false);
   });
 
+  it('shows what was said between the user and this person, and nothing said to anyone else', () => {
+    const said = (id: string, fromId: string, toId: string, text: string, seconds: number) => ({ id, fromId, toId, taskId: null, text, state: 'delivered' as const, at: new Date(T0.getTime() + seconds * 1000).toISOString(), deliveredAt: null });
+    const talking = {
+      ...store,
+      messages: new Map([said('m1', 'user', 'lead', 'yo, what are we working on?', 1), said('m2', 'lead', 'user', 'Nothing right now: the board is empty.', 2), said('m3', 'user', 'someone-else', 'Not for Priya.', 3)].map((message) => [message.id, message])),
+    };
+    mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: talking, now: T0, api: fakeApi(() => detail) });
+    expect(screen.getByText('You: yo, what are we working on?')).toBeTruthy();
+    expect(screen.getByText('Priya: Nothing right now: the board is empty.')).toBeTruthy();
+    expect(screen.queryByText(/Not for Priya/)).toBeNull();
+  });
+
   it('sends a message, and asks before firing', async () => {
     const api = fakeApi((method) => (method === 'GET' ? detail : { message: { state: 'delivered', taskId: 't1' } }));
     const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
@@ -240,7 +252,7 @@ describe('PersonPage', () => {
     mount(<PersonPage employeeId="lead" onClose={() => closed++} />, { store, now: T0, api });
     await userEvent.type(screen.getByLabelText('Message to Priya'), 'Draft three taglines.{Enter}');
     expect(api.calls).toContainEqual(['POST', '/api/employees/lead/message', { text: 'Draft three taglines.' }]);
-    expect(await screen.findByText(/became a task on the board/)).toBeTruthy();
+    expect(await screen.findByText(/Priya will answer here/)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Fire Priya' }));
     expect(api.calls.some((c) => c[1].endsWith('/fire'))).toBe(false);
     await userEvent.click(screen.getByRole('button', { name: 'Fire Priya' }));

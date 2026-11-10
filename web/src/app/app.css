@@ -6,3 +6,10 @@
 .app-chat .chat-line { height: 44px; }
 .office-deck { position: absolute; top: 76px; left: 24px; right: 24px; z-index: 10; display: flex; align-items: flex-start; gap: 8px; }
 .office-deck .deck { flex-grow: 1; min-width: 0; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6); }
+
+/* A line of a conversation with one person, on that person's page. */
+.said {
+  margin: 4px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
