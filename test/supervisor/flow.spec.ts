@@ -397,6 +397,29 @@ describe('integration and landing', () => {
     expect(integrate.gateResults.map((g) => [g.name, g.exitCode])).toEqual([['greeting', 0], ['farewell', 0]]);
   });
 
+  it('holds a split task to what it owns when its parts are put together', async () => {
+    // The parts stay inside the task; the lead, putting them together, changes a file the task was never given.
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'integrate') {
+        s.write('README.md', 'rewritten while integrating\n');
+        return void (await s.engine('report_done', { summary: 'Both files are in.' }));
+      }
+      return straight(s);
+    });
+    const parent = parentTask(setup.w, { ownership: ['GREETING.md', 'FAREWELL.md'] });
+    await drain(setup);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'ownership', taskId: parent.id });
+    expect(card!.text).toMatch(/Put together by Priya, "Add a greeting and a farewell" changes files outside what it owns \(GREETING\.md, FAREWELL\.md\): README\.md/);
+    expect(fileAt(setup.repoPath!, 'team', 'README.md')).not.toBe('rewritten while integrating');
+    expect(store.getTask(setup.w.db, parent.id)!.state).not.toBe('done');
+    // Accepting it carries on from there: the gates, then the landing.
+    setup.w.sup.answer(card!.id, { optionId: 'accept' });
+    await drain(setup);
+    expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+    expect(fileAt(setup.repoPath!, 'team', 'README.md')).toBe('rewritten while integrating');
+  });
+
   it('raises a merge card when the team has no merge target; Merge lands it', async () => {
     const setup = ledWorld(straight, { mergeTarget: null });
     const parent = parentTask(setup.w);

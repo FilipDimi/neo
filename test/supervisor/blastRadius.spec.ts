@@ -163,6 +163,28 @@ describe('judgeToolCall', () => {
     for (const file of ['.ENV', 'backend/.Env.local', '.env.PRODUCTION']) expect(judgeToolCall(ctx(), call('Read', { file_path: path.join(folder, file) })), file).toMatchObject({ allow: false });
   });
 
+  it('refuses a secret spelled with letters the disk folds together, or named by its number', () => {
+    const vault = tempDir();
+    fs.mkdirSync(path.join(vault, 'secrets'));
+    fs.writeFileSync(path.join(vault, 'secrets/key'), 'k');
+    const guarded = ctx({ company: company({ denyRead: [path.join(vault, 'secrets')] }) });
+    // This disk treats the long s as an s: the same folder, another spelling.
+    const folded = path.join(vault, '\u017fecret\u017f/key');
+    if (fs.existsSync(folded)) expect(judgeToolCall(guarded, call('Read', { file_path: folded }))).toMatchObject({ allow: false });
+    // And it serves any file by volume and file number, whatever its name.
+    const file = fs.statSync(path.join(vault, 'secrets/key'));
+    const dir = fs.statSync(path.join(vault, 'secrets'));
+    for (const byNumber of [`/.vol/${file.dev}/${file.ino}`, `/.vol/${dir.dev}/${dir.ino}/key`, `/.VOL/${file.dev}/${file.ino}`]) {
+      expect(judgeToolCall(guarded, call('Read', { file_path: byNumber })), byNumber).toMatchObject({ allow: false });
+    }
+    const own = fs.statSync(folder);
+    expect(judgeToolCall(ctx(), call('Write', { file_path: `/.vol/${own.dev}/${own.ino}/x.txt`, content: 'x' }))).toMatchObject({ allow: false, stop: true });
+    // An env file under another spelling of its folder is still an env file.
+    fs.mkdirSync(path.join(folder, 'backend'), { recursive: true });
+    fs.writeFileSync(path.join(folder, 'backend/.env'), 'TOKEN=x');
+    expect(judgeToolCall(ctx(), call('Read', { file_path: path.join(folder, 'BACKEND/.ENV') }))).toMatchObject({ allow: false });
+  });
+
   it("never reads the engine's own token and database, or the usual credential files", () => {
     const home = os.homedir();
     const engine = ctx({ protect: ['/data/vs/token', '/data/vs/company.db', '/data/vs/company.db-wal'] });

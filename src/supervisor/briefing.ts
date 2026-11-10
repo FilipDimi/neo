@@ -1,13 +1,13 @@
 /**
  * A lead's proposal to split a task, checked before any sub-task exists. Pure.
  */
-import { overlaps } from '../git/ownership.ts';
+import { outside, overlaps } from '../git/ownership.ts';
 import type { Employee, Repo, Task, Team } from '../shared/types.ts';
 import type { SubtaskProposal } from '../worker/protocol.ts';
 
 export const MAX_SUBTASKS = 8;
 
-export type ProposalReason = { code: 'empty' | 'too_many' | 'overlap' | 'unknown_assignee' | 'assignee_not_in_team' | 'assignee_fired' | 'missing_done_condition' | 'unknown_gate' | 'caps_exceed_parent' | 'parent_is_a_child'; text: string };
+export type ProposalReason = { code: 'empty' | 'too_many' | 'overlap' | 'unknown_assignee' | 'assignee_not_in_team' | 'assignee_fired' | 'missing_done_condition' | 'unknown_gate' | 'caps_exceed_parent' | 'parent_is_a_child' | 'outside_parent'; text: string };
 
 export function validateProposal(input: { parent: Task; team: Team; employees: Employee[]; repo: Repo | null; remainingUsd: number; subtasks: SubtaskProposal[] }): { ok: true } | { ok: false; reasons: ProposalReason[] } {
   const { parent, team, subtasks } = input;
@@ -25,6 +25,10 @@ export function validateProposal(input: { parent: Task; team: Team; employees: E
     else if (assignee.teamId !== team.id) add('assignee_not_in_team', `"${sub.title}": ${assignee.name} is not on your team.`);
     else if (assignee.fired) add('assignee_fired', `"${sub.title}": ${assignee.name} no longer works here.`);
     if (!sub.doneCondition.trim()) add('missing_done_condition', `"${sub.title}" has no done-condition.`);
+    // A part cannot own more than the whole: splitting a task is not a way to reach files the task was not given.
+    if (parent.ownership.length > 0 && (sub.ownership.length === 0 || outside(sub.ownership, parent.ownership).length > 0)) {
+      add('outside_parent', `"${sub.title}" owns ${sub.ownership.join(', ') || 'everything'}, but the task you are splitting owns only ${parent.ownership.join(', ')}. Give each sub-task files inside that.`);
+    }
     for (const gate of sub.gates) if (!input.repo?.gates.some((g) => g.name === gate)) add('unknown_gate', `"${sub.title}": there is no gate named "${gate}"${input.repo ? ` (the gates are: ${input.repo.gates.map((g) => g.name).join(', ') || 'none'})` : ''}.`);
   }
 

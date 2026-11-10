@@ -211,15 +211,22 @@ export class Flow {
         // A team with no repository has nothing to merge: the lead has put the parts together, and that is the task done.
         if (!this.site(task)) return this.finish(task.id);
         await this.commitWork(run, task);
-        // A conflict stopped the merging part-way: merge the rest in another integration run.
-        const site = this.site(task)!;
-        for (const child of store.listTasks(this.db, { parentId: task.id }).filter((c) => c.state === 'done' && c.branch)) {
-          if (!(await isMerged(site.folder, child.branch!))) return this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'integrate', employeeId: run.employeeId, reason: 'integrate' }, now) }));
-        }
-        if (!(await this.gatesPass(run.id, task))) return;
-        return this.finish(task.id);
+        return this.integrated(run, task, true);
       }
     }
+  }
+
+  /** The parts are together: every sub-task's branch is in, nothing was changed that the task does not own, and the gates pass. */
+  private async integrated(run: Run, task: Task, checkOwnership: boolean): Promise<void> {
+    const site = this.site(task)!;
+    // A conflict stopped the merging part-way: merge the rest in another integration run.
+    for (const child of store.listTasks(this.db, { parentId: task.id }).filter((c) => c.state === 'done' && c.branch)) {
+      if (!(await isMerged(site.folder, child.branch!))) return this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'integrate', employeeId: run.employeeId, reason: 'integrate' }, now) }));
+    }
+    // A split is not a way around what the task owns: what the parts changed between them, and what the lead changed putting them together, is held to it.
+    if (checkOwnership && !this.ownershipHolds(run, await this.changed(task), task, true)) return;
+    if (!(await this.gatesPass(run.id, task))) return;
+    return this.finish(task.id);
   }
 
   /** Commits what the run left in the folder, publishes the branch, and records the commit and the size of the diff. */
@@ -239,7 +246,7 @@ export class Flow {
   }
 
   /** Ownership is checked after the work as well as before it: a command can change a file no tool call named. */
-  private ownershipHolds(run: Run, files: string[], task: Task): boolean {
+  private ownershipHolds(run: Run, files: string[], task: Task, whole = false): boolean {
     const strays = outside(files, task.ownership);
     if (strays.length === 0) return true;
     const name = store.getEmployee(this.db, run.employeeId)?.name ?? 'An employee';
@@ -249,7 +256,7 @@ export class Flow {
         runId: run.id,
         employeeId: run.employeeId,
         kind: 'ownership',
-        text: `${name} changed files outside what "${task.title}" owns (${task.ownership.join(', ')}): ${strays.slice(0, 8).join(', ')}${strays.length > 8 ? ` and ${strays.length - 8} more` : ''}.`,
+        text: `${whole ? `Put together by ${name}, "${task.title}" changes files outside what it owns` : `${name} changed files outside what "${task.title}" owns`} (${task.ownership.join(', ')}): ${strays.slice(0, 8).join(', ')}${strays.length > 8 ? ` and ${strays.length - 8} more` : ''}.`,
         freeText: true,
         options: decisions.optionsFor('ownership'),
       }),
@@ -439,8 +446,9 @@ export class Flow {
         // The stray files are accepted: carry on from where the check stopped.
         return this.host.engineWork(task.id, async () => {
           const run = decision.runId ? store.getRun(this.db, decision.runId) : undefined;
-          if (!run || !(await this.gatesPass(run.id, task))) return;
-          if (run.mode === 'integrate') return this.finish(task.id);
+          if (!run) return;
+          if (run.mode === 'integrate') return this.integrated(run, task, false);
+          if (!(await this.gatesPass(run.id, task))) return;
           return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
         });
       case 'stop_task':

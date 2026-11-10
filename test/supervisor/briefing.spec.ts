@@ -28,6 +28,19 @@ describe('validateProposal', () => {
     expect(codes([sub({ ownership: [] }), sub({ assigneeId: 'emp2', ownership: ['docs'] })])).toEqual(['overlap']);
   });
 
+  it('refuses a sub-task that owns more than the task it is a part of', () => {
+    const narrow = task({ capUsd: 2, ownership: ['src/api', 'docs/api.md'] });
+    expect(codes([sub({ ownership: ['src/api/routes.ts'] }), sub({ title: 'Docs', assigneeId: 'emp2', ownership: ['docs/api.md'] })], narrow)).toEqual([]);
+    expect(codes([sub({ ownership: ['src/ui'] })], narrow)).toEqual(['outside_parent']);
+    expect(codes([sub({ ownership: ['README.md'] })], narrow)).toEqual(['outside_parent']);
+    // An empty list owns everything, which is more than a task that owns something.
+    expect(codes([sub({ ownership: [] })], narrow)).toEqual(['outside_parent']);
+    // A task that owns everything can be split any way.
+    expect(codes([sub({ ownership: ['anything/at/all'] })], task({ capUsd: 2, ownership: [] }))).toEqual([]);
+    const told = check([sub({ ownership: ['src/ui'] })], narrow);
+    expect(told.ok ? '' : told.reasons[0]!.text).toMatch(/src\/ui.*src\/api, docs\/api\.md/);
+  });
+
   it('refuses an assignee who is unknown, on another team, or fired', () => {
     expect(codes([sub({ assigneeId: 'nobody' })])).toEqual(['unknown_assignee']);
     expect(codes([sub({ assigneeId: 'stranger' })])).toEqual(['assignee_not_in_team']);

@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apply, readEvents } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
@@ -379,6 +382,51 @@ describe('Supervisor', () => {
     const task = newTask(w);
     await w.sup.tick();
     expect(() => w.sup.editTask(task.id, { assigneeId: 'emp2' })).toThrow(/reassigned/);
+  });
+
+  it('stops a run and says so when the path of a write it allowed led somewhere else by the time the write was done', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn, { employees: [employee({ capabilities: ['read_files', 'run_commands', 'write_code'] }), employee({ id: 'emp2', name: 'Grace' })] }));
+    const task = newTask(w);
+    await w.sup.tick();
+    const worker = fake.workers[0]!;
+    const folder = worker.job.cwd;
+    const elsewhere = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'vs-elsewhere-'));
+    try {
+      fs.mkdirSync(path.join(folder, 'a'));
+      worker.say(started);
+      // The call is judged while `a` is an ordinary folder inside the task folder, and allowed.
+      worker.say({ t: 'decide', askId: 'w1', call: { id: 'toolu-1', tool: 'Write', input: { file_path: path.join(folder, 'a/x.txt'), content: 'x' } } });
+      expect(worker.received.find((m) => m.t === 'decision')).toMatchObject({ allow: true });
+      // Before the write is done, a command of the same session swaps `a` for a link that leads out.
+      fs.rmdirSync(path.join(folder, 'a'));
+      fs.symlinkSync(elsewhere, path.join(folder, 'a'));
+      worker.say({ t: 'event', event: { kind: 'tool_result', id: 'toolu-1', ok: true } });
+      await w.sup.settle();
+
+      expect(store.runsOf(w.db, task.id)).toMatchObject([{ outcome: 'refused', reason: 'path_moved' }]);
+      expect(worker.killed).toBe(true);
+      const [card] = store.openDecisions(w.db);
+      expect(card).toMatchObject({ kind: 'tool', taskId: task.id });
+      expect(card!.text).toMatch(/Ada wrote .*a\/x\.txt.* changed while it was being written.* may have landed .*vs-elsewhere-/);
+      expect(card!.options.map((option) => option.effect)).toEqual(['stop_task', 'keep_refused']);
+    } finally {
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a write alone when its path still leads where it did', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn, { employees: [employee({ capabilities: ['read_files', 'write_code'] }), employee({ id: 'emp2', name: 'Grace' })] }));
+    newTask(w);
+    await w.sup.tick();
+    const worker = fake.workers[0]!;
+    worker.say(started);
+    worker.say({ t: 'decide', askId: 'w1', call: { id: 'toolu-1', tool: 'Write', input: { file_path: path.join(worker.job.cwd, 'x.txt'), content: 'x' } } });
+    worker.say({ t: 'event', event: { kind: 'tool_result', id: 'toolu-1', ok: true } });
+    await w.sup.settle();
+    expect(store.liveRuns(w.db)).toHaveLength(1);
+    expect(store.openDecisions(w.db)).toEqual([]);
   });
 
   it('gives an employee a tool it lacks from a card whose button really does it', async () => {

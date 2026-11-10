@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { apply, type Tx } from '../db/apply.ts';
 import { engineFiles, paths as pathsOf, type Paths } from '../db/dataDir.ts';
+import { leadsTo } from '../git/paths.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { listSkills, mountSkills, type SkillDirs, type SkillRef } from '../runtime/skills.ts';
@@ -65,6 +66,8 @@ export class Supervisor {
   private readonly tickMs: number;
   /** Per live run: what each answer of its unfinished turn has used. */
   private readonly unpaid = new Map<string, Map<string, Tokens>>();
+  /** Per live run: the writes that were allowed and are not yet done. */
+  private readonly allowedWrites = new Map<string, Map<string, { id: string; tool: string; input: unknown }>>();
   private readonly apiPort: number;
   private readonly spawn: Spawn;
   private readonly runtimeModule: string | undefined;
@@ -517,6 +520,7 @@ export class Supervisor {
       return void this.unpaid.set(run.id, answers);
     }
     if (event.kind === 'usage') this.unpaid.delete(run.id);
+    if (event.kind === 'tool_result') this.checkWriteLanded(run, event.id);
     const now = this.now();
     const teamId = store.getEmployee(this.db, run.employeeId)?.teamId ?? '';
     const recorded = event.kind === 'tool_call' ? { ...event, input: trimmed(event.input) } : event;
@@ -638,7 +642,51 @@ export class Supervisor {
       );
       this.planned.set(run.id, { outcome: 'refused', reason: 'refused' });
     }
+    // A write is judged here, and done a moment later by the session's own process. Its path is looked at again once it is done.
+    if (verdict.allow && !verdict.useGrant && (call.tool === 'Write' || call.tool === 'Edit')) {
+      const allowed = this.allowedWrites.get(run.id) ?? new Map<string, { id: string; tool: string; input: unknown }>();
+      allowed.set(call.id, call);
+      this.allowedWrites.set(run.id, allowed);
+    }
     return { allow: verdict.allow, ...(verdict.reason !== undefined && { reason: verdict.reason }), ...(verdict.stop && { stop: true }) };
+  }
+
+  /**
+   * A write that was allowed has been done. If its path no longer leads where it did when it was
+   * judged (a link was put in its way in between), the file may be outside the task folder. That
+   * cannot be undone from here, so the run stops and the user is told exactly which path.
+   */
+  private checkWriteLanded(run: Run, callId: string): void {
+    const call = this.allowedWrites.get(run.id)?.get(callId);
+    if (!call) return;
+    this.allowedWrites.get(run.id)!.delete(callId);
+    const task = store.getTask(this.db, run.taskId);
+    const employee = store.getEmployee(this.db, run.employeeId);
+    const team = task && store.getTeam(this.db, task.teamId);
+    const company = store.getCompany(this.db);
+    if (!task || !employee || !team || !company) return;
+    const folder = folderOf(this.paths, task);
+    if (judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: [], protect: engineFiles(this.paths) }, call).allow) return;
+    const named = String((call.input as { file_path?: unknown } | null)?.file_path ?? '');
+    const now = this.now();
+    apply(
+      this.db,
+      (tx) =>
+        decisions.raise(tx, this.db, now, {
+          taskId: task.id,
+          runId: run.id,
+          employeeId: employee.id,
+          kind: 'tool',
+          text: `${employee.name} wrote ${named} while working on "${task.title}", and that path was changed while it was being written. The file may have landed at ${leadsTo(path.isAbsolute(named) ? named : path.join(folder, named)) ?? 'a place that cannot be followed'}, outside the task folder. Look there before anything else runs.`,
+          options: [
+            { id: 'stop', label: 'Stop it', effect: 'stop_task' },
+            { id: 'carry', label: 'I looked: carry on', effect: 'keep_refused' },
+          ],
+          subject: { key: `moved:${run.id}:${callId}` },
+        }),
+      now,
+    );
+    this.endRunNow(run, 'refused', 'path_moved');
   }
 
   /** The model called one of the engine's tools. */
@@ -775,6 +823,7 @@ export class Supervisor {
     this.planned.delete(runId);
     this.reports.delete(runId);
     this.routed.delete(runId);
+    this.allowedWrites.delete(runId);
     this.engineWork(ended.taskId, () => this.afterRun(ended));
   }
 

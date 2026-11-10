@@ -107,11 +107,34 @@ const anchored = (folder: string, file: string): string => (path.isAbsolute(file
 
 const SECRET = { allow: false, reason: 'Refused: secrets and credentials are never readable. Carry on without this file.' };
 
+/**
+ * A path as the disk itself names the file: every link followed, and whatever exists spelled the
+ * way the disk stores it. The disk answers to more spellings than one (it ignores case, and takes
+ * a long s for an s), so only its own spelling can be compared with a list. Null for a path that
+ * cannot be pinned down: a chain of links with no end, or a file named by number under /.vol.
+ */
+export function onDisk(file: string): string | null {
+  const target = leadsTo(file);
+  if (target === null || inside(target, '/.vol')) return null;
+  let existing = target;
+  const rest: string[] = [];
+  while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
+    rest.unshift(path.basename(existing));
+    existing = path.dirname(existing);
+  }
+  try {
+    const named = path.join(fs.realpathSync.native(existing), ...rest);
+    return inside(named, '/.vol') ? null : named;
+  } catch {
+    return null;
+  }
+}
+
 /** True for a file no session opens with a tool: a secret, a login, an env file, the engine's own token and database. */
 function unreadable(ctx: Radius, file: string): boolean {
-  const target = leadsTo(file);
+  const target = onDisk(file);
   if (target === null || isEnvFile(target)) return true;
-  return [...DEFAULT_DENY_READ, ...TOOL_DENY_READ, ...ctx.company.denyRead, ...(ctx.protect ?? [])].some((entry) => inside(target, leadsTo(home(entry)) ?? home(entry)));
+  return [...DEFAULT_DENY_READ, ...TOOL_DENY_READ, ...ctx.company.denyRead, ...(ctx.protect ?? [])].some((entry) => inside(target, onDisk(home(entry)) ?? home(entry)));
 }
 
 /** What a grant is for: the file for a write, the exact input for anything else. Content may differ on the second try. */
@@ -140,8 +163,8 @@ function judge(ctx: Radius, call: ToolCall): Verdict {
     case 'Write':
     case 'Edit': {
       if (typeof input.file_path !== 'string') return refuse(`wants to use ${call.tool} without naming a file`);
-      const folder = leadsTo(ctx.folder) ?? ctx.folder;
-      const target = leadsTo(anchored(ctx.folder, input.file_path));
+      const folder = onDisk(ctx.folder) ?? ctx.folder;
+      const target = onDisk(anchored(ctx.folder, input.file_path));
       if (target === null || !inside(target, folder)) return refuse(`wants to write ${target ?? input.file_path}, which is outside its task folder`);
       const relative = target.slice(folder.length + 1);
       if (relative === '') return refuse('wants to write over its task folder itself');
@@ -155,10 +178,10 @@ function judge(ctx: Radius, call: ToolCall): Verdict {
     case 'Glob':
     case 'Grep': {
       // A search opens every file under its root, so its root stays where the task's own files are.
-      const root = leadsTo(typeof input.path === 'string' ? anchored(ctx.folder, input.path) : ctx.folder);
+      const root = onDisk(typeof input.path === 'string' ? anchored(ctx.folder, input.path) : ctx.folder);
       const pattern = call.tool === 'Glob' && typeof input.pattern === 'string' ? input.pattern : '';
       const climbs = path.isAbsolute(pattern) || pattern.split(/[\\/]/).includes('..');
-      const places = [ctx.folder, ctx.employee.memoryDir].map((dir) => leadsTo(dir) ?? dir);
+      const places = [ctx.folder, ctx.employee.memoryDir].map((dir) => onDisk(dir) ?? dir);
       if (root === null || climbs || !places.some((dir) => inside(root, dir))) return { allow: false, reason: 'Refused: search inside your task folder or your memory folder. To read one file from elsewhere, name it.' };
       return unreadable(ctx, root) ? SECRET : { allow: true };
     }
