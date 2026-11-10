@@ -3,6 +3,7 @@
  * which tools exist in the session, the sandbox around every command, and the supervisor's
  * answer on every tool call. Nothing here judges a command by its text.
  */
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,7 +32,25 @@ export function availableCapabilities(team: Pick<Team, 'mayPush'>): Capability[]
 /** Never readable, by tool or by command: keys, logins, other sessions' transcripts. */
 export const DEFAULT_DENY_READ = ['~/.ssh', '~/.aws', '~/.gnupg', '~/.netrc', '~/.kube', '~/.docker', '~/.gcp', '~/.config/gcloud', '~/.config/gh', '~/.claude.json', '~/.claude/.credentials.json', '~/.claude/projects'];
 
-const home = (entry: string): string => (entry === '~' || entry.startsWith('~/') ? path.join(os.homedir(), entry.slice(2)) : entry);
+const systemFolders = new Map<string, string>();
+/** macOS keeps a cache and a temp folder per user under /var/folders; `getconf` names them. Xcode writes to both. */
+function systemFolder(name: string): string {
+  if (!systemFolders.has(name)) {
+    let found = `$${name}`;
+    try {
+      found = execFileSync('getconf', [name], { encoding: 'utf8' }).trim().replace(/\/$/, '');
+    } catch {
+      // Not macOS: the entry stays as written and matches nothing.
+    }
+    systemFolders.set(name, found);
+  }
+  return systemFolders.get(name)!;
+}
+
+const home = (entry: string): string => {
+  if (entry === '$DARWIN_USER_CACHE_DIR' || entry === '$DARWIN_USER_TEMP_DIR') return systemFolder(entry.slice(1));
+  return entry === '~' || entry.startsWith('~/') ? path.join(os.homedir(), entry.slice(2)) : entry;
+};
 const isEnvFile = (file: string): boolean => /^\.env(\..+)?$/.test(path.basename(file)) && !/\.(example|sample|template)$/.test(file);
 
 export type Radius = { task: Task; team: Team; employee: Employee; mode: RunMode; folder: string; company: Company; grants: Grant[] };

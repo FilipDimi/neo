@@ -1,0 +1,41 @@
+.company-view { flex-grow: 1; min-height: 0; display: flex; }
+.org { width: 420px; flex: none; padding: 24px; border-right: 1px solid var(--header-line); display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
+.org .pill { align-self: flex-start; }
+.person-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--card); background: var(--surface); border: 1px solid var(--line); text-align: left; width: 100%; font-size: 13px; }
+.avatar { min-width: 28px; height: 28px; padding: 0 4px; border-radius: 14px; background: #1F3B5A; border: 2px solid var(--text); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+.status-word { font-size: 11px; color: var(--muted); }
+.status-word[data-status="working"] { color: var(--working); } .status-word[data-status="reviewing"] { color: var(--review); } .status-word[data-status="stuck"] { color: var(--silent); }
+.org-team { display: flex; flex-direction: column; gap: 8px; }
+.org-team-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 600; color: var(--soft); }
+.org-team-head .muted { font-weight: 400; flex-grow: 1; text-align: right; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.org .chips { padding-left: 12px; }
+.chip { font-size: 12px; padding: 6px 10px; border-radius: var(--pill); background: var(--surface); border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 6px; }
+.chip[data-status="stuck"] { background: var(--silent-ground); border-color: var(--silent-edge); }
+.chip.on { background: var(--chosen-ground); border-color: var(--chosen-edge); }
+.chip.dashed { background: none; border-style: dashed; color: var(--muted); }
+.chip.off { color: var(--dim); }
+.chip.check { cursor: pointer; } .chip.check input { margin: 0; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); display: inline-block; }
+.dot[data-status="working"] { background: var(--working); } .dot[data-status="reviewing"] { background: var(--review); } .dot[data-status="stuck"] { background: var(--silent); }
+.hire { flex-grow: 1; min-width: 0; padding: 28px 40px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+.hire h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.3px; }
+.hire p { margin: 0; max-width: 860px; }
+.hire-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; max-width: 860px; }
+.hire label, .hire legend, .group-title { font-size: 12px; font-weight: 600; color: var(--soft); }
+.hire-grid label { display: flex; flex-direction: column; gap: 6px; }
+.hire-grid .wide { grid-column: span 2; }
+.kind { border: 0; padding: 0; margin: 0; display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.kind legend { padding: 0; margin-bottom: 6px; }
+.choice { flex-direction: row !important; align-items: center; gap: 6px; font-size: 13px !important; padding: 9px 12px; border-radius: var(--pill); background: var(--surface); border: 1px solid var(--line); cursor: pointer; font-weight: 400 !important; }
+.choice.on { background: var(--text); color: var(--ground); border-color: var(--text); font-weight: 600 !important; }
+.choice input { margin: 0; }
+.hire-group { display: flex; flex-direction: column; gap: 10px; max-width: 860px; }
+.hire-group .chip { font-weight: 400; color: var(--text); }
+.field.small { font-size: 12px; padding: 7px 10px; max-width: 280px; }
+.small { font-size: 12px; line-height: 17px; }
+.hire-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; max-width: 860px; }
+.panel .stack { flex-direction: column; flex-wrap: nowrap; gap: 10px; }
+.repo-row { display: flex; flex-direction: column; gap: 8px; }
+.memory { margin: 0; font: 12px/18px ui-monospace, Menlo, monospace; white-space: pre-wrap; background: var(--ground); border: 1px solid var(--line); border-radius: var(--card); padding: 12px; max-height: 220px; overflow-y: auto; }
+.setup { flex-grow: 1; display: flex; align-items: flex-start; justify-content: center; padding: 60px 16px; overflow-y: auto; }

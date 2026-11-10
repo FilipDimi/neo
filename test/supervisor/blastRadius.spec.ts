@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,6 +36,14 @@ describe('sessionShape', () => {
     expect(shape.sandbox!.filesystem!.denyRead).toContain('/repo/backend/.env');
     expect(shape.sandbox!.filesystem!.denyRead).toContain(path.join(os.homedir(), '.ssh'));
     expect(shape.additionalDirectories).toEqual([coder.memoryDir]);
+  });
+
+  it('resolves the per-user system folders of the Xcode build profile', () => {
+    const shape = sessionShape({ ...ctx({ employee: coder, team: team({ sandboxWrite: ['$DARWIN_USER_TEMP_DIR', '$DARWIN_USER_CACHE_DIR'] }) }), envFiles: [] });
+    const [temp, cache] = shape.sandbox!.filesystem!.allowWrite!;
+    const expected = execFileSync('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).trim();
+    expect(`${temp}/`).toBe(expected);
+    expect(cache).toMatch(/^\/.+\/C$/);
   });
 
   it('drops write and command tools in review and route modes', () => {
