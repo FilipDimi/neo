@@ -10,7 +10,7 @@ import { apply, type Tx } from '../db/apply.ts';
 import type { Paths } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
-import { changedFiles, commitAll, diffStat, patch } from '../git/commit.ts';
+import { changedFiles, commitAll, diffStat, NestedRepoError, patch } from '../git/commit.ts';
 import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
 import type { GateLimits, GateQueue } from '../git/gates.ts';
 import type { Identity } from '../git/git.ts';
@@ -21,7 +21,8 @@ import type { GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRep
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import * as decisions from './decisions.ts';
-import { buildFirstTurn } from './definition.ts';
+import { writtenFiles } from '../api/files.ts';
+import { buildFirstTurn, type Part } from './definition.ts';
 import { reviewerFor } from './scheduler.ts';
 import { canTransition } from './taskState.ts';
 
@@ -44,8 +45,13 @@ export type FlowHost = {
   planRunEnd(runId: string, outcome: RunOutcome, reason: string): void;
 };
 
+/** A review's verdict as it is written on its run. */
+const VERDICT = { approve: 'approved', send_back: 'sent_back', escalate: 'escalated' } as const;
+
 export class Flow {
   private readonly refusedProposals = new Map<string, number>();
+  /** Verdicts given by review runs that have not ended yet. An ended run carries its verdict as its reason. */
+  private readonly verdicts = new Map<string, string>();
 
   constructor(private readonly host: FlowHost) {}
 
@@ -77,7 +83,12 @@ export class Flow {
   /** Makes sure the task has its folder, and for an integration merges the children first. */
   async prepare(task: Task, request: RunRequest): Promise<{ task: Partial<Task>; firstTurn?: string }> {
     const site = this.site(task);
-    if (!site) return { task: {} };
+    if (!site) {
+      // No repository, so nothing to merge: an integration is told where each finished part is instead.
+      const team = store.getTeam(this.db, task.teamId);
+      if (request.mode !== 'integrate' || request.firstTurn || !team) return { task: {} };
+      return { task: {}, firstTurn: buildFirstTurn({ task, mode: 'integrate', team, repo: null, teammates: [], remainingUsd: 0, material: { parts: this.partsOf(task) } }) };
+    }
     const changes: Partial<Task> = {};
     if (!task.folder || !fs.existsSync(task.folder)) {
       const parent = task.parentId ? store.getTask(this.db, task.parentId) : undefined;
@@ -96,6 +107,17 @@ export class Flow {
     const ready = { ...task, ...changes };
     const mergeState = await this.mergeChildren(ready);
     return { task: changes, firstTurn: buildFirstTurn({ task: ready, mode: 'integrate', team: site.team, repo: site.repo, teammates: [], remainingUsd: 0, material: { mergeState } }) };
+  }
+
+  /** The finished sub-tasks of a task that has no repository: whose they are, where their files are, what was reported. */
+  private partsOf(parent: Task): Part[] {
+    const children = store.listTasks(this.db, { parentId: parent.id }).filter((child) => child.state === 'done').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    return children.map((child) => {
+      const folder = child.folder ?? path.join(this.host.paths.folders, child.id);
+      const last = store.runsOf(this.db, child.id).filter(authored).at(-1);
+      const written = writtenFiles(folder);
+      return { title: child.title, by: store.getEmployee(this.db, last?.employeeId ?? child.assigneeId ?? '')?.name ?? 'someone', folder, summary: last?.summary ?? null, files: written.files.map((file) => file.path), more: written.more };
+    });
   }
 
   /** Merges each finished child's branch into the parent's, in creation order, stopping at the first conflict. */
@@ -156,6 +178,9 @@ export class Flow {
     const { verdict, notes } = TOOL_INPUT.submit_review.parse(input);
     const task = store.getTask(this.db, run.taskId)!;
     const reviewer = store.getEmployee(this.db, run.employeeId)?.name ?? 'The reviewer';
+    // The verdict stays with the run: what a merge card says about the work is read from it, never from the fact that a review happened.
+    this.verdicts.set(run.id, VERDICT[verdict]);
+    this.host.planRunEnd(run.id, 'done', VERDICT[verdict]);
     if (verdict === 'approve') this.host.engineWork(task.id, () => this.finish(task.id));
     else if (verdict === 'send_back') this.sendBack(task, `Your work was reviewed by ${reviewer} and sent back:\n\n${notes.trim() || '(no notes)'}\n\nFix it, then call mcp__engine__report_done again.`, `${reviewer} has sent "${task.title}" back`);
     else
@@ -201,7 +226,7 @@ export class Flow {
       // falls through
       case 'work': {
         if (this.site(task)) {
-          await this.commitWork(run, task);
+          if (!(await this.committed(run, task))) return;
           if (!this.ownershipHolds(run, await this.changed(task), task)) return;
           if (!(await this.gatesPass(run.id, task))) return;
         }
@@ -210,7 +235,7 @@ export class Flow {
       case 'integrate': {
         // A team with no repository has nothing to merge: the lead has put the parts together, and that is the task done.
         if (!this.site(task)) return this.finish(task.id);
-        await this.commitWork(run, task);
+        if (!(await this.committed(run, task))) return;
         return this.integrated(run, task, true);
       }
     }
@@ -227,6 +252,24 @@ export class Flow {
     if (checkOwnership && !this.ownershipHolds(run, await this.changed(task), task, true)) return;
     if (!(await this.gatesPass(run.id, task))) return;
     return this.finish(task.id);
+  }
+
+  /** Commits the run's work. False when it could not be committed as it is and has gone back to its author. */
+  private async committed(run: Run, task: Task): Promise<boolean> {
+    try {
+      await this.commitWork(run, task);
+      return true;
+    } catch (error) {
+      if (!(error instanceof NestedRepoError)) throw error;
+      // A tool made a repository inside the folder (cargo new and git init do). Its author can undo that in one command; nobody else needs to be asked.
+      const where = error.dirs.map((dir) => `${dir}/.git`).join(', ');
+      this.sendBack(
+        task,
+        `The engine could not commit your work: ${error.message}. A tool such as cargo new or git init leaves one behind. Remove ${where} (keep the files beside it), then call mcp__engine__report_done again.`,
+        `"${task.title}" cannot be committed, because ${error.message}`,
+      );
+      return false;
+    }
   }
 
   /** Commits what the run left in the folder, publishes the branch, and records the commit and the size of the diff. */
@@ -343,6 +386,31 @@ export class Flow {
     return this.complete(taskId);
   }
 
+  /** The verdict of the review that came after a task's last piece of work, and who gave it. Null when there was none. */
+  private lastReview(taskId: string): { verdict: string | null; by: string } | null {
+    const runs = store.runsOf(this.db, taskId);
+    const review = runs.slice(runs.findLastIndex(authored) + 1).findLast((run) => run.mode === 'review');
+    if (!review) return null;
+    // Its run may still be closing (the approval is what brought us here), so the verdict is not on it yet.
+    const verdict = this.verdicts.get(review.id) ?? (review.outcome === 'done' ? review.reason : null);
+    return { verdict, by: store.getEmployee(this.db, review.employeeId)?.name ?? 'the reviewer' };
+  }
+
+  /** In words for a merge card: who approved this work, or that nobody did. Only an approval counts as one. */
+  private standing(task: Task, green: string, gateCount: number): string {
+    const parts = store.listTasks(this.db, { parentId: task.id }).filter((child) => child.state === 'done');
+    if (parts.length > 0) {
+      const approved = parts.filter((child) => this.lastReview(child.id)?.verdict === VERDICT.approve).length;
+      const each = approved < parts.length ? `${approved} of its ${parts.length} sub-tasks were approved by a reviewer` : parts.length === 1 ? 'its one sub-task was approved by a reviewer' : `its ${parts.length} sub-tasks were each approved by a reviewer`;
+      return `${each}, nobody reviewed how they were put together, ${green}`;
+    }
+    const review = this.lastReview(task.id);
+    if (review?.verdict === VERDICT.approve) return `approved by ${review.by}, ${green}`;
+    if (review?.verdict === VERDICT.send_back) return `${review.by} sent it back and it was accepted as it is, ${green}`;
+    if (review?.verdict === VERDICT.escalate) return `${review.by} could not decide and it was accepted as it is, ${green}`;
+    return gateCount === 0 ? 'nobody reviewed it and no gate checked it' : `nobody reviewed it, ${green}`;
+  }
+
   /** Lands the task's branch on a target, or asks. Without a merge target every merge is the user's decision. */
   async land(task: Task, onto?: string): Promise<void> {
     const site = this.site(task)!;
@@ -354,11 +422,8 @@ export class Flow {
       const gates = lastRun?.gateResults ?? [];
       const green = gates.length === 0 ? 'no gates' : gates.every((g) => g.exitCode === 0) ? `gates green (${gates.map((g) => g.name).join(', ')})` : 'gates NOT green';
       // The card says how much stands behind the work, so Merge is never pressed on something nobody looked at without knowing it.
-      // Reviewed means a review came after the last piece of work. Its run may still be closing: the approval is what brought us here.
-      const runs = store.runsOf(this.db, task.id);
-      const reviewed = runs.some((run, index) => run.mode === 'review' && (run.outcome === 'done' || run.outcome === 'running') && index > runs.findLastIndex(authored));
-      const checked = reviewed ? `reviewed, ${green}` : gates.length === 0 ? 'Nobody reviewed it and no gate checked it' : `nobody reviewed it, ${green}`;
-      return ask(`Merge "${task.title}" into ${site.teamRepo.baseBranch}? ${checked}; the diff is ${lastRun?.diffLines ?? 0} lines. Merging there is outside the team's limits.`, site.teamRepo.baseBranch);
+      const checked = this.standing(task, green, gates.length);
+      return ask(`Merge "${task.title}" into ${site.teamRepo.baseBranch}? ${checked[0]!.toUpperCase()}${checked.slice(1)}; the diff is ${lastRun?.diffLines ?? 0} lines. Merging there is outside the team's limits.`, site.teamRepo.baseBranch);
     }
     let failedGate: GateResult | undefined;
     const recheck = async () => {

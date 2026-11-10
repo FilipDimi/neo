@@ -40,11 +40,34 @@ describe('buildSystemPrompt', () => {
     expect(text).toContain('mcp__engine__request_tools');
   });
 
+  it('tells a reviewer that the run only reads, whatever tools the employee has in its own work', () => {
+    const all = { ...ada, capabilities: ['read_files', 'run_commands', 'write_code', 'web_search'] as const };
+    const text = buildSystemPrompt({ company: company(), team: led, employee: { ...all, capabilities: [...all.capabilities] }, teammates: [lead, ada], memoryIndex: '', mode: 'review' });
+    expect(text).toMatch(/You can: read files, web search\./);
+    expect(text).toMatch(/This run is a review, so it only reads/);
+    expect(text).toContain('mcp__engine__run_gate');
+    // Neither offered as a tool it has, nor as one it could ask for.
+    expect(text).not.toMatch(/You can(not)?: [^\n]*(run commands|write code)/);
+    expect(text).not.toContain('cannot reach the network');
+  });
+
+  it('tells an employee that runs commands that they cannot reach the network, and to build offline', () => {
+    const runs = buildSystemPrompt({ company: company(), team: led, employee: { ...ada, capabilities: ['read_files', 'run_commands'] }, teammates: [lead, ada], memoryIndex: '' });
+    expect(runs).toMatch(/Your commands cannot reach the network/);
+    expect(runs).toContain('--offline');
+    const reads = buildSystemPrompt({ company: company(), team: led, employee: { ...ada, capabilities: ['read_files'] }, teammates: [lead, ada], memoryIndex: '' });
+    expect(reads).not.toContain('cannot reach the network');
+  });
+
   it('tells the employee to assume and carry on, and to ask only when carrying on would be wrong', () => {
     const text = prompt();
     expect(text).toMatch(/make the reasonable assumption, say so in your report, and carry on/);
     expect(text).toMatch(/Ask once/);
     expect(text).toMatch(/An answer is only words/);
+  });
+
+  it('says to carry on when a skill cannot be loaded', () => {
+    expect(prompt()).toMatch(/If one cannot be loaded, carry on without it/);
   });
 
   it('lists the skills to load first, and says nothing about skills when there are none', () => {
@@ -105,6 +128,21 @@ describe('buildFirstTurn', () => {
   it('the integrate turn says what merged and what conflicts', () => {
     const turn = buildFirstTurn({ ...base, task: task(), mode: 'integrate', material: { mergeState: 'Merged: task/a. Conflicts in task/b: src/x.ts' } });
     expect(turn).toContain('Conflicts in task/b: src/x.ts');
+    expect(turn).toContain('mcp__engine__report_done');
+  });
+
+  it('the integrate turn of a task with no repository says where each part is, what is in it and what its author reported', () => {
+    const parts = [
+      { title: 'Half one', by: 'Ada', folder: '/data/folders/aaa', summary: 'Wrote the first half.', files: ['half-one.md', 'notes/sources.md'], more: 0 },
+      { title: 'Half two', by: 'Grace', folder: '/data/folders/bbb', summary: null, files: [], more: 0 },
+    ];
+    const turn = buildFirstTurn({ task: task({ title: 'Plan the launch' }), mode: 'integrate', team: team({ leadId: 'lead', repos: [] }), repo: null, teammates: [], remainingUsd: 0, material: { parts } });
+    expect(turn).not.toMatch(/merged their branches/);
+    expect(turn).toMatch(/"Half one", by Ada, in \/data\/folders\/aaa/);
+    expect(turn).toContain('half-one.md, notes/sources.md');
+    expect(turn).toContain('Wrote the first half.');
+    expect(turn).toMatch(/"Half two", by Grace, in \/data\/folders\/bbb/);
+    expect(turn).toMatch(/no files/);
     expect(turn).toContain('mcp__engine__report_done');
   });
 

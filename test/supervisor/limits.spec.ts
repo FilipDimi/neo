@@ -206,6 +206,18 @@ describe('daily caps', () => {
     expect(store.openDecisions(w.db)).toEqual([]);
   });
 
+  it("takes yesterday's cap card away when the day turns: its buttons are about a day that is over", async () => {
+    const { w, fake } = await spentWorld({ company: { dailyCapUsd: 1 } }, 1.2);
+    await w.sup.tick();
+    expect(store.openDecisions(w.db)).toMatchObject([{ kind: 'cap' }]);
+    w.clock.advance(24 * 3600);
+    await w.sup.tick();
+    expect(store.openDecisions(w.db)).toEqual([]);
+    expect(fake.workers).toHaveLength(2);
+    // Nothing was raised by it: the cap is what it was.
+    expect(store.getCompany(w.db)!.dailyCapUsd).toBe(1);
+  });
+
   it("says which team's cap it is when a team's daily cap stops its work", async () => {
     const { w, fake } = await spentWorld({ teams: [team({ selfManaged: true, dailyCapUsd: 0.5 })] }, 0.6);
     await w.sup.tick();

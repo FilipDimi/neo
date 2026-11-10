@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { plainEnv } from '../runtime/env.ts';
+import { plainEnv, withToolchains } from '../runtime/env.ts';
 import type { Gate, GateResult } from '../shared/types.ts';
 import { leadsTo } from './paths.ts';
 
@@ -75,7 +75,7 @@ export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promi
       cwd,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...(limits.env ?? plainEnv(process.env)), TMPDIR: tmp },
+      env: { ...(limits.env ?? withToolchains(plainEnv(process.env))), TMPDIR: tmp },
     });
     let output = '';
     let timedOut = false;

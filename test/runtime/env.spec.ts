@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { plainEnv, subscriptionEnv } from '../../src/runtime/env.ts';
+import { plainEnv, subscriptionEnv, withToolchains } from '../../src/runtime/env.ts';
 import { sessionEnv } from '../../src/supervisor/jobs.ts';
 
 describe('what a session or a gate inherits', () => {
@@ -8,6 +8,20 @@ describe('what a session or a gate inherits', () => {
     const secrets = { AWS_SECRET_ACCESS_KEY: 's', AWS_ACCESS_KEY_ID: 'a', GITHUB_TOKEN: 'g', GH_TOKEN: 'g', NPM_TOKEN: 'n', DATABASE_URL: 'postgres://u:p@h/db', OPENAI_API_KEY: 'o', SSH_AUTH_SOCK: '/tmp/agent.sock', MY_APP_SECRET: 'm', SENTRY_AUTH_TOKEN: 't', ANTHROPIC_API_KEY: 'k' };
     expect(plainEnv({ ...kept, ...secrets })).toEqual(kept);
     expect(subscriptionEnv({ ...kept, ...secrets }).env).toEqual(kept);
+  });
+
+  it('passes on where the proxy is, without the user name and password in its address', () => {
+    const env = plainEnv({ HTTPS_PROXY: 'http://filip:hunter2@proxy.example:8080', http_proxy: 'http://filip:hunter2@proxy.example:8080/', ALL_PROXY: 'socks5://u:hunter2@10.0.0.1:1080', HTTP_PROXY: 'filip:hunter2@proxy.example:8080', NO_PROXY: 'localhost,127.0.0.1' });
+    expect(env).toEqual({ HTTPS_PROXY: 'http://proxy.example:8080', http_proxy: 'http://proxy.example:8080/', ALL_PROXY: 'socks5://10.0.0.1:1080', HTTP_PROXY: 'proxy.example:8080', NO_PROXY: 'localhost,127.0.0.1' });
+    expect(JSON.stringify(env)).not.toContain('hunter2');
+  });
+
+  it('adds the usual toolchain folders to the path when they are on this machine, after what was already on it', () => {
+    const there = new Set(['/Users/x/.cargo/bin', '/opt/homebrew/bin', '/opt/homebrew/opt/rustup/bin']);
+    const exists = (dir: string) => there.has(dir);
+    expect(withToolchains({ PATH: '/usr/bin:/opt/homebrew/bin', HOME: '/Users/x' }, exists).PATH).toBe('/usr/bin:/opt/homebrew/bin:/Users/x/.cargo/bin:/opt/homebrew/opt/rustup/bin');
+    expect(withToolchains({ PATH: '/usr/bin', HOME: '/Users/x' }, () => false)).toEqual({ PATH: '/usr/bin', HOME: '/Users/x' });
+    expect(withToolchains({ HOME: '/Users/x' }, exists).PATH).toBe('/Users/x/.cargo/bin:/opt/homebrew/opt/rustup/bin:/opt/homebrew/bin');
   });
 
   it('gives a company on an API key that key and nothing else new', () => {

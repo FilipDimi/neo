@@ -59,6 +59,9 @@ type ToolReply = { ok: boolean; text: string };
 const DEFAULT_WORKER = new URL('../worker/worker.ts', import.meta.url).pathname;
 const TOOL_INPUT_LIMIT = 2048;
 
+/** The local day, as it is written into the key of a daily cap's card. */
+const dayKey = (at: Date): string => `${at.getFullYear()}-${at.getMonth() + 1}-${at.getDate()}`;
+
 export class Supervisor {
   readonly db: Db;
   readonly paths: Paths;
@@ -152,6 +155,7 @@ export class Supervisor {
     this.ticking = true;
     try {
       this.liftPauseIfDue();
+      this.closeCapCardsOfEarlierDays();
       this.expireLeases();
       this.checkInvariant();
       await this.startRuns();
@@ -343,7 +347,7 @@ export class Supervisor {
     const waiting = store.openRequests(this.db).map((request) => store.getTask(this.db, request.taskId)).filter((task): task is Task => task !== undefined && task.state !== 'blocked' && task.state !== 'done' && task.state !== 'failed');
     if (waiting.length === 0) return;
     const now = this.now();
-    const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    const day = dayKey(now);
     const asked = new Set(store.allDecisions(this.db).map((decision) => decision.subject?.key));
     const count = (tasks: Task[]) => `${tasks.length} task${tasks.length === 1 ? ' is' : 's are'} waiting`;
     const more = (capUsd: number) => Math.max(1, Math.ceil(capUsd / 4));
@@ -573,6 +577,16 @@ export class Supervisor {
   }
 
   /** A pause for the usage limit ends by itself at the reset time, if the limit gave one. */
+  /** A daily cap's card is about one day. When that day is over its buttons mean nothing: the spend has started again from zero. */
+  private closeCapCardsOfEarlierDays(): void {
+    const today = dayKey(this.now());
+    const stale = store.openDecisions(this.db).filter((card) => {
+      const key = card.kind === 'cap' && typeof card.subject?.key === 'string' ? card.subject.key.split(':') : [];
+      return key[0] === 'daily' && key[2] !== today;
+    });
+    if (stale.length > 0) this.change((tx, now) => stale.forEach((card) => decisions.close(tx, card, now)));
+  }
+
   private liftPauseIfDue(): void {
     const company = store.getCompany(this.db);
     if (company?.paused?.reason !== 'usage_limit' || !company.paused.until || this.now() < new Date(company.paused.until)) return;
@@ -715,6 +729,10 @@ export class Supervisor {
         if (!employee || !task || !team) return { ok: false, text: 'This run has lost its task.' };
         const offered = availableCapabilities(team).filter((capability) => !employee.capabilities.includes(capability));
         const wanted = [...new Set(capabilities)];
+        // A review only reads, whoever does it: those two tools are held back for the run, not missing from the employee.
+        if (run.mode === 'review' && wanted.every((capability) => capability === 'write_code' || capability === 'run_commands')) {
+          return { ok: false, text: 'Not in this run: a review only reads, whoever does it. To check something by running it, call mcp__engine__run_gate with the name of a gate. If the work cannot be judged without more, say so in your verdict.' };
+        }
         const has = wanted.filter((capability) => employee.capabilities.includes(capability));
         if (has.length === wanted.length) return { ok: false, text: `You already have ${decisions.capabilityNames(has)}. Use it.` };
         const missing = wanted.filter((capability) => !employee.capabilities.includes(capability));

@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { engineFiles, type Paths } from '../db/dataDir.ts';
-import { plainEnv } from '../runtime/env.ts';
+import { plainEnv, withToolchains } from '../runtime/env.ts';
 import type { Company, Employee, Message, Repo, Run, RunMode, RunRequest, Task, Team } from '../shared/types.ts';
 import type { EngineTool, WorkerJob } from '../worker/protocol.ts';
 import { sessionShape } from './blastRadius.ts';
@@ -80,10 +80,10 @@ export function buildJob(input: JobInput): WorkerJob {
     runId: run.id,
     mode: run.mode,
     cwd,
-    systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir) }),
+    systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode }),
     firstTurn: [first, messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
     model: employee.model,
-    env: { ...sessionEnv(company), BASH_DEFAULT_TIMEOUT_MS: bashTimeout, BASH_MAX_TIMEOUT_MS: bashTimeout },
+    env: { ...withToolchains(sessionEnv(company)), BASH_DEFAULT_TIMEOUT_MS: bashTimeout, BASH_MAX_TIMEOUT_MS: bashTimeout },
     tools: shape.tools,
     engineTools: ENGINE_TOOLS_FOR[run.mode],
     skills: input.mounted.skills,

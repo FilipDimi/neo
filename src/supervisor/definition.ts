@@ -8,7 +8,7 @@ import type { Capability, Company, Employee, GateResult, Repo, RunMode, Task, Te
 
 const usd = (amount: number): string => `$${amount.toFixed(2)}`;
 
-export function buildSystemPrompt(input: { company: Company; team: Team; employee: Employee; teammates: Employee[]; memoryIndex: string }): string {
+export function buildSystemPrompt(input: { company: Company; team: Team; employee: Employee; teammates: Employee[]; memoryIndex: string; /** What this run is for: a review and a chat only read. */ mode?: RunMode }): string {
   const { company, team, employee } = input;
   const leads = team.leadId === employee.id;
   const mergeTargets = [...new Set(team.repos.map((r) => r.mergeTarget).filter((t): t is string => t !== null))];
@@ -41,9 +41,9 @@ ${may(team.mayDelete, 'delete anything outside your task folder')}
 - Secrets are never readable: .env files, keys, tokens. Do not look for them and do not print them.`,
 
     `## Your tools
-${toolLines(employee, team)}`,
+${toolLines(employee, team, input.mode ?? 'work')}`,
 
-    employee.skills.length > 0 ? `## Skills\nBefore anything else, load these with the Skill tool: ${employee.skills.join(', ')}.` : '',
+    employee.skills.length > 0 ? `## Skills\nBefore anything else, load these with the Skill tool: ${employee.skills.join(', ')}. If one cannot be loaded, carry on without it and say so in your report: a skill is a help, not a condition.` : '',
 
     `## What you remember\n${input.memoryIndex.trim() || 'Nothing yet. This is your first run.'}`,
   ]
@@ -52,20 +52,27 @@ ${toolLines(employee, team)}`,
 }
 
 /** What this employee can and cannot do, said outright, so it never has to find out by being refused. */
-function toolLines(employee: Employee, team: Team): string {
+function toolLines(employee: Employee, team: Team, mode: RunMode): string {
   const offered = availableCapabilities(team);
-  const has = offered.filter((capability) => employee.capabilities.includes(capability));
-  const lacks = offered.filter((capability) => !employee.capabilities.includes(capability));
+  // A review and a chat only read, whatever the employee can do in its own work: those tools are neither there nor to be asked for.
+  const held = (capability: Capability) => (mode === 'review' || mode === 'route') && (capability === 'write_code' || capability === 'run_commands');
+  const has = offered.filter((capability) => employee.capabilities.includes(capability) && !held(capability));
+  const lacks = offered.filter((capability) => !employee.capabilities.includes(capability) && !held(capability));
   const names = (list: Capability[]) => list.map((capability) => CAPABILITIES[capability].label).join(', ');
   return [
     `You can: ${names(has) || 'nothing but talk to the engine'}.`,
+    mode === 'review' ? 'This run is a review, so it only reads: you cannot change files or run commands in it, and no request changes that. To check something by running it, call mcp__engine__run_gate with the name of a gate.' : '',
+    mode === 'route' ? 'This run is a conversation, so it only reads: the work itself is done by whoever you give it to.' : '',
+    has.includes('run_commands') ? 'Your commands cannot reach the network. Build and test with what is already on this machine, using the offline switch of the tool where it has one (cargo --offline, npm --offline). If something has to be downloaded first, say so in your report.' : '',
     lacks.length > 0 ? `You cannot: ${names(lacks)}. If the task cannot be done without one of those, call mcp__engine__request_tools once, naming it and saying why, instead of asking a question or working around it.` : '',
   ]
     .filter(Boolean)
     .join('\n');
 }
 
-export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; notes?: string; mergeState?: string };
+/** A finished sub-task of a task that has no repository: where its files are. */
+export type Part = { title: string; by: string; folder: string; summary: string | null; files: string[]; more: number };
+export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; notes?: string; mergeState?: string; parts?: Part[] };
 export type TeamView = { team: Team; lead: Employee | null; members: Employee[] };
 
 export function gateLines(results: GateResult[]): string {
@@ -143,6 +150,14 @@ ${material.gateResults && material.gateResults.length > 0 ? gateLines(material.g
 ${material.patch ? `\nThe patch${material.patch.endsWith('…') ? ' (cut short; read the files for the rest)' : ''}:\n\`\`\`diff\n${material.patch}\n\`\`\`\n` : ''}
 Check the work against the brief and the done-condition. Then call mcp__engine__submit_review with "approve", or "send_back" with notes the author can act on, or "escalate" if a person has to decide.`;
     case 'integrate':
+      // No repository: nothing was merged anywhere. Each part is still where its author left it.
+      if (material.parts)
+        return `${header}
+
+Every sub-task of this task is finished and approved. This team has no repository, so nothing was merged: each sub-task left its files in a folder of its own. Read them there.
+${material.parts.map((part) => `- "${part.title}", by ${part.by}, in ${part.folder}\n    Files: ${part.files.join(', ') || 'no files'}${part.more > 0 ? ` and ${part.more} more` : ''}\n    Reported: ${part.summary?.trim() || '(no summary)'}`).join('\n') || '(no finished sub-tasks)'}
+
+Put the whole together in your own folder, so that it meets the done-condition and stands on its own: someone who opens only your folder should find the finished thing. Then call mcp__engine__report_done with a short summary.`;
       return `${header}
 
 Every sub-task of this task is finished and approved. The engine merged their branches into this task's branch in your folder:

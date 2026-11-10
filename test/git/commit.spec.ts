@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { changedFiles, commitAll } from '../../src/git/commit.ts';
+import { changedFiles, commitAll, NestedRepoError } from '../../src/git/commit.ts';
 import { createFolder } from '../../src/git/folder.ts';
 import { gitIn, gitRepo, tempDir } from '../helpers.ts';
 
@@ -56,6 +56,30 @@ describe('the engine commits in a folder an employee has worked in', () => {
     fs.renameSync(path.join(other.dir, '.git'), path.join(other.dir, 'real-git'));
     fs.symlinkSync(path.join(other.dir, 'real-git'), path.join(other.dir, '.git'));
     await expect(commitAll(other.dir, AUTHOR, 'Work', 'task/thing-abc123')).rejects.toThrow(/git directory/);
+  });
+
+  it('will not commit around a folder that has a git repository of its own, and names it', async () => {
+    // Git would record such a folder as a pointer, or not at all: the files in it would never reach a review or a merge.
+    const { dir } = await folder();
+    fs.mkdirSync(path.join(dir, 'tools/gen'), { recursive: true });
+    gitIn(path.join(dir, 'tools/gen'), 'init', '-q');
+    fs.writeFileSync(path.join(dir, 'tools/gen/main.rs'), 'fn main() {}\n');
+    const refused = await commitAll(dir, AUTHOR, 'Work', 'task/thing-abc123').catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(NestedRepoError);
+    expect((refused as NestedRepoError).dirs).toEqual(['tools/gen']);
+    // Once it is an ordinary folder its files are committed like any others.
+    fs.rmSync(path.join(dir, 'tools/gen/.git'), { recursive: true, force: true });
+    expect(await commitAll(dir, AUTHOR, 'Work', 'task/thing-abc123')).toMatch(/^[0-9a-f]{40}$/);
+    expect(gitIn(dir, 'ls-tree', '-r', '--name-only', 'HEAD').split('\n')).toContain('tools/gen/main.rs');
+  });
+
+  it('does not mind a repository inside a folder that git ignores', async () => {
+    const { dir } = await folder();
+    fs.writeFileSync(path.join(dir, '.gitignore'), 'vendor/\n');
+    fs.mkdirSync(path.join(dir, 'vendor/lib'), { recursive: true });
+    gitIn(path.join(dir, 'vendor/lib'), 'init', '-q');
+    fs.writeFileSync(path.join(dir, 'work.md'), 'done\n');
+    expect(await commitAll(dir, AUTHOR, 'Work', 'task/thing-abc123')).toMatch(/^[0-9a-f]{40}$/);
   });
 
   it('commits on the task branch even when the folder was switched to another one', async () => {

@@ -69,6 +69,7 @@ const parentTask = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', 
 
 describe('a team with no repository', () => {
   it('finishes a task its lead split: there is nothing to merge, so integrating is only the lead putting it together', async () => {
+    let integrateTurn = '';
     const halves = proposal([
       { title: 'Half one', assigneeId: 'emp1', ownership: [] },
       { title: 'Half two', assigneeId: 'emp2', ownership: [] },
@@ -76,9 +77,15 @@ describe('a team with no repository', () => {
     const setup = ledWorld(
       async (s) => {
         if (s.mode === 'brief') await s.engine('propose_subtasks', halves);
-        if (s.mode === 'work') await s.engine('report_done', { summary: `${s.who} did a half.` });
+        if (s.mode === 'work') {
+          s.write(`half-${s.who}.md`, `from ${s.who}\n`);
+          await s.engine('report_done', { summary: `${s.who} did a half.` });
+        }
         if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '' });
-        if (s.mode === 'integrate') await s.engine('report_done', { summary: 'Put together.' });
+        if (s.mode === 'integrate') {
+          integrateTurn = s.input.prompt;
+          await s.engine('report_done', { summary: 'Put together.' });
+        }
       },
       { repo: false },
     );
@@ -87,6 +94,13 @@ describe('a team with no repository', () => {
     expect(store.openDecisions(setup.w.db).map((d) => [d.kind, d.text])).toEqual([]);
     expect(store.listTasks(setup.w.db, { parentId: parent.id }).map((c) => c.state)).toEqual(['done', 'done']);
     expect(store.runsOf(setup.w.db, parent.id).filter((run) => run.mode === 'integrate')).toHaveLength(1);
+    // Nothing was merged anywhere, so the lead is told where each half is and what is in it.
+    for (const child of store.listTasks(setup.w.db, { parentId: parent.id })) {
+      const who = child.assigneeId === 'emp1' ? 'Ada' : 'Grace';
+      expect(integrateTurn).toContain(`"${child.title}", by ${who}, in ${path.join(setup.w.dir, 'folders', child.id)}`);
+      expect(integrateTurn).toContain(`half-${who}.md`);
+      expect(integrateTurn).toContain(`${who} did a half.`);
+    }
     expect(store.getTask(setup.w.db, parent.id)!.state).toBe('done');
   });
 });
@@ -306,9 +320,35 @@ describe('work and review', () => {
     await drain(setup);
     // Given straight to the lead, the task is briefed: the lead judged it one small change and did it itself.
     expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId, run.outcome])).toEqual([['brief', 'lead', 'done'], ['review', 'emp1', 'done']]);
+    // The verdict stays with the review run, where the task's history shows it.
+    expect(store.runsOf(setup.w.db, task.id)[1]).toMatchObject({ reason: 'approved' });
     const [card] = store.openDecisions(setup.w.db);
     expect(card).toMatchObject({ kind: 'merge' });
-    expect(card!.text).toMatch(/\? reviewed, no gates;/);
+    expect(card!.text).toMatch(/\? Approved by Ada, no gates;/);
+  });
+
+  it('does not call work reviewed on the merge card when the reviewer did not approve it and it was accepted as it is', async () => {
+    for (const [verdict, said] of [['escalate', /\? Ada could not decide and it was accepted as it is, no gates;/], ['send_back', /\? Ada sent it back and it was accepted as it is, no gates;/]] as const) {
+      const setup = ledWorld(
+        async (s) => {
+          if (s.mode === 'review') return void (await s.engine('submit_review', { verdict, notes: 'Not sure about the wording.' }));
+          s.write('GREETING.md', 'hello\n');
+          await s.engine('report_done', { summary: 'Wrote it myself.' });
+        },
+        { mergeTarget: null, maxReviewRounds: 1 },
+      );
+      parentTask(setup.w, { assigneeId: 'lead', gates: [] });
+      await drain(setup);
+      const [asked] = store.openDecisions(setup.w.db);
+      expect(asked, verdict).toMatchObject({ kind: 'review' });
+      setup.w.sup.answer(asked!.id, { optionId: 'accept' });
+      await drain(setup);
+      const [card] = store.openDecisions(setup.w.db);
+      expect(card, verdict).toMatchObject({ kind: 'merge' });
+      expect(card!.text, verdict).toMatch(said);
+      expect(card!.text).not.toMatch(/approved|reviewed,/i);
+      await setup.w.sup.stop();
+    }
   });
 
   it('splits a task given straight to the lead when the lead finds more than one piece in it', async () => {
@@ -318,6 +358,52 @@ describe('work and review', () => {
     expect(store.listTasks(setup.w.db, { parentId: parent.id }).map((child) => [child.title, child.assigneeId, child.state])).toEqual([['Greeting', 'emp1', 'done'], ['Farewell', 'emp2', 'done']]);
     expect(store.runsOf(setup.w.db, parent.id).map((run) => [run.mode, run.employeeId])).toEqual([['brief', 'lead'], ['integrate', 'lead']]);
     expect(store.getTask(setup.w.db, parent.id)!.state).toBe('done');
+  });
+
+  it('tells a reviewer who asks for commands that a review only reads, and raises no card for it', async () => {
+    const seen: string[] = [];
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'review') {
+          seen.push((await s.engine('request_tools', { capabilities: ['run_commands'], reason: 'to run the tests' })).text);
+          return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        }
+        s.write('GREETING.md', 'hello\n');
+        await s.engine('report_done', { summary: 'Wrote it myself.' });
+      },
+      { mergeTarget: null },
+    );
+    parentTask(setup.w, { assigneeId: 'lead', gates: [] });
+    await drain(setup);
+    expect(seen[0]).toMatch(/a review only reads/);
+    expect(seen[0]).toContain('mcp__engine__run_gate');
+    expect(store.openDecisions(setup.w.db)).toMatchObject([{ kind: 'merge' }]);
+  });
+
+  it('sends work back, instead of losing it, when the employee left a git repository of its own inside the folder', async () => {
+    const turns: string[] = [];
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        turns.push(s.input.prompt);
+        if (!s.resumed) {
+          // What `cargo new tool` leaves: a folder with a repository of its own.
+          fs.mkdirSync(path.join(s.cwd, 'tool'));
+          gitIn(path.join(s.cwd, 'tool'), 'init', '-q');
+          s.write('tool/main.rs', 'fn main() {}\n');
+        } else fs.rmSync(path.join(s.cwd, 'tool/.git'), { recursive: true, force: true });
+        await s.engine('report_done', { summary: 'Made the tool.' });
+      },
+      { selfManaged: true },
+    );
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: [] });
+    await drain(setup);
+    expect(turns).toHaveLength(2);
+    expect(turns[1]).toMatch(/git repository of its own/);
+    expect(turns[1]).toContain('tool/.git');
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+    expect(fileAt(setup.repoPath!, 'team', 'tool/main.rs')).toBe('fn main() {}');
   });
 
   it("sends a lead's work back to the lead when the teammate does not pass it", async () => {
@@ -427,6 +513,8 @@ describe('integration and landing', () => {
     const [card] = store.openDecisions(setup.w.db);
     expect(card).toMatchObject({ kind: 'merge', taskId: parent.id });
     expect(card!.text).toContain('team');
+    // Each part was reviewed. How the lead put them together was not, and the card does not pretend it was.
+    expect(card!.text).toMatch(/\? Its 2 sub-tasks were each approved by a reviewer, nobody reviewed how they were put together, gates green \(greeting, farewell\);/);
     expect(card!.options.map((o) => o.label)).toEqual(['Merge', 'Keep the branch', 'Stop it']);
     expect(fileAt(setup.repoPath!, 'team', 'GREETING.md')).toBeNull();
     setup.w.sup.answer(card!.id, { optionId: 'merge' });
