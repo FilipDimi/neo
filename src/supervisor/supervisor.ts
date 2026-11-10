@@ -186,6 +186,38 @@ export class Supervisor {
     return message;
   }
 
+  /** Stops a task for good: it fails, with everything under it, and its runs end. */
+  cancelTask(taskId: string): void {
+    const task = store.getTask(this.db, taskId);
+    if (!task) throw new Error(`no task ${taskId}`);
+    this.change((tx, now) => decisions.failTree(tx, this.db, now, task));
+    for (const run of store.liveRuns(this.db)) if (store.getTask(this.db, run.taskId)?.state === 'failed') this.endRunNow(run, 'stopped', 'task_stopped');
+    if (task.parentId) this.flow.checkParent(task.parentId);
+  }
+
+  /** Reprioritises a task at any time; reassigns one that has not started. */
+  editTask(taskId: string, patch: { priority?: Task['priority']; assigneeId?: string | null }): Task {
+    const task = store.getTask(this.db, taskId);
+    const team = task && store.getTeam(this.db, task.teamId);
+    if (!task || !team) throw new Error(`no task ${taskId}`);
+    const reassigned = patch.assigneeId !== undefined && patch.assigneeId !== task.assigneeId;
+    if (reassigned && task.state !== 'queued') throw new Error('only a task that has not started can be reassigned');
+    if (reassigned && patch.assigneeId) {
+      const assignee = store.getEmployee(this.db, patch.assigneeId);
+      if (!assignee || assignee.fired || assignee.teamId !== team.id) throw new Error(`${patch.assigneeId} is not on the team ${team.name}`);
+    }
+    this.change((tx, now) => {
+      const next: Task = { ...task, priority: patch.priority ?? task.priority, assigneeId: patch.assigneeId === undefined ? task.assigneeId : patch.assigneeId, updatedAt: now.toISOString() };
+      tx.emit({ kind: 'task_changed', task: next, cause: 'edited' });
+      if (!reassigned) return;
+      for (const request of store.requestsOf(this.db, task.id)) tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: task.id });
+      const who = requestFor(next, team);
+      if ('problem' in who) decisions.raise(tx, this.db, now, { taskId: task.id, kind: 'staffing', text: decisions.staffingText(next, who.problem), options: decisions.optionsFor('staffing') });
+      else tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, ...who, reason: 'new' }, now) });
+    });
+    return store.getTask(this.db, taskId)!;
+  }
+
   /** Every skill installed on this machine that an employee could be given. Scanned at most every half minute. */
   skills(): SkillRef[] {
     if (!this.skillCache || Date.now() - this.skillCache.at > 30_000) this.skillCache = { at: Date.now(), refs: listSkills(this.skillDirs) };

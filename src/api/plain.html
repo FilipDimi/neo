@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="vs-token" content="">
+<title>Virtual startup</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0B0B0C; color: #F4F4F6; font: 13px/1.45 Inter, system-ui, sans-serif; }
+  header { display: flex; gap: 16px; align-items: baseline; padding: 16px 24px; border-bottom: 1px solid #222226; }
+  h1 { font-size: 17px; margin: 0; }
+  .muted { color: #9A9AA2; }
+  main { padding: 16px 24px; display: grid; gap: 16px; }
+  .deck { display: flex; gap: 12px; flex-wrap: wrap; }
+  .decision { width: 360px; box-sizing: border-box; padding: 12px 14px; border-radius: 14px; background: #1A1500; border: 1px solid #6B5A1F; }
+  .board { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+  .col h2 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #9A9AA2; margin: 0 0 8px; }
+  .card { padding: 10px 12px; border-radius: 12px; background: #151517; border: 1px solid #2A2A2E; border-left: 3px solid #3A3A40; margin-bottom: 8px; overflow-wrap: anywhere; }
+  .card.working { border-left-color: #F5B700; } .card.review { border-left-color: #76D3CC; } .card.waiting_on_you, .card.over_budget { border-left-color: #F2C76B; }
+  .card.silent { border-left-color: #E0625A; background: #1A0F0E; } .card.done { border-left-color: #7CF0BF; }
+  button, input, textarea { font: inherit; }
+  button { padding: 7px 12px; border-radius: 999px; border: 1px solid #2A2A2E; background: #1C1C1E; color: #F4F4F6; cursor: pointer; }
+  button.primary { background: #F2C76B; color: #1A1200; border: 0; font-weight: 700; }
+  input, textarea { padding: 9px 12px; border-radius: 10px; border: 1px solid #2A2A2E; background: #151517; color: #F4F4F6; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .error { color: #E0625A; }
+</style>
+</head>
+<body>
+<header><h1 id="name">Virtual startup</h1><span class="muted" id="status"></span></header>
+<main>
+  <div id="setup" hidden>
+    <p>No company yet. Name it to begin; you can add teams and people afterwards.</p>
+    <form id="setup-form"><label>Company name <input name="name" required></label><label>Chief of staff's name <input name="chiefName" placeholder="Chief of staff"></label><button class="primary">Create the company</button></form>
+  </div>
+  <div class="deck" id="deck"></div>
+  <div class="board" id="board"></div>
+  <form id="chat"><label for="chat-text" class="muted">Tell the chief of staff what to do next</label><input id="chat-text" name="text" size="60" required><button>Send</button><span id="reply" class="muted"></span></form>
+  <p class="error" id="error" role="alert"></p>
+</main>
+<script>
+const token = document.querySelector('meta[name="vs-token"]').content;
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...children) => { const node = Object.assign(document.createElement(tag), props); node.append(...children); return node; };
+async function api(method, path, body) {
+  const response = await fetch(path, { method, headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const json = await response.json();
+  if (!response.ok) throw new Error(json.error || response.statusText);
+  return json;
+}
+const fail = (error) => { $('error').textContent = error.message; };
+const COLUMNS = [['queued', 'Queued'], ['briefing', 'Briefing'], ['running', 'Running'], ['review', 'Review'], ['blocked', 'Blocked'], ['done', 'Done today']];
+let lastEventId = 0;
+
+async function refresh() {
+  const s = await api('GET', '/api/snapshot');
+  lastEventId = s.lastEventId;
+  $('setup').hidden = Boolean(s.company);
+  for (const id of ['deck', 'board', 'chat']) $(id).hidden = !s.company;
+  if (!s.company) return;
+  const live = s.runs.filter((run) => run.outcome === 'running');
+  $('name').textContent = s.company.name;
+  $('status').textContent = `${live.length} of ${s.company.concurrency} seats busy · $${s.spend.company.toFixed(2)} of $${s.company.dailyCapUsd} today${s.company.paused ? ` · paused (${s.company.paused.reason})` : ''}`;
+  const people = Object.fromEntries(s.employees.map((e) => [e.id, e.name]));
+  $('deck').replaceChildren(...s.decisions.map((d) => el('div', { className: 'decision' }, el('div', { className: 'muted', textContent: `Decision · ${d.kind}` }), el('p', { textContent: d.text }),
+    ...(d.freeText ? [el('input', { id: `text-${d.id}`, placeholder: 'Your answer or notes', ariaLabel: 'Your answer or notes' })] : []),
+    el('div', {}, ...d.options.map((option, index) => el('button', { className: index === 0 ? 'primary' : '', textContent: option.label, onclick: () => api('POST', `/api/decisions/${d.id}/answer`, { optionId: option.id, text: document.getElementById(`text-${d.id}`)?.value || undefined }).then(refresh, fail) }))))));
+  $('board').replaceChildren(...COLUMNS.map(([state, title]) => {
+    const tasks = s.tasks.filter((t) => t.kind === 'work' && (state === 'done' ? t.state === 'done' || t.state === 'failed' : t.state === state));
+    return el('div', { className: 'col' }, el('h2', { textContent: `${title} ${tasks.length}` }), ...tasks.map((t) => {
+      const run = live.find((r) => r.taskId === t.id);
+      const spent = s.runs.filter((r) => r.taskId === t.id).reduce((sum, r) => sum + r.costUsd, 0);
+      const look = t.state === 'failed' ? 'silent' : t.state === 'done' ? 'done' : t.state === 'blocked' ? 'waiting_on_you' : t.state === 'review' ? 'review' : run ? 'working' : '';
+      return el('div', { className: `card ${look}` }, el('strong', { textContent: t.title }), el('div', { className: 'muted', textContent: [people[t.assigneeId] ?? 'unassigned', `P${t.priority}`, `$${spent.toFixed(2)} of $${t.capUsd}`, t.state === 'failed' ? 'failed' : ''].filter(Boolean).join(' · ') }), el('div', { className: 'muted', textContent: run?.activity ?? '' }));
+    }));
+  }));
+  const reply = [...s.messages].reverse().find((m) => m.toId === 'user');
+  $('reply').textContent = reply ? `${people[reply.fromId] ?? 'Chief of staff'}: ${reply.text}` : '';
+}
+
+$('setup-form').onsubmit = (event) => { event.preventDefault(); const form = new FormData(event.target); api('POST', '/api/setup', { name: form.get('name'), chiefName: form.get('chiefName') || undefined }).then(refresh, fail); };
+$('chat').onsubmit = (event) => { event.preventDefault(); const input = $('chat-text'); api('POST', '/api/chat', { text: input.value }).then(() => { input.value = ''; return refresh(); }, fail); };
+
+let pending;
+function listen() {
+  const socket = new WebSocket(`ws://${location.host}/api/events`);
+  socket.onopen = () => socket.send(JSON.stringify({ token, since: lastEventId }));
+  socket.onmessage = () => { clearTimeout(pending); pending = setTimeout(() => refresh().catch(fail), 150); };
+  socket.onclose = () => setTimeout(() => refresh().then(listen, () => setTimeout(listen, 2000)), 1000);
+}
+refresh().then(listen, fail);
+</script>
+</body>
+</html>
