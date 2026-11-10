@@ -2,7 +2,7 @@
 
 Filip was away and asked for reviews to be run and every finding fixed, so that the company could be used that evening without trouble. This is the record of that afternoon: one more independent review of the whole branch (fifteen findings, all fixed), a third review of the fixes themselves, and three defects that no review found but live runs on a throwaway repository did.
 
-Every finding was first reproduced as a failing test, then fixed. `npm test`: 589 passed, 3 skipped (the live ones). `npx tsc --noEmit`: clean.
+Every finding was first reproduced as a failing test, then fixed. `npm test`: 598 passed, 3 skipped (the live ones). `npx tsc --noEmit`: clean.
 
 ## The fifteen findings of the second review
 
@@ -38,13 +38,35 @@ After those fixes the same open-ended task ran from start to finish with nobody 
 
 Also run live: `VS_LIVE=1 npx vitest run --project engine test/e2e/one-task.spec.ts` (3 passed), and `npm run smoke` with `VS_LIVE_CONCURRENCY=1` (all eight checks ok).
 
-## The third review
+## The third review: the fixes themselves
 
-Placeholder: filled in below once it reported.
+One reviewer, in a copy of the code of its own, read the first five fix commits for ordinary correctness and confirmed what it found with tests of its own. Nine findings, all fixed the same afternoon, each with a test that failed first.
+
+| # | Finding | What changed |
+|---|---|---|
+| 1 | On the card raised when work could not be committed (a repository left inside the folder, sent back too often), "Accept as it is" marked the task merged without the work and removed the folder that held it. | That card has no Accept button: Send back or Stop, and it says why. |
+| 2 | A team that starts from one branch and lands on another got an ownership card naming other people's files after a landing conflict. | A file counts as the task's own change only if it differs both from where the task started and from the branch it lands on. |
+| 3 | A review's verdict, kept as the reason of its run, showed up as "failed: approved" on the board when the task was stopped later; and it was lost if the engine stopped while the reviewer's session was closing. | The board ignores the reason of a run that ended well. A clean stop writes down every run whose end was already decided (a verdict given, a question asked, a call refused) as it would have ended. |
+| 4 | "I looked: carry on", on the card for a write whose path moved, resumed the employee with "the call you were refused stays refused". | It resumes with "Carry on with the task where you left off." |
+| 5 | The one send-back for a sub-task's failing gate was not counted when the author asked a question, crashed or was restarted in between, so it was sent back twice. | The comparison is with the last run whose gates were run. |
+| 6 | A file outside the ownership that the user had accepted on a sub-task was asked about again when the parts were put together. | What was accepted on a task or one of its parts stays accepted. |
+| 7 | A reviewer asking for commands together with another tool was told it already had them. | Any request for a held-back tool in a review is answered in words. |
+| 8 | A proxy password with an `@` in it was only partly removed. | Everything up to the last `@` before the first slash goes. |
+| 9 | A leftover "running" file whose process number had gone to another process kept an old release for ever. | The file records when its engine started, and that has to match. |
+
+Also from its notes: the page now compares the screen it is with the engine's on the very first answer, not only on a reconnect.
+
+It checked and found correct: the split and ownership rules, the second look at a write, the charge at stop, release retention, the reload banner, the merge card wording, the reviewer's prompt, integration without a repository, the cap cards, nested repositories, the toolchain path, sub-task gates, and that no engine git operation trips the git-settings check. It ran sixteen ordinary commands (git, node, npm, python, swift, cc, cargo, a localhost server and others) under the old and the new gate sandbox and they ended the same way.
+
+`npm test` after these: 598 passed, 3 skipped.
 
 ## What is not covered
 
 - The part of the third review that was to try to get past the sandbox and the path rules was stopped by the model's own safety filter before it reported anything. It was not done. The second review did test those, and its findings are items 1, 2, 6, 7 and 8 above.
 - No lead on Opus has yet split a real task in the Receipts repository under these rules. The first one tonight is worth watching.
 - A self-managed team has no lead: its questions go straight to the user and its work is reviewed only when the task names a reviewer.
+- The question-to-lead change and the fixes of the third review were made after that review read the code. They have tests, and the question path was run live once; no second reader has seen them.
+- A real `xcodebuild` build or test has not been run under the gate sandbox as it now is (it refuses the preferences service, Apple Events and launching applications). `xcodebuild -version` and `simctl` behave the same. This matters when the iOS team is added, not for the Rust team.
+- If something other than the engine changes a task folder's `.git/config`, the engine refuses to run git there and says so on a card, and Retry trips on it again: there is no button that tells the engine the change is fine. No engine operation and no employee tool can make that change, so it would take a person editing the file.
+- An engine killed outright (not stopped) still forgets a verdict that was given in its last second, and the cost of a turn that was in flight.
 - If the engine restarts while a lead is reading a member's question, the lead still answers, but a card raised from it afterwards has the lead's words and not the member's original ones.

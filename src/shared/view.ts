@@ -83,7 +83,9 @@ export function cardLine(task: Task, runs: Run[], decisions: Decision[], now: Da
     case 'done':
       return task.mergedInto ? `merged ${task.mergedInto}` : '';
     case 'failed': {
-      const reason = runs.at(-1)?.reason;
+      // Why the last run ended badly. A run that ended well did not fail the task: its reason is something else (a reviewer's verdict).
+      const last = runs.at(-1);
+      const reason = last && last.outcome !== 'done' ? last.reason : null;
       return !reason || reason === 'task_stopped' || reason === 'stopped_by_user' ? 'stopped' : `failed: ${reason}`;
     }
     default:

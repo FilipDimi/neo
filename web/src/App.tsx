@@ -42,7 +42,8 @@ export function App({ socket = liveSocket, retryMs = 2000 }: { socket?: () => So
       try {
         const first = await snapshot();
         if (gone) return;
-        if (first.version !== EVENT_VERSION) return setWaiting('reload');
+        // An engine that speaks a newer version, or serves a newer screen than this page is, needs a fresh page.
+        if (first.version !== EVENT_VERSION || (pageScreen() && first.screen && first.screen !== pageScreen())) return setWaiting('reload');
         const made = createStore(fromSnapshot(first));
         live = connect({ store: made, token: pageToken(), snapshot, socket, retryMs, screen: pageScreen() });
         setStore(made);

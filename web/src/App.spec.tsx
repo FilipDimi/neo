@@ -114,6 +114,19 @@ describe('App', () => {
     expect(await screen.findByText('lit screen = working')).toBeTruthy();
   });
 
+  it('asks for a reload when the first answer comes from an engine that serves a newer screen than this page', async () => {
+    const meta = document.createElement('meta');
+    meta.name = 'vs-screen';
+    meta.content = 'aaaaaaaaaaaa';
+    document.head.append(meta);
+    try {
+      start(fakeApi((_method, path) => (path === '/api/snapshot' ? { ...storySnapshot, screen: 'bbbbbbbbbbbb' } : {})));
+      expect(await screen.findByText(/The engine was updated/)).toBeTruthy();
+    } finally {
+      meta.remove();
+    }
+  });
+
   it('asks for a reload when the engine speaks a newer version', async () => {
     start(fakeApi((_method, path) => (path === '/api/snapshot' ? { ...storySnapshot, version: storySnapshot.version + 1 } : {})));
     expect(await screen.findByText(/The engine was updated/)).toBeTruthy();

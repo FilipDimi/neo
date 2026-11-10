@@ -426,7 +426,11 @@ describe('Supervisor', () => {
       const [card] = store.openDecisions(w.db);
       expect(card).toMatchObject({ kind: 'tool', taskId: task.id });
       expect(card!.text).toMatch(/Ada wrote .*a\/x\.txt.* changed while it was being written.* may have landed .*vs-elsewhere-/);
-      expect(card!.options.map((option) => option.effect)).toEqual(['stop_task', 'keep_refused']);
+      expect(card!.options.map((option) => option.label)).toEqual(['Stop it', 'I looked: carry on']);
+      // Carrying on says so. No call was refused: the write was done, and the user has looked at where it went.
+      w.sup.answer(card!.id, { optionId: 'carry' });
+      await w.sup.tick();
+      expect(fake.workers[1]!.job.firstTurn).toBe('Carry on with the task where you left off.');
     } finally {
       fs.rmSync(elsewhere, { recursive: true, force: true });
     }
@@ -444,6 +448,47 @@ describe('Supervisor', () => {
     await w.sup.settle();
     expect(store.liveRuns(w.db)).toHaveLength(1);
     expect(store.openDecisions(w.db)).toEqual([]);
+  });
+
+  /** A task Ada wrote and Grace now reviews; returns Grace's review session. */
+  async function underReview(fake: ReturnType<typeof scripted>, w: World) {
+    const task = newTask(w, { reviewerId: 'emp2' });
+    await w.sup.tick();
+    fake.workers[0]!.say(started);
+    fake.workers[0]!.say({ t: 'tool', askId: 'a1', name: 'report_done', input: { summary: 'Done.' } });
+    fake.workers[0]!.say(exit('done'));
+    await w.sup.settle();
+    await w.sup.tick();
+    const reviewer = fake.workers[1]!;
+    expect(reviewer.job.mode).toBe('review');
+    reviewer.say(started);
+    return { task, reviewer };
+  }
+
+  it('tells a reviewer that asks for commands together with another tool that a review only reads', async () => {
+    const fake = scripted();
+    const all = ['read_files', 'run_commands', 'write_code', 'web_search'] as const;
+    const w = track(world(fake.spawn, { employees: [employee({ capabilities: [...all] }), employee({ id: 'emp2', name: 'Grace', capabilities: ['read_files', 'run_commands'] })] }));
+    const { task, reviewer } = await underReview(fake, w);
+    reviewer.say({ t: 'tool', askId: 'r1', name: 'request_tools', input: { capabilities: ['run_commands', 'web_search'], reason: 'to run the tests and look something up' } });
+    await new Promise((resolve) => setImmediate(resolve));
+    const reply = reviewer.received.find((message) => message.t === 'tool_result');
+    expect(reply).toMatchObject({ ok: false, text: expect.stringMatching(/a review only reads/) });
+    expect(reply).not.toMatchObject({ text: expect.stringMatching(/already have/) });
+    expect(store.openDecisions(w.db).filter((card) => card.taskId === task.id)).toEqual([]);
+    expect(store.liveRuns(w.db)).toHaveLength(1);
+  });
+
+  it('keeps a verdict that was given when the engine stops before the reviewer has gone', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn, { employees: [employee(), employee({ id: 'emp2', name: 'Grace' })] }));
+    const { task, reviewer } = await underReview(fake, w);
+    reviewer.say({ t: 'tool', askId: 'r1', name: 'submit_review', input: { verdict: 'approve', notes: '' } });
+    await new Promise((resolve) => setImmediate(resolve));
+    await w.sup.stop();
+    // The run was over in all but name. It is written down as it would have ended, not left for the next start to call lost.
+    expect(store.runsOf(w.db, task.id).at(-1)).toMatchObject({ mode: 'review', outcome: 'done', reason: 'approved' });
+    expect(store.liveRuns(w.db)).toEqual([]);
   });
 
   it('gives an employee a tool it lacks from a card whose button really does it', async () => {

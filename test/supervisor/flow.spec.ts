@@ -1,13 +1,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readEvents } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import type { Gate } from '../../src/shared/types.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
 import { staged, type Scene } from '../fixtures/staged.ts';
 import { employee, fileAt, gitIn, gitRepo, refOf, repo, team, world, type World } from '../helpers.ts';
+
+// Every test here runs real git and real gates, several times over. On a busy machine five seconds is not always enough.
+vi.setConfig({ testTimeout: 20_000 });
 
 let open: World | undefined;
 afterEach(async () => {
@@ -28,12 +31,12 @@ const GATES: Gate[] = [
 type Setup = { w: World; fixture: InProcess; repoPath: string | null };
 
 /** A led team (Priya leads Ada and Grace), with a repository unless told otherwise. */
-function ledWorld(play: (scene: Scene) => Promise<void> | void, over: { repo?: boolean; mergeTarget?: string | null; maxReviewRounds?: number; selfManaged?: boolean } = {}): Setup {
+function ledWorld(play: (scene: Scene) => Promise<void> | void, over: { repo?: boolean; repoPath?: string; baseBranch?: string; mergeTarget?: string | null; maxReviewRounds?: number; selfManaged?: boolean } = {}): Setup {
   const fixture = inProcess(staged(play));
-  const repoPath = over.repo === false ? null : gitRepo();
+  const repoPath = over.repo === false ? null : (over.repoPath ?? gitRepo());
   const w = (open = world(fixture.spawn, {
     repos: repoPath ? [repo({ path: repoPath, gates: GATES })] : [],
-    teams: [team({ leadId: over.selfManaged ? null : 'lead', selfManaged: over.selfManaged ?? false, maxReviewRounds: over.maxReviewRounds ?? 3, repos: repoPath ? [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: over.mergeTarget === undefined ? 'team' : over.mergeTarget }] : [] })],
+    teams: [team({ leadId: over.selfManaged ? null : 'lead', selfManaged: over.selfManaged ?? false, maxReviewRounds: over.maxReviewRounds ?? 3, repos: repoPath ? [{ repoId: 'repo1', baseBranch: over.baseBranch ?? 'team', mergeTarget: over.mergeTarget === undefined ? 'team' : over.mergeTarget }] : [] })],
     employees: people,
   }));
   return { w, fixture, repoPath };
@@ -314,6 +317,34 @@ describe('work and review', () => {
     expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
   });
 
+  it('counts the send-back for a gate even when the author did something else in between', async () => {
+    const halves = proposal([
+      { title: 'Greeting', assigneeId: 'emp1', ownership: ['GREETING.md'], gates: ['both'] },
+      { title: 'Farewell', assigneeId: 'emp2', ownership: ['FAREWELL.md'], gates: ['both'] },
+    ]);
+    const resumes = new Map<string, number>();
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'brief') return void (await s.engine('propose_subtasks', halves));
+      // Asked by Ada, the lead answers; everything else it reviews, it approves.
+      if (s.mode === 'review') return void (await s.engine('submit_review', s.input.prompt.includes('has stopped with a question') ? { verdict: 'send_back', notes: 'Report it done and say so.' } : { verdict: 'approve', notes: '' }));
+      if (s.mode === 'work' && s.resumed) {
+        const turn = (resumes.get(s.who) ?? 0) + 1;
+        resumes.set(s.who, turn);
+        // Sent back for the gate, Ada asks instead of reporting. Only then does she report again.
+        if (s.who === 'Ada' && turn === 1) return void (await s.engine('request_decision', { question: 'The gate needs the other half. What now?', options: [] }));
+        return void (await s.engine('report_done', { summary: 'Mine is there; the gate needs the other half.' }));
+      }
+      return straight(s);
+    });
+    const parent = parentTask(setup.w, { gates: ['both'] });
+    await drain(setup);
+    const ada = store.listTasks(setup.w.db, { parentId: parent.id }).find((child) => child.title === 'Greeting')!;
+    // One send-back for the gate, a question in between, and at the second failure it is the lead's to judge.
+    expect(store.runsOf(setup.w.db, ada.id).map((run) => `${run.mode}${run.reason ? ` (${run.reason})` : ''}`)).toEqual(['work', 'work (question)', 'review (answered)', 'work', 'review (approved)']);
+    expect(store.getTask(setup.w.db, ada.id)).toMatchObject({ state: 'done', reviewRounds: 1 });
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+  });
+
   it('keeps sending a task that is not a sub-task back for a failing gate: there the gate is the user\'s, and it holds', async () => {
     const setup = ledWorld(async (s) => {
       if (s.mode === 'work') await s.engine('report_done', { summary: 'It is fine, really.' });
@@ -456,6 +487,34 @@ describe('work and review', () => {
     expect(store.openDecisions(setup.w.db)).toEqual([]);
     expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
     expect(fileAt(setup.repoPath!, 'team', 'tool/main.rs')).toBe('fn main() {}');
+  });
+
+  it('never offers to accept work that could not be committed: accepting it would land the branch without it', async () => {
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        // The repository inside the folder keeps coming back, whatever the employee is told.
+        if (!fs.existsSync(path.join(s.cwd, 'tool'))) {
+          fs.mkdirSync(path.join(s.cwd, 'tool'));
+          gitIn(path.join(s.cwd, 'tool'), 'init', '-q');
+        }
+        s.write('tool/main.rs', 'fn main() {}\n');
+        s.write('GREETING.md', 'hello\n');
+        await s.engine('report_done', { summary: 'Made the tool.' });
+      },
+      { selfManaged: true, maxReviewRounds: 1 },
+    );
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: [] });
+    await drain(setup);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'review', taskId: task.id });
+    expect(card!.options.map((option) => option.label)).toEqual(['Send back', 'Stop it']);
+    expect(card!.text).toMatch(/cannot be accepted as it is/);
+    expect(() => setup.w.sup.answer(card!.id, { optionId: 'accept' })).toThrow();
+    // The work is still where its author left it, and nothing has landed.
+    expect(fs.existsSync(path.join(setup.w.dir, 'folders', task.id, 'GREETING.md'))).toBe(true);
+    expect(store.getTask(setup.w.db, task.id)!.state).toBe('blocked');
+    expect(fileAt(setup.repoPath!, 'team', 'GREETING.md')).toBeNull();
   });
 
   it("sends a lead's work back to the lead when the teammate does not pass it", async () => {
@@ -664,6 +723,76 @@ describe('integration and landing', () => {
     await drain(setup);
     expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
     expect(fileAt(setup.repoPath!, 'team', 'README.md')).toBe('rewritten while integrating');
+  });
+
+  it('does not ask twice about a file outside the ownership that the user has already accepted', async () => {
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'work' && s.who === 'Ada') s.write('README.md', 'Ada also touched this\n');
+      return straight(s);
+    });
+    const parent = parentTask(setup.w, { ownership: ['GREETING.md', 'FAREWELL.md'] });
+    await drain(setup);
+    const [first] = store.openDecisions(setup.w.db);
+    expect(first).toMatchObject({ kind: 'ownership' });
+    expect(first!.taskId).not.toBe(parent.id);
+    expect(first!.text).toContain('README.md');
+    setup.w.sup.answer(first!.id, { optionId: 'accept' });
+    await drain(setup);
+    // Accepted once, on the sub-task: when the parts are put together it is not asked about again.
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+    expect(fileAt(setup.repoPath!, 'team', 'README.md')).toBe('Ada also touched this');
+  });
+
+  it('holds a task to its own changes when its team starts from one branch and lands on another', async () => {
+    const repoPath = gitRepo(['team']);
+    // Other work is already on the landing branch: another file, and a line in the file this task will write.
+    gitIn(repoPath, 'checkout', '-q', 'team');
+    fs.writeFileSync(path.join(repoPath, 'OTHER.md'), 'other work\n');
+    fs.writeFileSync(path.join(repoPath, 'GREETING.md'), 'theirs\n');
+    gitIn(repoPath, 'add', '-A');
+    gitIn(repoPath, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-q', '-m', 'other work lands');
+    gitIn(repoPath, 'checkout', '-q', 'main');
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'integrate') {
+          s.write('GREETING.md', 'theirs and mine\n');
+          return void (await s.engine('report_done', { summary: 'Resolved.' }));
+        }
+        s.write('GREETING.md', 'mine\n');
+        await s.engine('report_done', { summary: 'Wrote it.' });
+      },
+      { selfManaged: true, baseBranch: 'main', mergeTarget: 'team', repoPath },
+    );
+    const task = parentTask(setup.w, { assigneeId: 'emp1', ownership: ['GREETING.md'], gates: [] });
+    await drain(setup);
+    // OTHER.md came in with the landing branch. It is not this task's change, and nobody is asked about it.
+    expect(store.openDecisions(setup.w.db).map((card) => [card.kind, card.text])).toEqual([]);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+    expect(fileAt(repoPath, 'team', 'GREETING.md')).toBe('theirs and mine');
+    expect(fileAt(repoPath, 'team', 'OTHER.md')).toBe('other work');
+  });
+
+  it('still catches a file of its own that such a task changed outside what it owns', async () => {
+    const repoPath = gitRepo(['team']);
+    gitIn(repoPath, 'checkout', '-q', 'team');
+    fs.writeFileSync(path.join(repoPath, 'OTHER.md'), 'other work\n');
+    gitIn(repoPath, 'add', '-A');
+    gitIn(repoPath, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-q', '-m', 'other work lands');
+    gitIn(repoPath, 'checkout', '-q', 'main');
+    const setup = ledWorld(
+      async (s) => {
+        s.write('GREETING.md', 'mine\n');
+        s.write('STRAY.md', 'not mine to write\n');
+        await s.engine('report_done', { summary: 'Wrote it.' });
+      },
+      { selfManaged: true, baseBranch: 'main', mergeTarget: 'team', repoPath },
+    );
+    const task = parentTask(setup.w, { assigneeId: 'emp1', ownership: ['GREETING.md'], gates: [] });
+    await drain(setup);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'ownership', taskId: task.id });
+    expect(card!.text).toMatch(/: STRAY\.md\.$/);
   });
 
   it('raises a merge card when the team has no merge target; Merge lands it', async () => {

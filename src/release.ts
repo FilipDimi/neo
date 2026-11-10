@@ -3,20 +3,36 @@
  * (see scripts/release.ts). An engine started from one leaves a file named after its process
  * there, so that making a newer release never removes the code a running company is using.
  */
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const MARKER = 'RELEASE.json';
 const RUNNING = '.running';
 
-function alive(pid: number): boolean {
+/** When a process was started, as `ps` prints it; null when there is none with that number. */
+function startedAt(pid: number): string | null {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (failure) {
-    // Not ours to signal, but there: that is a live process too.
-    return (failure as NodeJS.ErrnoException).code === 'EPERM';
+    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+  } catch {
+    return null;
   }
+}
+
+/**
+ * True while the engine that left this file is still running. A number alone proves nothing: after a restart of the
+ * machine another process may have it. The file says when its engine started, and that has to match.
+ */
+function alive(release: string, pid: number): boolean {
+  const started = startedAt(pid);
+  if (started === null) return false;
+  let recorded = '';
+  try {
+    recorded = fs.readFileSync(path.join(release, RUNNING, String(pid)), 'utf8').trim();
+  } catch {
+    return false;
+  }
+  return recorded === '' || recorded === started;
 }
 
 function engines(release: string): number[] {
@@ -35,13 +51,13 @@ export function markRunning(root: string, pid: number = process.pid): void {
   if (!fs.existsSync(path.join(root, MARKER))) return;
   const dir = path.join(root, RUNNING);
   fs.mkdirSync(dir, { recursive: true });
-  for (const other of engines(root)) if (!alive(other)) fs.rmSync(path.join(dir, String(other)), { force: true });
-  fs.writeFileSync(path.join(dir, String(pid)), '');
+  for (const other of engines(root)) if (!alive(root, other)) fs.rmSync(path.join(dir, String(other)), { force: true });
+  fs.writeFileSync(path.join(dir, String(pid)), startedAt(pid) ?? '');
 }
 
 /** True while an engine that was started from this release is still running. */
 export function inUse(release: string): boolean {
-  return engines(release).some(alive);
+  return engines(release).some((pid) => alive(release, pid));
 }
 
 /** The finished releases that may be removed: not among the newest `kept`, not named in `keep`, and not in use. */

@@ -135,12 +135,19 @@ export class Supervisor {
     clearInterval(this.healthTimer);
     this.timer = undefined;
     // A run cut off here is ended by the next start, which cannot know what its unfinished turn had used: it is put on the books now.
+    const decided: (() => void)[] = [];
     for (const [runId, link] of this.links) {
       const run = store.getRun(this.db, runId);
-      if (run?.outcome === 'running') this.chargeUnfinishedTurn(run);
       link.kill();
+      if (run?.outcome !== 'running') continue;
+      // A run whose end was already decided (a verdict given, a question asked, a call refused) is written down as it
+      // would have ended: the next start would otherwise call it lost and forget what it had said.
+      const planned = this.planned.get(runId);
+      if (planned) decided.push(() => this.finishRun(runId, planned.outcome, planned.reason, { summary: this.reports.get(runId) ?? run.summary }));
+      else this.chargeUnfinishedTurn(run);
     }
     this.links.clear();
+    for (const finish of decided) finish();
     await this.settle();
   }
 
@@ -699,7 +706,7 @@ export class Supervisor {
           text: `${employee.name} wrote ${named} while working on "${task.title}", and that path was changed while it was being written. The file may have landed at ${leadsTo(path.isAbsolute(named) ? named : path.join(folder, named)) ?? 'a place that cannot be followed'}, outside the task folder. Look there before anything else runs.`,
           options: [
             { id: 'stop', label: 'Stop it', effect: 'stop_task' },
-            { id: 'carry', label: 'I looked: carry on', effect: 'keep_refused' },
+            { id: 'carry', label: 'I looked: carry on', effect: 'recheck' },
           ],
           subject: { key: `moved:${run.id}:${callId}` },
         }),
@@ -730,8 +737,8 @@ export class Supervisor {
         const offered = availableCapabilities(team).filter((capability) => !employee.capabilities.includes(capability));
         const wanted = [...new Set(capabilities)];
         // A review only reads, whoever does it: those two tools are held back for the run, not missing from the employee.
-        if (run.mode === 'review' && wanted.every((capability) => capability === 'write_code' || capability === 'run_commands')) {
-          return { ok: false, text: 'Not in this run: a review only reads, whoever does it. To check something by running it, call mcp__engine__run_gate with the name of a gate. If the work cannot be judged without more, say so in your verdict.' };
+        if (run.mode === 'review' && wanted.some((capability) => capability === 'write_code' || capability === 'run_commands')) {
+          return { ok: false, text: 'Not in this run: a review only reads, whoever does it. To check something by running it, call mcp__engine__run_gate with the name of a gate. If the work cannot be judged without more, say so in your verdict. If you need another kind of tool as well, ask for that one alone.' };
         }
         const has = wanted.filter((capability) => employee.capabilities.includes(capability));
         if (has.length === wanted.length) return { ok: false, text: `You already have ${decisions.capabilityNames(has)}. Use it.` };

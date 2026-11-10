@@ -67,6 +67,8 @@ describe('cardLine', () => {
     expect(cardLine(task({ state: 'done', mergedInto: 'track' }), [], [], now)).toBe('merged track');
     expect(cardLine(task({ state: 'done' }), [], [], now)).toBe('');
     expect(cardLine(task({ state: 'failed' }), [run({ outcome: 'stopped', reason: 'task_stopped' })], [], now)).toBe('stopped');
+    // A run that ended well did not fail the task, whatever it says about itself: a review that approved, then a merge card answered Stop.
+    expect(cardLine(task({ state: 'failed' }), [run({ outcome: 'done' }), run({ id: 'r2', mode: 'review', outcome: 'done', reason: 'approved' })], [], now)).toBe('stopped');
     expect(cardLine(task(), [], [], now)).toBe('');
   });
 });

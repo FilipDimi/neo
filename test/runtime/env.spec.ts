@@ -14,6 +14,9 @@ describe('what a session or a gate inherits', () => {
     const env = plainEnv({ HTTPS_PROXY: 'http://filip:hunter2@proxy.example:8080', http_proxy: 'http://filip:hunter2@proxy.example:8080/', ALL_PROXY: 'socks5://u:hunter2@10.0.0.1:1080', HTTP_PROXY: 'filip:hunter2@proxy.example:8080', NO_PROXY: 'localhost,127.0.0.1' });
     expect(env).toEqual({ HTTPS_PROXY: 'http://proxy.example:8080', http_proxy: 'http://proxy.example:8080/', ALL_PROXY: 'socks5://10.0.0.1:1080', HTTP_PROXY: 'proxy.example:8080', NO_PROXY: 'localhost,127.0.0.1' });
     expect(JSON.stringify(env)).not.toContain('hunter2');
+    // A password may itself have an @ in it: the host is what follows the last one.
+    expect(plainEnv({ HTTPS_PROXY: 'http://filip:p@ssw0rd@proxy.example:8080/path' }).HTTPS_PROXY).toBe('http://proxy.example:8080/path');
+    expect(plainEnv({ HTTPS_PROXY: 'http://proxy.example:8080/a@b' }).HTTPS_PROXY).toBe('http://proxy.example:8080/a@b');
   });
 
   it('adds the usual toolchain folders to the path when they are on this machine, after what was already on it', () => {

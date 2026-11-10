@@ -31,6 +31,17 @@ describe('a release an engine runs from', () => {
     expect(inUse(at('a'))).toBe(true);
   });
 
+  it('is not in use when the number of its engine has since gone to another process', () => {
+    const { at } = releases(['a']);
+    // This process is alive, but it did not start when the file says its engine did.
+    fs.mkdirSync(path.join(at('a'), '.running'));
+    fs.writeFileSync(path.join(at('a'), '.running', String(process.pid)), 'Mon Jan  1 00:00:00 2001');
+    expect(inUse(at('a'))).toBe(false);
+    // A file from before start times were written has nothing to compare: a live process with that number counts.
+    fs.writeFileSync(path.join(at('a'), '.running', String(process.pid)), '');
+    expect(inUse(at('a'))).toBe(true);
+  });
+
   it('is not marked when the engine runs from a folder that is not a release', () => {
     const dir = tempDir();
     markRunning(dir);

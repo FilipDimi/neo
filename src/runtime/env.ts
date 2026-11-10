@@ -28,7 +28,8 @@ const isKept = (name: string): boolean => KEPT_NAMES.has(name) || KEPT_PREFIXES.
 
 /** A proxy's address without the user name and password some setups write into it: where the proxy is can be known, its password cannot. */
 const PROXIES = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']);
-const withoutLogin = (address: string): string => address.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)?[^/@]*@/, '$1');
+// The host is what follows the last @ before the first slash: a password may have an @ of its own.
+const withoutLogin = (address: string): string => address.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)?[^/]*@/, '$1');
 
 /** The parent's environment, cut down to the names above. */
 export function plainEnv(parent: Record<string, string | undefined>): Record<string, string> {

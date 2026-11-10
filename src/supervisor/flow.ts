@@ -318,6 +318,7 @@ export class Flow {
         task,
         `The engine could not commit your work: ${error.message}. A tool such as cargo new or git init leaves one behind. Remove ${where} (keep the files beside it), then call mcp__engine__report_done again.`,
         `"${task.title}" cannot be committed, because ${error.message}`,
+        false,
       );
       return false;
     }
@@ -334,14 +335,32 @@ export class Flow {
     this.change((tx) => tx.emit({ kind: 'run_ended', run: { ...store.getRun(this.db, run.id)!, commit, diffLines: stat.lines }, teamId: site.team.id }));
   }
 
+  /**
+   * The files this task changed. Measured against where it started; and where the team lands on another branch than
+   * it starts from, against that one too, because landing merges it in and everything it carries would otherwise
+   * count as this task's doing. A file is the task's own change only if it differs both ways.
+   */
   private async changed(task: Task): Promise<string[]> {
     const site = this.site(task)!;
-    return changedFiles(site.folder, this.baseOf(task, site.teamRepo));
+    const base = this.baseOf(task, site.teamRepo);
+    const files = await changedFiles(site.folder, base);
+    const target = task.parentId ? null : site.teamRepo.mergeTarget;
+    if (!target || `origin/${target}` === base) return files;
+    const overTarget = await changedFiles(site.folder, `origin/${target}`).catch(() => null); // the folder may never have seen that branch
+    return overTarget ? files.filter((file) => overTarget.includes(file)) : files;
   }
 
   /** Ownership is checked after the work as well as before it: a command can change a file no tool call named. */
   private ownershipHolds(run: Run, files: string[], task: Task, whole = false): boolean {
-    const strays = outside(files, task.ownership);
+    // What the user has accepted on this task or on one of its parts stays accepted: it is not asked about a second time.
+    const mine = new Set([task.id, ...store.listTasks(this.db, { parentId: task.id }).map((child) => child.id)]);
+    const accepted = new Set(
+      store
+        .allDecisions(this.db)
+        .filter((card) => card.kind === 'ownership' && card.taskId !== null && mine.has(card.taskId) && card.answer?.optionId === 'accept')
+        .flatMap((card) => (Array.isArray(card.subject?.files) ? card.subject.files : [])),
+    );
+    const strays = outside(files, task.ownership).filter((file) => !accepted.has(file));
     if (strays.length === 0) return true;
     const name = store.getEmployee(this.db, run.employeeId)?.name ?? 'An employee';
     this.change((tx, now) =>
@@ -353,6 +372,7 @@ export class Flow {
         text: `${whole ? `Put together by ${name}, "${task.title}" changes files outside what it owns` : `${name} changed files outside what "${task.title}" owns`} (${task.ownership.join(', ')}): ${strays.slice(0, 8).join(', ')}${strays.length > 8 ? ` and ${strays.length - 8} more` : ''}.`,
         freeText: true,
         options: decisions.optionsFor('ownership'),
+        subject: { files: strays },
       }),
     );
     return false;
@@ -383,7 +403,8 @@ export class Flow {
   /** True when the piece of work before this one, on the same task, failed the same gate. */
   private failedLastTime(taskId: string, runId: string, gate: string): boolean {
     const work = store.runsOf(this.db, taskId).filter(authored);
-    const before = work[work.findIndex((run) => run.id === runId) - 1];
+    // The last time the gates ran: a run in between that ended before they did (a question, a crash, a restart) says nothing about them.
+    const before = work.slice(0, Math.max(0, work.findIndex((run) => run.id === runId))).findLast((run) => run.gateResults.length > 0);
     return before?.gateResults.some((result) => result.name === gate && result.exitCode !== 0) ?? false;
   }
 
@@ -408,7 +429,7 @@ export class Flow {
   }
 
   /** Sends work back to its author: the same session resumes with the notes. Bounded: past the team's rounds it is a card. */
-  private sendBack(task: Task, firstTurn: string, what: string): void {
+  private sendBack(task: Task, firstTurn: string, what: string, acceptable = true): void {
     const team = store.getTeam(this.db, task.teamId)!;
     const author = store.runsOf(this.db, task.id).filter(authored).at(-1);
     const rounds = task.reviewRounds + 1;
@@ -419,9 +440,10 @@ export class Flow {
           runId: author?.id ?? null,
           employeeId: author?.employeeId ?? null,
           kind: 'review',
-          text: `${what}, and it has already been sent back ${task.reviewRounds} time${task.reviewRounds === 1 ? '' : 's'}. Send it back once more, accept it as it is, or stop?`,
+          // Work the engine could not commit is not on the branch: accepting it would land the branch without it and clear the folder away.
+          text: `${what}, and it has already been sent back ${task.reviewRounds} time${task.reviewRounds === 1 ? '' : 's'}. ${acceptable ? 'Send it back once more, accept it as it is, or stop?' : 'Send it back once more, or stop? It cannot be accepted as it is: the work is not committed, so accepting would lose it.'}`,
           freeText: true,
-          options: decisions.optionsFor('review'),
+          options: decisions.optionsFor(acceptable ? 'review' : 'briefing'),
         });
       }
       const counted: Task = { ...task, reviewRounds: rounds };
