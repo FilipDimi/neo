@@ -192,3 +192,33 @@ export function world(spawn: Spawn, over: { company?: Partial<Company>; teams?: 
   const sup = new Supervisor({ db, dataDir: dir, now: clock.now, spawn, ...over.options });
   return { dir, db, sup, clock };
 }
+
+// ---------- a throwaway git repository ----------
+
+import { execFileSync } from 'node:child_process';
+
+export const sh = (cwd: string, command: string, ...args: string[]): string => execFileSync(command, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+export const gitIn = (cwd: string, ...args: string[]): string => sh(cwd, 'git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args);
+
+/** A repository with one commit on `main` and, by default, a `team` branch at the same commit. `main` stays checked out. */
+export function gitRepo(branches: string[] = ['team'], files: Record<string, string> = { 'README.md': 'hello\n' }): string {
+  const dir = tempDir('vs-repo-');
+  gitIn(dir, 'init', '-q', '-b', 'main');
+  for (const [name, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    fs.writeFileSync(path.join(dir, name), content);
+  }
+  gitIn(dir, 'add', '-A');
+  gitIn(dir, 'commit', '-q', '-m', 'first');
+  for (const branch of branches) gitIn(dir, 'branch', branch);
+  return dir;
+}
+
+export const refOf = (repo: string, ref: string): string => gitIn(repo, 'rev-parse', ref);
+export const fileAt = (repo: string, ref: string, file: string): string | null => {
+  try {
+    return gitIn(repo, 'show', `${ref}:${file}`);
+  } catch {
+    return null;
+  }
+};
