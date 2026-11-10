@@ -102,6 +102,9 @@ const spelled = (file: string): string => {
 };
 const inside = (file: string, dir: string): boolean => spelled(file) === spelled(dir) || spelled(file).startsWith(`${spelled(dir).replace(/\/$/, '')}${path.sep}`);
 
+/** A path as a tool gave it, made absolute and otherwise left exactly as written: `leadsTo` reads it as the system would. */
+const anchored = (folder: string, file: string): string => (path.isAbsolute(file) ? file : `${folder}${path.sep}${file}`);
+
 const SECRET = { allow: false, reason: 'Refused: secrets and credentials are never readable. Carry on without this file.' };
 
 /** True for a file no session opens with a tool: a secret, a login, an env file, the engine's own token and database. */
@@ -138,7 +141,7 @@ function judge(ctx: Radius, call: ToolCall): Verdict {
     case 'Edit': {
       if (typeof input.file_path !== 'string') return refuse(`wants to use ${call.tool} without naming a file`);
       const folder = leadsTo(ctx.folder) ?? ctx.folder;
-      const target = leadsTo(path.resolve(ctx.folder, input.file_path));
+      const target = leadsTo(anchored(ctx.folder, input.file_path));
       if (target === null || !inside(target, folder)) return refuse(`wants to write ${target ?? input.file_path}, which is outside its task folder`);
       const relative = target.slice(folder.length + 1);
       if (relative === '') return refuse('wants to write over its task folder itself');
@@ -148,11 +151,11 @@ function judge(ctx: Radius, call: ToolCall): Verdict {
     }
     // A refused read is not a card: reading a secret is never something to ask the user for. The session carries on without it.
     case 'Read':
-      return typeof input.file_path === 'string' && unreadable(ctx, path.resolve(ctx.folder, input.file_path)) ? SECRET : { allow: true };
+      return typeof input.file_path === 'string' && unreadable(ctx, anchored(ctx.folder, input.file_path)) ? SECRET : { allow: true };
     case 'Glob':
     case 'Grep': {
       // A search opens every file under its root, so its root stays where the task's own files are.
-      const root = leadsTo(typeof input.path === 'string' ? path.resolve(ctx.folder, input.path) : ctx.folder);
+      const root = leadsTo(typeof input.path === 'string' ? anchored(ctx.folder, input.path) : ctx.folder);
       const pattern = call.tool === 'Glob' && typeof input.pattern === 'string' ? input.pattern : '';
       const climbs = path.isAbsolute(pattern) || pattern.split(/[\\/]/).includes('..');
       const places = [ctx.folder, ctx.employee.memoryDir].map((dir) => leadsTo(dir) ?? dir);

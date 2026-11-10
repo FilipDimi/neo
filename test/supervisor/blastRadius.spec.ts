@@ -99,6 +99,25 @@ describe('judgeToolCall', () => {
     expect(judgeToolCall(ctx(), call('Write', { file_path: path.join(folder, 'alias.ts'), content: 'x' }))).toEqual({ allow: true });
   });
 
+  it('follows ".." the way the system does: up from where a link leads, not from where it sits', () => {
+    const outside = tempDir();
+    fs.mkdirSync(path.join(outside, 'deep'));
+    fs.writeFileSync(path.join(outside, 'key'), 'k');
+    fs.symlinkSync(path.join(outside, 'deep'), path.join(folder, 'climb'));
+    // To the system, <folder>/climb/../escaped.txt is <outside>/escaped.txt, though it reads like a file in the folder.
+    for (const file of [`${folder}/climb/../escaped.txt`, 'climb/../escaped.txt', `${folder}/./climb/./../escaped.txt`]) {
+      expect(judgeToolCall(ctx(), call('Write', { file_path: file, content: 'x' })), file).toMatchObject({ allow: false, stop: true });
+    }
+    const guarded = ctx({ company: company({ denyRead: [path.join(outside, 'key')] }) });
+    expect(judgeToolCall(guarded, call('Read', { file_path: `${folder}/climb/../key` }))).toMatchObject({ allow: false });
+    expect(judgeToolCall(ctx(), call('Grep', { pattern: 'x', path: 'climb/..' }))).toMatchObject({ allow: false });
+    // A plain ".." that stays inside is an ordinary path.
+    fs.mkdirSync(path.join(folder, 'src'), { recursive: true });
+    expect(judgeToolCall(ctx(), call('Write', { file_path: `${folder}/src/../NOTES.md`, content: 'x' }))).toEqual({ allow: true });
+    expect(judgeToolCall(ctx(), call('Write', { file_path: 'new-folder/../NOTES.md', content: 'x' }))).toEqual({ allow: true });
+    expect(judgeToolCall(ctx(), call('Write', { file_path: 'new-folder/../../up.md', content: 'x' }))).toMatchObject({ allow: false, stop: true });
+  });
+
   it('refuses a link that leads round in a circle', () => {
     fs.symlinkSync(path.join(folder, 'loop-b'), path.join(folder, 'loop-a'));
     fs.symlinkSync(path.join(folder, 'loop-a'), path.join(folder, 'loop-b'));
