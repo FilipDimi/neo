@@ -889,7 +889,8 @@ export class Supervisor {
   private gateLimits(folder: string, team: Team): GateLimits {
     const company = store.getCompany(this.db);
     const limits = commandLimits({ folder, team, company: company ?? { denyRead: [] }, envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)), protect: engineFiles(this.paths) });
-    return { ...limits, blockPorts: [this.apiPort] };
+    // A team that may write Xcode's build folders builds with Xcode: its gates get what Xcode needs inside the sandbox.
+    return { ...limits, blockPorts: [this.apiPort], xcode: team.sandboxWrite.includes('~/Library/Developer/Xcode') };
   }
 
   /** Runs a piece of engine work for a task. While it runs the task is not idle; if it throws, a card says so. */

@@ -28,6 +28,12 @@ export type GateLimits = {
   blockPorts?: number[];
   env?: Record<string, string>;
   sandboxExec?: string;
+  /**
+   * The team builds with Xcode. swift and xcodebuild each start a sandbox of their own, and a sandbox cannot start
+   * inside another: the gate gets wrappers that switch those off (the gate's own sandbox still confines everything
+   * they run), and may reach the one socket XCTest talks to its test manager over.
+   */
+  xcode?: boolean;
 };
 
 const quoted = (file: string): string => `"${file.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
@@ -40,7 +46,7 @@ export function gateProfile(cwd: string, tmp: string, limits: GateLimits): strin
     '(version 1)',
     '(allow default)',
     '(deny file-write*)',
-    `(allow file-write* ${under([cwd, tmp, ...(limits.allowWrite ?? [])])} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper") (regex #"^/dev/ttys[0-9]+$") (regex #"^/dev/fd/"))`,
+    `(allow file-write* ${under([cwd, tmp, ...(limits.allowWrite ?? [])])} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/ptmx") (literal "/dev/dtracehelper") (regex #"^/dev/ttys[0-9]+$") (regex #"^/dev/fd/"))`,
     // The folder itself stays where it is: moved away, nothing below would protect its git directory, and it could be moved back changed.
     `(deny file-write-unlink (literal ${quoted(real(cwd))}))`,
     ...(limits.denyWrite?.length ? [`(deny file-write* ${under(limits.denyWrite)})`] : []),
@@ -49,6 +55,7 @@ export function gateProfile(cwd: string, tmp: string, limits: GateLimits): strin
     // would carry whatever is put in a name out to the network. `localhost` resolves without it.
     '(deny network-outbound)',
     '(allow network-outbound (remote ip "localhost:*") (literal "/private/var/run/syslog"))',
+    ...(limits.xcode ? ['(allow network-outbound (regex #"^/private/var/tmp/com\\.apple\\.launchd\\.[^/]+/com\\.apple\\.testmanagerd\\.unix-domain\\.socket$"))'] : []),
     ...(limits.blockPorts ?? []).map((port) => `(deny network-outbound (remote ip "localhost:${port}"))`),
     // Nothing reaches other programs: no signal to a process that is not the gate's own, no change to any program's
     // preferences, no Apple Event, and no launching an application (each is a way to have something run outside).
@@ -62,6 +69,16 @@ export function gateProfile(cwd: string, tmp: string, limits: GateLimits): strin
   ].join('\n');
 }
 
+/** Wrappers that come first on a gate's path for a team that builds with Xcode. Written by the engine, in the gate's own temp folder. */
+function xcodeWrappers(tmp: string): string {
+  const bin = path.join(tmp, 'bin');
+  fs.mkdirSync(bin);
+  const wrapper = (name: string, body: string) => fs.writeFileSync(path.join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+  wrapper('xcodebuild', 'exec /usr/bin/xcodebuild -IDEPackageSupportDisableManifestSandbox=YES -IDEPackageSupportDisablePluginExecutionSandbox=YES "$@"');
+  wrapper('swift', 'case "$1" in build|test|run) exec /usr/bin/swift "$1" --disable-sandbox "${@:2}" ;; esac\nexec /usr/bin/swift "$@"');
+  return bin;
+}
+
 export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promise<GateResult> {
   const started = Date.now();
   const sandboxExec = limits.sandboxExec ?? SANDBOX_EXEC;
@@ -69,13 +86,15 @@ export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promi
   if (!fs.existsSync(sandboxExec)) return Promise.resolve(result(126, `The gate was not run: this machine cannot confine it (${sandboxExec} is missing), and a gate runs code an employee wrote.`));
 
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vs-gate-')));
+  const env: Record<string, string> = { ...(limits.env ?? withToolchains(plainEnv(process.env))), TMPDIR: tmp };
+  if (limits.xcode) env.PATH = `${xcodeWrappers(tmp)}${path.delimiter}${env.PATH ?? ''}`;
   return new Promise((resolve) => {
     // Its own process group, so a timeout ends everything the gate started.
     const child = spawn(sandboxExec, ['-p', gateProfile(cwd, tmp, limits), '/bin/bash', '-c', gate.command], {
       cwd,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...(limits.env ?? withToolchains(plainEnv(process.env))), TMPDIR: tmp },
+      env,
     });
     let output = '';
     let timedOut = false;

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { GateQueue, runGate } from '../../src/git/gates.ts';
+import { GateQueue, gateProfile, runGate } from '../../src/git/gates.ts';
 import type { Gate } from '../../src/shared/types.ts';
 import { tempDir } from '../helpers.ts';
 
@@ -135,6 +135,29 @@ describe('a gate is confined like any other command', () => {
       engine.close();
       other.close();
     }
+  });
+
+  it('gives a team that builds with Xcode the tools it needs inside the gate, and no one else', async () => {
+    const dir = tempDir();
+    // swift and xcodebuild each start a sandbox of their own, which cannot start inside the gate's: the engine's
+    // wrappers come first on the path and switch those off, the gate's own sandbox still holding.
+    const show = 'cat "$(command -v xcodebuild)"; echo ---; cat "$(command -v swift)"';
+    const xcode = await runGate(gate('tools', show), dir, { xcode: true });
+    expect(xcode.exitCode).toBe(0);
+    expect(xcode.output).toContain('/usr/bin/xcodebuild -IDEPackageSupportDisableManifestSandbox=YES -IDEPackageSupportDisablePluginExecutionSandbox=YES "$@"');
+    expect(xcode.output).toContain('/usr/bin/swift "$1" --disable-sandbox "${@:2}"');
+    const plain = await runGate(gate('tools', 'command -v xcodebuild; command -v swift'), dir);
+    expect(plain.output.split('\n').filter(Boolean)).toEqual(['/usr/bin/xcodebuild', '/usr/bin/swift']);
+    // XCTest talks to its test manager over one socket. Only a team that builds with Xcode may reach it, and no other socket.
+    const socket = /com\\\.apple\\\.testmanagerd\\\.unix-domain\\\.socket/;
+    expect(gateProfile(dir, dir, { xcode: true })).toMatch(socket);
+    expect(gateProfile(dir, dir, {})).not.toMatch(socket);
+  });
+
+  it('can open a pseudo-terminal, as a test runner does for its output', async () => {
+    // script(1) runs its command on a new pseudo-terminal: it needs /dev/ptmx.
+    const result = await runGate(gate('pty', 'script -q /dev/null echo on-a-pty'), tempDir());
+    expect(result).toMatchObject({ exitCode: 0, output: expect.stringContaining('on-a-pty') });
   });
 
   it('is not run at all when it cannot be confined', async () => {

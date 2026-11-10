@@ -1,3 +1,4 @@
+import type { Team } from '../../src/shared/types.ts';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -489,6 +490,14 @@ describe('Supervisor', () => {
     // The run was over in all but name. It is written down as it would have ended, not left for the next start to call lost.
     expect(store.runsOf(w.db, task.id).at(-1)).toMatchObject({ mode: 'review', outcome: 'done', reason: 'approved' });
     expect(store.liveRuns(w.db)).toEqual([]);
+  });
+
+  it('runs the gates of a team that builds with Xcode with the Xcode tools, and other teams without', () => {
+    const w = track(world(scripted().spawn));
+    const limits = (team: Team) => (w.sup as unknown as { gateLimits(folder: string, team: Team): { xcode?: boolean } }).gateLimits('/tmp/x', team);
+    const plain = store.getTeam(w.db, 'team1')!;
+    expect(limits(plain).xcode).toBe(false);
+    expect(limits({ ...plain, sandboxWrite: ['~/Library/Developer/Xcode', '~/Library/Caches'] }).xcode).toBe(true);
   });
 
   it('gives an employee a tool it lacks from a card whose button really does it', async () => {
