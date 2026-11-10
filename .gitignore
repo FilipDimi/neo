@@ -1,0 +1,11 @@
+node_modules
+dist
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+.DS_Store
+# Raw SDK recordings hold account and machine details. Only sanitised fixtures are committed.
+*.raw.json

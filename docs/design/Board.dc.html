@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Board</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#0B0B0C;font-family:Inter,system-ui,sans-serif;color:#F4F4F6}
+a{color:#F4F4F6;text-decoration:none}a:hover{color:#FFFFFF}
+</style>
+</helmet>
+<div style="width:1440px;height:900px;box-sizing:border-box;background:#0B0B0C;display:flex;flex-direction:column;overflow:hidden">
+
+  <div style="height:64px;box-sizing:border-box;padding:0 24px;display:flex;align-items:center;gap:16px;border-bottom:1px solid #222226">
+    <div style="font-size:17px;font-weight:700;letter-spacing:-0.2px">Receipts Inc.</div>
+    <div style="font-size:13px;color:#9A9AA2">Mon 18:40 · 3 of 3 seats busy</div>
+    <div style="flex-grow:1"></div>
+    <a href="Board.dc.html" style="font-size:13px;font-weight:600;padding:8px 14px;border-radius:999px;background:#F4F4F6;color:#0B0B0C">Board</a>
+    <a href="Main.dc.html" style="font-size:13px;font-weight:600;padding:8px 14px;border-radius:999px;background:#1C1C1E;border:1px solid #2A2A2E">Office</a>
+    <a href="Hire.dc.html" style="font-size:13px;font-weight:600;padding:8px 14px;border-radius:999px;background:#1C1C1E;border:1px solid #2A2A2E">Hire</a>
+    <div style="width:1px;height:28px;background:#2A2A2E;margin:0 4px"></div>
+    <div style="font-size:13px;color:#9A9AA2">Today <span style="color:#F4F4F6;font-weight:600">$14.20</span> of $40</div>
+    <button type="button" aria-label="Open the decision deck" style="font:inherit;font-size:13px;font-weight:700;padding:8px 14px;border-radius:999px;background:#F2C76B;color:#1A1200;border:0;cursor:pointer">3 decisions</button>
+  </div>
+
+  <div style="box-sizing:border-box;padding:14px 24px;border-bottom:1px solid #222226;background:#111113;display:flex;gap:12px;overflow:hidden">
+    <div style="flex:none;width:360px;box-sizing:border-box;padding:12px 14px;border-radius:14px;background:#1A1500;border:1px solid #6B5A1F;display:flex;flex-direction:column;gap:8px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#F2C76B">Decision · 9 min · Engineering iOS</div>
+      <div style="font-size:14px;font-weight:600;line-height:19px">NH's run on "nav‑hang recorder" expired twice. Retry with a 20‑minute lease, or stop the task?</div>
+      <div style="display:flex;gap:8px"><button type="button" style="font:inherit;font-size:12px;font-weight:700;padding:7px 12px;border-radius:999px;background:#F2C76B;color:#1A1200;border:0;cursor:pointer">Retry, 20 min</button><button type="button" style="font:inherit;font-size:12px;font-weight:600;padding:7px 12px;border-radius:999px;background:#1C1C1E;color:#F4F4F6;border:1px solid #2A2A2E;cursor:pointer">Stop it</button></div>
+    </div>
+    <div style="flex:none;width:360px;box-sizing:border-box;padding:12px 14px;border-radius:14px;background:#1A1500;border:1px solid #6B5A1F;display:flex;flex-direction:column;gap:8px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#F2C76B">Decision · 22 min · Engineering Rust</div>
+      <div style="font-size:14px;font-weight:600;line-height:19px">Merge "roster 503" into main? Gate green, 1019 tests, diff 212 lines. Main is outside the team's blast radius.</div>
+      <div style="display:flex;gap:8px"><button type="button" style="font:inherit;font-size:12px;font-weight:700;padding:7px 12px;border-radius:999px;background:#F2C76B;color:#1A1200;border:0;cursor:pointer">Merge</button><button type="button" style="font:inherit;font-size:12px;font-weight:600;padding:7px 12px;border-radius:999px;background:#1C1C1E;color:#F4F4F6;border:1px solid #2A2A2E;cursor:pointer">Open diff</button></div>
+    </div>
+    <div style="flex:none;width:360px;box-sizing:border-box;padding:12px 14px;border-radius:14px;background:#1A1500;border:1px solid #6B5A1F;display:flex;flex-direction:column;gap:8px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#F2C76B">Decision · 1 h · Marketing</div>
+      <div style="font-size:14px;font-weight:600;line-height:19px">MW wants to publish the App Store description draft. Publishing is off for this team.</div>
+      <div style="display:flex;gap:8px"><button type="button" style="font:inherit;font-size:12px;font-weight:700;padding:7px 12px;border-radius:999px;background:#F2C76B;color:#1A1200;border:0;cursor:pointer">Read it first</button><button type="button" style="font:inherit;font-size:12px;font-weight:600;padding:7px 12px;border-radius:999px;background:#1C1C1E;color:#F4F4F6;border:1px solid #2A2A2E;cursor:pointer">Not now</button></div>
+    </div>
+  </div>
+
+  <div style="flex-grow:1;min-height:0;box-sizing:border-box;padding:18px 24px;display:grid;grid-template-columns:repeat(6, minmax(0, 1fr));gap:14px">
+
+    <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#9A9AA2;display:flex;justify-content:space-between"><span>Queued</span><span>4</span></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #3A3A40"><div style="font-size:13px;font-weight:600;line-height:18px">Edge scrubber on Today</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · from Neo · P1</div></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #3A3A40"><div style="font-size:13px;font-weight:600;line-height:18px">Ransom FP icon in Icon Composer</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · from Neo · P2</div></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #3A3A40"><div style="font-size:13px;font-weight:600;line-height:18px">Roster client and bundled copy</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · from Neo · P2</div></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #3A3A40"><div style="font-size:13px;font-weight:600;line-height:18px">Re‑run the 29 refused plain drafts</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">Rust · from Neo · P2 · cap $2</div></div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#9A9AA2;display:flex;justify-content:space-between"><span>Briefing</span><span>1</span></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #F4F4F6"><div style="font-size:13px;font-weight:600;line-height:18px">Life as a pass stack (D‑199)</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · PM ios · 4 min · $0.30</div><div style="font-size:11px;color:#C7C7CC;margin-top:6px">splitting into 3 sub‑tasks</div></div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#F5B700;display:flex;justify-content:space-between"><span>Running</span><span>3</span></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #F5B700"><div style="font-size:13px;font-weight:600;line-height:18px">Seamless open · no hand‑off</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · MO · 41 min · $2.10</div><div style="font-size:11px;color:#F5B700;margin-top:6px">event 40 s ago · tests 3/3</div></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #F5B700"><div style="font-size:13px;font-weight:600;line-height:18px">Card row: one line, glass, docked</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · A6 · 13 min · $0.80</div><div style="font-size:11px;color:#F5B700;margin-top:6px">event 12 s ago</div></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #F5B700"><div style="font-size:13px;font-weight:600;line-height:18px">Roster 503 not‑ready</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">Rust · AP · 18 min · $0.60</div><div style="font-size:11px;color:#F5B700;margin-top:6px">event 5 s ago</div></div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#76D3CC;display:flex;justify-content:space-between"><span>Review</span><span>1</span></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #76D3CC"><div style="font-size:13px;font-weight:600;line-height:18px">C2 Person page from the roster</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · C2 → PM ios · diff 412 lines</div><div style="font-size:11px;color:#76D3CC;margin-top:6px">gates re‑run · 737 passed</div></div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#E0625A;display:flex;justify-content:space-between"><span>Blocked</span><span>1</span></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#1A0F0E;border:1px solid #6B2E2A;border-left:3px solid #E0625A"><div style="font-size:13px;font-weight:600;line-height:18px">Nav‑hang recorder</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · NH · 2 runs · $1.40</div><div style="font-size:11px;color:#E0625A;margin-top:6px">lease expired twice · decision open 9 min</div></div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#9A9AA2;display:flex;justify-content:space-between"><span>Done today</span><span>12</span></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #7CF0BF"><div style="font-size:13px;font-weight:600;line-height:18px">Roster endpoint (0.9.1)</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">Rust · AP · merged track · $4.10</div></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #7CF0BF"><div style="font-size:13px;font-weight:600;line-height:18px">22 plain cards reviewed and published</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">Editorial · you · 44 min</div></div>
+      <div style="box-sizing:border-box;padding:12px;border-radius:12px;background:#151517;border:1px solid #2A2A2E;border-left:3px solid #7CF0BF"><div style="font-size:13px;font-weight:600;line-height:18px">Freeze fix confirmed on device</div><div style="font-size:11px;color:#9A9AA2;margin-top:6px">iOS · MO · build 544</div></div>
+      <div style="font-size:11px;color:#6F6F78;padding:4px 2px">+ 9 more</div>
+    </div>
+  </div>
+
+  <div style="height:56px;box-sizing:border-box;border-top:1px solid #222226;padding:0 24px;display:flex;align-items:center;gap:28px;font-size:12px;color:#9A9AA2">
+    <div>Colour: <span style="color:#F5B700">working</span> · <span style="color:#76D3CC">review</span> · <span style="color:#F2C76B">waiting on you</span> · <span style="color:#E0625A">silent past its lease</span></div>
+    <div style="flex-grow:1"></div>
+    <div>Spend today by team: iOS $9.10 · Rust $4.70 · Marketing $0.40</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
