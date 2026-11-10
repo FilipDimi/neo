@@ -3,6 +3,7 @@ import { subjectsOf } from '../../../src/shared/events.ts';
 import { company, T0, task } from '../../../test/rows.ts';
 import { createStore } from '../store/store.ts';
 import { fromSnapshot, type Snapshot } from '../store/reduce.ts';
+import { ApiError } from './api.ts';
 import { connect, type SocketLike } from './live.ts';
 
 const snapshot = (lastEventId: number, over: Partial<Snapshot> = {}): Snapshot => ({ version: 1, company: company(), repos: [], teams: [], employees: [], tasks: [], runs: [], requests: [], decisions: [], messages: [], health: null, planUsage: null, spend: { company: 0, byTeam: {}, byEmployee: {} }, lastEventId, now: T0.toISOString(), ...over });
@@ -115,6 +116,32 @@ describe('the live connection', () => {
     sockets[0]!.open();
     sockets[0]!.say({ resync: true });
     await vi.waitFor(() => expect(store.get().needsReload).toBe(true));
+    live.close();
+  });
+
+  it('asks for a reload, and stops trying, when the engine no longer accepts the token this page was given', async () => {
+    let attempts = 0;
+    const store = createStore(fromSnapshot(snapshot(1)));
+    const sockets: FakeSocket[] = [];
+    const live = connect({
+      store,
+      token: 'tok',
+      snapshot: async () => {
+        attempts++;
+        throw new ApiError(401, 'The token is missing or wrong.');
+      },
+      socket: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      retryMs: 5,
+    });
+    sockets[0]!.onclose?.();
+    await vi.waitFor(() => expect(store.get().needsReload).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(attempts).toBe(1);
+    expect(sockets).toHaveLength(1);
     live.close();
   });
 

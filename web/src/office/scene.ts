@@ -8,7 +8,7 @@ import { ago, initials, money } from '../format.ts';
 import { board, liveRuns, openDecisions, spendToday } from '../model/select.ts';
 import type { Store } from '../store/reduce.ts';
 import { CHIEF, FLOOR, KITCHEN, MEETING, PALETTE, rugs, seats, SKIN, STUCK, WALL, type Rect } from './layout.ts';
-import { placement, type Placement } from './placement.ts';
+import { cut, placement, type Placement } from './placement.ts';
 
 export type SceneKind = 'floor' | 'window' | 'rug' | 'label' | 'desk' | 'monitor' | 'chair' | 'person' | 'tag' | 'bubble' | 'whiteboard' | 'table' | 'couch' | 'lamp' | 'tray' | 'counter' | 'plant' | 'wallboard' | 'button';
 export type SceneNode = Rect & { id: string; kind: SceneKind; props: Record<string, unknown> };
@@ -20,12 +20,12 @@ const LEAD_SHIRT = '#F4F4F6';
 const CHIEF_SHIRT = '#2A2A2E';
 
 /** Where a person stands relative to a member's desk, a lead's desk, the meeting table and the couch, at full size. */
-type Offsets = { monitor: Point; chair: Point; person: Point; tag: Point & { w: number }; bubble: Point; side: 'left' | 'right' };
+type Offsets = { monitor: Point; chair: Point; person: Point; tag: Point & { w: number }; bubble: Point; side: 'left' | 'right'; /** How many letters fit before the next seat's bubble, at full size. */ say: number };
 type Point = { x: number; y: number };
-const AT_DESK: Offsets = { monitor: { x: 34, y: -14 }, chair: { x: 40, y: 64 }, person: { x: 48, y: 36 }, tag: { x: 26, y: 110, w: 68 }, bubble: { x: 104, y: 24 }, side: 'right' };
+const AT_DESK: Offsets = { monitor: { x: 34, y: -14 }, chair: { x: 40, y: 64 }, person: { x: 48, y: 36 }, tag: { x: 26, y: 110, w: 68 }, bubble: { x: 104, y: 24 }, side: 'right', say: 28 };
 // A lead's desk stands on end at the right of the rug; the bubble opens to the left of it.
-const AT_LEAD_DESK: Offsets = { monitor: { x: 8, y: 60 }, chair: { x: 14, y: 146 }, person: { x: 22, y: 118 }, tag: { x: -2, y: 192, w: 76 }, bubble: { x: 68, y: 136 }, side: 'left' };
-const AT_CHIEF_DESK: Offsets = { monitor: { x: 16, y: -14 }, chair: { x: 26, y: 72 }, person: { x: 34, y: 44 }, tag: { x: 12, y: 118, w: 68 }, bubble: { x: 170, y: 60 }, side: 'right' };
+const AT_LEAD_DESK: Offsets = { monitor: { x: 8, y: 60 }, chair: { x: 14, y: 146 }, person: { x: 22, y: 118 }, tag: { x: -2, y: 192, w: 76 }, bubble: { x: 68, y: 136 }, side: 'left', say: 22 };
+const AT_CHIEF_DESK: Offsets = { monitor: { x: 16, y: -14 }, chair: { x: 26, y: 72 }, person: { x: 34, y: 44 }, tag: { x: 12, y: 118, w: 68 }, bubble: { x: 170, y: 60 }, side: 'right', say: 30 };
 const CHIEF_DESK: Rect = { x: 470, y: 540, w: 160, h: 64 };
 const STATUS = { stuck: 'stuck, needs you', meeting: 'in a review', lit: 'working', dark: 'idle' };
 const MEETING_SEATS = [{ x: 1056, y: 216 }, { x: 1240, y: 216 }, { x: 1000, y: 296 }, { x: 1300, y: 296 }, { x: 1148, y: 216 }, { x: 1148, y: 372 }];
@@ -64,6 +64,8 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
   const meeting: string[] = [];
   const couch: string[] = [];
   const people = new Map<string, Record<string, unknown>>();
+  // What people are saying goes on top of every seat, so a neighbour's desk never covers it.
+  const bubbles: SceneNode[] = [];
   /** A desk with its screen and chair, and the person at it unless they are in the meeting room or on the couch. */
   function seat(employeeId: string, desk: Rect, scale: number, offsets: Offsets, shirt: string): void {
     const employee = store.employees.get(employeeId)!;
@@ -81,7 +83,7 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
     add(node(`tag:${employeeId}`, 'tag', { ...place(offsets.tag, offsets.tag.w, 18), h: 18 }, { text: tagText(employee.name), tone: lit ? 'active' : 'idle' }));
     if (at.bubble) {
       const anchor = place(offsets.bubble, 0, 0);
-      add(node(`bubble:${employeeId}`, 'bubble', { x: anchor.x, y: anchor.y, w: 0, h: 22 }, { text: at.bubble, tone: 'plain', side: offsets.side, taskId: at.taskId }));
+      bubbles.push(node(`bubble:${employeeId}`, 'bubble', { x: anchor.x, y: anchor.y, w: 0, h: 22 }, { text: cut(at.bubble, Math.max(12, Math.floor(offsets.say * scale))), tone: 'plain', side: offsets.side, taskId: at.taskId }));
     }
   }
 
@@ -109,7 +111,7 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
     add(node(`tag:${employeeId}`, 'tag', { x: spot.x - 24, y: index < 2 ? 388 : spot.y + 50, w: 72, h: 18 }, { text: tagText(String(props.name)), tone: 'review' }));
   }
   const reviews = [...new Set(meeting.map((id) => placed.get(id)!.bubble).filter((bubble): bubble is string => bubble !== null))];
-  for (const [index, text] of reviews.slice(0, 2).entries()) add(node(`bubble:review:${index}`, 'bubble', { x: 1100, y: 400 + index * 22, w: 0, h: 22 }, { text, tone: 'review', side: 'none', taskId: placed.get(meeting.find((id) => placed.get(id)!.bubble === text)!)!.taskId }));
+  for (const [index, text] of reviews.slice(0, 2).entries()) bubbles.push(node(`bubble:review:${index}`, 'bubble', { x: 1060, y: 412 + index * 24, w: 0, h: 22 }, { text, tone: 'review', side: 'none', taskId: placed.get(meeting.find((id) => placed.get(id)!.bubble === text)!)!.taskId }));
 
   // On the couch: a run that went silent first, then whoever has waited longest. The button is the first one's card.
   const cardOf = (employeeId: string) => store.decisions.get(placed.get(employeeId)!.decisionId ?? '');
@@ -121,11 +123,13 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
     add(node(`person:${employeeId}`, 'person', { x: spot.x, y: spot.y, w: 24, h: 46 }, { ...props, scale: 1 }));
     add(node(`tag:${employeeId}`, 'tag', { x: spot.x - 22, y: 670, w: 68, h: 18 }, { text: tagText(String(props.name)), tone: 'stuck' }));
     if (index === 0) {
-      if (at.bubble) add(node(`bubble:${employeeId}`, 'bubble', { x: 940, y: 560, w: 0, h: 22 }, { text: at.bubble, tone: 'stuck', side: 'right', taskId: at.taskId }));
+      if (at.bubble) bubbles.push(node(`bubble:${employeeId}`, 'bubble', { x: 940, y: 560, w: 0, h: 22 }, { text: at.bubble, tone: 'stuck', side: 'right', taskId: at.taskId }));
       add(node('button:decide', 'button', { x: 960, y: 630, w: 62, h: 24 }, { label: 'Decide', decisionId: at.decisionId, name: props.name }));
     }
   }
   if (couch.length > 1) add(node('label:stuck-more', 'label', { x: 850, y: 690, w: 200, h: 14 }, { text: `${couch.length} people are waiting on you`, color: '#E0625A', size: 10 }));
+
+  add(...bubbles);
 
   // ---------- the wall board ----------
   const columns = board(store, now);

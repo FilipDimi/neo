@@ -4,7 +4,7 @@ import './app/app.css';
 import { UiContext, useApi, type TaskTab, type Ui, type View } from './app/context.ts';
 import { Board } from './board/Board.tsx';
 import { TaskDrawer } from './board/TaskDrawer.tsx';
-import { pageToken } from './client/api.ts';
+import { ApiError, pageToken } from './client/api.ts';
 import { connect, type SocketLike } from './client/live.ts';
 import { Company } from './company/Company.tsx';
 import { PersonPage } from './company/PersonPage.tsx';
@@ -46,8 +46,9 @@ export function App({ socket = liveSocket, retryMs = 2000 }: { socket?: () => So
         const made = createStore(fromSnapshot(first));
         live = connect({ store: made, token: pageToken(), snapshot, socket, retryMs });
         setStore(made);
-      } catch {
+      } catch (failure) {
         if (gone) return;
+        if (failure instanceof ApiError && failure.status === 401) return setWaiting('reload'); // a page from before the engine's token changed
         setWaiting('offline');
         timer = setTimeout(() => void load(), retryMs);
       }

@@ -2,7 +2,7 @@
 
 A local-first web app that runs a software company of AI employees and shows it as an office. You set the teams, the roles and the headcount. Every piece of work is a task on a board. Each employee run is a Claude Agent SDK session on this machine's Claude login, started by a supervisor that enforces leases, budgets and limits. Anything beyond a team's limits becomes a decision card for you.
 
-Status: the engine is built (plan tasks 1 to 14): supervisor, workers, leases, the team flow, git and gates run by the engine, budgets, health, hiring, chat, and the API with a plain page. The screen (board, office, hiring) is the next plan. The Receipts dogfood waits on Filip.
+Status: built, except the Receipts dogfood (engine plan task 15), which waits for Filip's go. The engine (plan tasks 1 to 14): supervisor, workers, leases, the team flow, git and gates run by the engine, budgets, health, hiring, chat, and the API. The screen (screen plan tasks 1 to 9): the office, the board and the hire view, with the decision deck and the chat line on each, served by the engine. The office needs WebGL; the board and the hire view do not.
 
 ## Documents
 
@@ -19,8 +19,11 @@ Status: the engine is built (plan tasks 1 to 14): supervisor, workers, leases, t
 ## Commands
 
 ```bash
-npm start           # the company in ~/.virtual-startup (or VS_DATA_DIR), at http://127.0.0.1:4317/
-npm run demo        # a throwaway company on a scripted runtime: no model, nothing spent
+npm start           # the company in ~/.virtual-startup (or VS_DATA_DIR), at http://127.0.0.1:4317/; builds the screen first when it is missing or out of date
+npm run demo        # a throwaway company on a scripted runtime: no model, nothing spent (see scripts/demo.ts for the words that make an employee hang, ask or be refused)
+npm run build:web   # builds the screen into web/dist, which the engine serves; without it the engine serves a plain page
+npm run watch:web   # rebuilds the screen on every save, for working on it against `npm run demo`; reload the page
+npm run story       # records the company day the screen's tests replay (web/src/fixtures/story.json)
 npm test            # unit and integration tests: no model, no network
 npm run typecheck
 npm run smoke       # live: a led team briefs, works, reviews and merges (about six short sessions)

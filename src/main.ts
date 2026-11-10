@@ -1,6 +1,6 @@
 /**
- * One command starts everything: the data directory, recovery, the supervisor, the health
- * checks, the API, and the browser.
+ * One command starts everything: the screen (built when it is missing or out of date), the data
+ * directory, recovery, the supervisor, the health checks, the API, and the browser.
  *
  *   npm start
  *   VS_DATA_DIR=…        where the company lives (default ~/.virtual-startup)
@@ -10,10 +10,12 @@
  */
 import open from 'open';
 import { buildServer, DEFAULT_PORT } from './api/server.ts';
+import { ensureWebBuilt } from './api/webBuild.ts';
 import { dataDir, paths } from './db/dataDir.ts';
 import { openDb } from './db/open.ts';
 import { Supervisor } from './supervisor/supervisor.ts';
 
+ensureWebBuilt();
 const dir = dataDir();
 const port = Number(process.env.VS_PORT ?? DEFAULT_PORT);
 const db = openDb(paths(dir).db);

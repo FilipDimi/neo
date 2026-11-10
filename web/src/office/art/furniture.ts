@@ -141,10 +141,11 @@ export function counter(_node: SceneNode): Container {
   const g = new Graphics();
   g.roundRect(0, 30, 190, 40, 6).fill('#26262A');
   g.roundRect(0, 24, 190, 40, 6).fill('#3A3A40');
-  g.roundRect(20, 0, 40, 34, 6).fill('#45454B'); // the coffee machine, on
-  g.roundRect(22, 2, 36, 30, 4).fill('#2A2A2E');
-  g.circle(40, 16, 4).fill('#7CF0BF');
-  for (const x of [90, 110, 130]) g.roundRect(x, 6, 14, 12, 3).fill('#F4F4F6');
+  // The coffee machine, on. It stands a little right of where the artboard has it, clear of the room's name.
+  g.roundRect(60, 0, 40, 34, 6).fill('#45454B');
+  g.roundRect(62, 2, 36, 30, 4).fill('#2A2A2E');
+  g.circle(80, 16, 4).fill('#7CF0BF');
+  for (const x of [118, 138, 158]) g.roundRect(x, 6, 14, 12, 3).fill('#F4F4F6');
   g.roundRect(10, 100, 160, 36, 18).fill('#1A1A1C'); // a bench nobody is sitting on
   g.roundRect(10, 94, 160, 36, 18).fill('#2A2A2E');
   return at(g);

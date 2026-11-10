@@ -65,7 +65,7 @@ This table is the contract with the engine plan's Tasks 2 and 14. It also answer
 
 **Files:**
 - Create: `web/index.html`, `web/vite.config.ts`, `web/src/main.tsx`, `web/src/tokens.css`, `web/src/tokens.ts`, `web/src/store/reduce.ts`, `web/src/store/store.ts`, `web/src/client/api.ts`, `web/src/client/live.ts`, `web/src/format.ts`
-- Modify: `package.json` (scripts `dev:web`, `build:web`), `vitest.config.ts` (a second project: `web/**/*.spec.{ts,tsx}` in `jsdom`), `tsconfig.json` (include `web`, `jsx: react-jsx`, `lib: DOM`)
+- Modify: `package.json` (scripts `watch:web`, `build:web`; there is no development server, since a second origin would need the token and a way past the Origin check), `vitest.config.ts` (a second project: `web/**/*.spec.{ts,tsx}` in `jsdom`), `tsconfig.json` (include `web`, `jsx: react-jsx`, `lib: DOM`)
 - Test: `web/src/store/reduce.spec.ts`, `web/src/client/live.spec.ts`, `web/src/format.spec.ts`
 
 **Interfaces:**
@@ -179,7 +179,7 @@ it('the decisions button opens the deck and reads its count', …);
 ```
 
 - [ ] **Step 2: Run:** `npx vitest run web/src/frame` — FAIL. **Step 3: Implement.** **Step 4: Run** — PASS.
-- [ ] **Step 5: Look at it:** `npm run demo` and `npm run dev:web`; compare the header and the deck with `docs/design/Board.dc.html` at 1440 × 900.
+- [ ] **Step 5: Look at it:** `npm run demo` and `npm run watch:web`; compare the header and the deck with `docs/design/Board.dc.html` at 1440 × 900.
 - [ ] **Step 6: Commit:** `git add -A && git commit -m "web: the header, the decision deck with its answers, the chat line"`
 
 ### Task 5: The board
@@ -305,7 +305,7 @@ it('has a drawing function for every node kind', () => { for (const kind of ALL_
 ```
 
 - [ ] **Step 2: Run:** `npx vitest run web/src/office/draw.spec.ts` — FAIL. **Step 3: Implement.** **Step 4: Run** — PASS.
-- [ ] **Step 5: Look at it:** `npm run demo` and `npm run dev:web`; put the office beside `docs/design/Office.dc.html` at 1440 × 900 and fix every difference in position, colour and copy; then watch the story play: a screen lights, a pair walks to the meeting room, NH ends on the couch, the tray fills.
+- [ ] **Step 5: Look at it:** `npm run demo` and `npm run watch:web`; put the office beside `docs/design/Office.dc.html` at 1440 × 900 and fix every difference in position, colour and copy; then watch the story play: a screen lights, a pair walks to the meeting room, NH ends on the couch, the tray fills.
 - [ ] **Step 6: Commit:** `git add -A && git commit -m "web: the office drawn in PixiJS"`
 
 ### Task 9: Served by the engine, and the last look

@@ -5,6 +5,7 @@
  */
 import type { EventRow } from '../../../src/shared/events.ts';
 import { EVENT_VERSION } from '../../../src/shared/events.ts';
+import { ApiError } from './api.ts';
 import { fromSnapshot, type Snapshot } from '../store/reduce.ts';
 import type { StoreHandle } from '../store/store.ts';
 
@@ -53,7 +54,9 @@ export function connect(options: { store: StoreHandle; token: string; snapshot: 
         // Offline until the new stream is open: the snapshot is fresh, but nothing is arriving yet.
         store.set({ ...fromSnapshot(snapshot), online: false });
         return open();
-      } catch {
+      } catch (failure) {
+        // The engine answers, but not to this page: it came back with another token. Only a fresh page has the new one.
+        if (failure instanceof ApiError && failure.status === 401) return store.patch({ needsReload: true });
         await new Promise((resolve) => setTimeout(resolve, delay));
         delay = Math.min(delay * 2, 15_000);
       }

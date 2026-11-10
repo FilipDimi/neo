@@ -15,7 +15,7 @@
     "smoke": "tsx scripts/smoke-led-team.ts",
     "demo": "tsx scripts/demo.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "dev:web": "vite --config web/vite.config.ts",
+    "watch:web": "vite build --watch --config web/vite.config.ts",
     "story": "tsx scripts/story.ts"
   },
   "dependencies": {

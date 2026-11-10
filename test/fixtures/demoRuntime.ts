@@ -10,6 +10,10 @@
  *   REDO     the reviewer sends the work back once
  *   LIMIT    the plan's usage limit is reached while it works
  */
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { RuntimeFactory } from '../../src/runtime/sdk.ts';
 import { staged, type Scene } from './staged.ts';
 
@@ -24,10 +28,29 @@ const slug = (text: string): string =>
     .replace(/^-|-$/g, '')
     .slice(0, 30) || 'work';
 
+/**
+ * What the demo's employees remember from one run to the next. Each run is its own worker
+ * process, so the memory is also a file, named after the engine that started the workers.
+ */
+const markerOf = (key: string): string => path.join(os.tmpdir(), `vs-demo-once-${process.ppid}-${createHash('sha1').update(key).digest('hex').slice(0, 12)}`);
+const inWorker = (): boolean => process.send !== undefined;
+const known = (memory: Set<string>, key: string): boolean => memory.has(key) || (inWorker() && fs.existsSync(markerOf(key)));
+function note(memory: Set<string>, key: string): void {
+  memory.add(key);
+  if (inWorker()) fs.writeFileSync(markerOf(key), '');
+}
+/** True the first time it is asked about a key, and never again. */
+function firstTime(memory: Set<string>, key: string): boolean {
+  if (known(memory, key)) return false;
+  note(memory, key);
+  return true;
+}
+
 /** The play, with its pauses supplied by the caller: the demo waits by the clock, the recorded story waits to be released. */
 export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock): (s: Scene) => Promise<void> {
   const sentBack = new Set<string>();
   const limited = new Set<string>();
+  const hung = new Set<string>();
   return async function play(s: Scene): Promise<void> {
   const prompt = s.input.prompt;
   const title = titleOf(s);
@@ -73,9 +96,10 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
       return void (await s.engine('propose_subtasks', { subtasks }));
     }
     case 'work': {
-      if (prompt.includes('HANG')) return new Promise(() => {});
-      if (prompt.includes('LIMIT') && !limited.has(title)) {
-        limited.add(title);
+      // A task that hangs, hangs every time it is tried: the retry is told only to carry on, so the folder is what names the task.
+      if (prompt.includes('HANG')) note(hung, s.cwd);
+      if (known(hung, s.cwd)) return new Promise(() => {});
+      if (prompt.includes('LIMIT') && firstTime(limited, `limit ${title}`)) {
         await s.engine('set_status', { text: `working on ${title.slice(0, 36)}` });
         await wait();
         return s.emit({ kind: 'plan_usage', status: 'rejected', window: 'five_hour', utilization: 1, resetsAt: null });
@@ -93,8 +117,7 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
     case 'review': {
       await s.engine('set_status', { text: `reviewing ${title.slice(0, 40)}` });
       await wait(1.5);
-      if (prompt.includes('REDO') && !sentBack.has(title)) {
-        sentBack.add(title);
+      if (prompt.includes('REDO') && firstTime(sentBack, `redo ${title}`)) {
         return void (await s.engine('submit_review', { verdict: 'send_back', notes: 'Close, but say who it is for in the first line.' }));
       }
       return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));

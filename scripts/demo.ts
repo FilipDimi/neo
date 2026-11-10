@@ -13,11 +13,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildServer, DEFAULT_PORT } from '../src/api/server.ts';
+import { ensureWebBuilt } from '../src/api/webBuild.ts';
 import { paths } from '../src/db/dataDir.ts';
 import { openDb } from '../src/db/open.ts';
 import { Supervisor } from '../src/supervisor/supervisor.ts';
 import { healthyProbes, seedDemoCompany } from './seed-demo.ts';
 
+ensureWebBuilt();
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vs-demo-')));
 const dataDir = path.join(root, 'data');
 const port = Number(process.env.VS_PORT ?? DEFAULT_PORT);
