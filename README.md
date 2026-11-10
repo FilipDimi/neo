@@ -2,7 +2,7 @@
 
 A local-first web app that runs a software company of AI employees and shows it as an office. You set the teams, the roles and the headcount. Every piece of work is a task on a board. Each employee run is a Claude Agent SDK session on this machine's Claude login, started by a supervisor that enforces leases, budgets and limits. Anything beyond a team's limits becomes a decision card for you.
 
-Status: built, except the Receipts dogfood (engine plan task 15), which waits for Filip's go. The engine (plan tasks 1 to 14): supervisor, workers, leases, the team flow, git and gates run by the engine, budgets, health, hiring, chat, and the API. The screen (screen plan tasks 1 to 9): the office, the board and the hire view, with the decision deck and the chat line on each, served by the engine. The office needs WebGL; the board and the hire view do not. The whole branch was reviewed on 2026-11-09 and its fifteen findings fixed; what is still open is in `docs/superpowers/reviews/2026-11-09-branch-review.md`.
+Status: built, and in use on Receipts since 2026-11-09 (engine plan task 15; `docs/dogfood-receipts.md`). The engine (plan tasks 1 to 14): supervisor, workers, leases, the team flow, git and gates run by the engine, budgets, health, hiring, chat, and the API. The screen (screen plan tasks 1 to 9): the office, the board and the hire view, with the decision deck and the chat line on each, served by the engine. The office needs WebGL; the board and the hire view do not. The whole branch was reviewed on 2026-11-09 and again on 2026-11-10, fifteen findings each time, all fixed; what is still open is in `docs/superpowers/reviews/2026-11-09-branch-review.md` and `docs/superpowers/reviews/2026-11-10-second-review.md`.
 
 ## Documents
 
@@ -28,7 +28,7 @@ npm run watch:web   # rebuilds the screen on every save, for working on it again
 npm run story       # records the company day the screen's tests replay (web/src/fixtures/story.json)
 npm test            # unit and integration tests: no model, no network
 npm run typecheck
-npm run smoke       # live: a led team briefs, works, reviews and merges (about six short sessions)
+npm run smoke       # live: a led team briefs, works, reviews and merges (about six short sessions; VS_LIVE_CONCURRENCY=1 runs them one at a time)
 npm run spike       # live: what the Agent SDK does on this login (about 20 short sessions)
 VS_LIVE=1 npx vitest run test/e2e/one-task.spec.ts   # live: one real task, and a refused write
 ```
@@ -37,7 +37,7 @@ Node 20.19 or newer. `npm run spike auth` checks the login with no model turn. T
 
 ## Where the real company runs
 
-The company in `~/.virtual-startup` runs from a release, a copy of one commit under `~/.virtual-startup-app/releases/<commit>` with its own dependencies and built screen; `~/.virtual-startup-app/current` links to the one in use. Editing code here, running tests here, or breaking something here cannot touch a company at work. A fix reaches it in three steps: commit, `npm run release`, then stop the engine and `npm run live`. An engine that is running stays on the release it started from. The two newest releases are kept, so the one before is there to go back to: point `current` at it and start again.
+The company in `~/.virtual-startup` runs from a release, a copy of one commit under `~/.virtual-startup-app/releases/<commit>` with its own dependencies and built screen; `~/.virtual-startup-app/current` links to the one in use. Editing code here, running tests here, or breaking something here cannot touch a company at work. A fix reaches it in three steps: commit, `npm run release`, then stop the engine and `npm run live`. An engine that is running stays on the release it started from, and a release an engine is running from is never removed. The two newest releases are kept besides, so the one before is there to go back to: point `current` at it and start again. A page that was open across the change says so and asks to be reloaded.
 
 ## Runtime
 
