@@ -78,6 +78,11 @@ export function markRunning(root: string, pid: number = process.pid): void {
   fs.writeFileSync(path.join(dir, String(pid)), started === null ? '' : String(started));
 }
 
+/** The engines that are running from this release right now, by process number. */
+export function liveEngines(release: string): number[] {
+  return engines(release).filter((pid) => alive(release, pid));
+}
+
 /** True while an engine that was started from this release is still running. */
 export function inUse(release: string): boolean {
   return engines(release).some((pid) => alive(release, pid));

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { inUse, markRunning, removable } from '../src/release.ts';
+import { inUse, liveEngines, markRunning, removable } from '../src/release.ts';
 import { tempDir } from './helpers.ts';
 
 /** A releases folder with these releases in it, oldest first. */
@@ -59,6 +59,14 @@ describe('a release an engine runs from', () => {
     } finally {
       for (const [name, value] of Object.entries(before)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
     }
+  });
+
+  it('names the engines that are running from it, and none that have ended', () => {
+    const { at } = releases(['a']);
+    markRunning(at('a'), endedPid());
+    expect(liveEngines(at('a'))).toEqual([]);
+    markRunning(at('a'));
+    expect(liveEngines(at('a'))).toEqual([process.pid]);
   });
 
   it('is not marked when the engine runs from a folder that is not a release', () => {
