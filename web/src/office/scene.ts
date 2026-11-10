@@ -136,7 +136,7 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
   const colour: Record<string, string> = { running: '#F5B700', review: '#76D3CC', blocked: '#E0625A', done: '#7CF0BF' };
   const counts = columns.map((column) => ({ label: column.key === 'blocked' ? 'stuck' : column.key, count: column.count, color: colour[column.key] ?? '#F4F4F6' }));
   const silence = longestSilence(liveRuns(store), now);
-  const spend = spendToday(store);
+  const spend = spendToday(store, now);
   const failed = [...store.tasks.values()].filter((task) => task.kind === 'work' && task.state === 'failed').length;
   const things = decisions.length === 0 ? 'Nothing on your desk.' : `${WORDS[decisions.length] ?? decisions.length} thing${decisions.length === 1 ? '' : 's'} on your desk.`;
   const sentence = [

@@ -6,7 +6,7 @@ import { reviewerFor } from '../../../src/supervisor/scheduler.ts';
 import type { Decision, Employee, Run, Task, Team } from '../../../src/shared/types.ts';
 import { ago, attention, cardLine, type Attention } from '../../../src/shared/view.ts';
 import { clock, initials, money } from '../format.ts';
-import type { Store } from '../store/reduce.ts';
+import { dayOf, type Store } from '../store/reduce.ts';
 
 const authored = (run: Run): boolean => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate';
 const isOpen = (decision: Decision): boolean => decision.answeredAt === null;
@@ -28,7 +28,7 @@ export function header(store: Store, now: Date): HeaderView {
     clock: clock(now),
     seatsBusy: liveRuns(store).length,
     seats: store.company?.concurrency ?? 0,
-    spentToday: store.spend.company,
+    spentToday: spendToday(store, now).company,
     capToday: store.company?.dailyCapUsd ?? 0,
     openDecisions: openDecisions(store).length,
     paused: !paused ? null : paused.reason === 'usage_limit' ? `paused at the plan's usage limit${until}` : paused.reason === 'health' ? 'paused: the machine needs attention' : 'paused by you',
@@ -36,7 +36,9 @@ export function header(store: Store, now: Date): HeaderView {
 }
 
 /** Today's spend, once: the header, the board's footer and the office's wall board all read this. */
-export function spendToday(store: Store): { company: number; byTeam: { teamId: string; name: string; usd: number }[] } {
+export function spendToday(store: Store, now?: Date): { company: number; byTeam: { teamId: string; name: string; usd: number }[] } {
+  // What the store holds is for the day it was last added to. Past midnight, today's spend is nothing until something is spent.
+  if (now && dayOf(now) !== store.spendDay) return { company: 0, byTeam: [] };
   const byTeam = [...store.teams.values()].map((team) => ({ teamId: team.id, name: team.name, usd: store.spend.byTeam[team.id] ?? 0 })).filter((team) => team.usd > 0);
   return { company: store.spend.company, byTeam };
 }

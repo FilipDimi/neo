@@ -44,6 +44,8 @@ export type Store = {
   health: HealthReport | null;
   planUsage: PlanUsage | null;
   spend: Spend;
+  /** The local day `spend` is for. Past midnight it is yesterday's, and today's is nothing yet. */
+  spendDay: string;
   lastEventId: number;
   /** The id of the last event about each task, so a view of one task knows when to look again. */
   taskSeq: Record<string, number>;
@@ -51,7 +53,10 @@ export type Store = {
 
 const byId = <T extends { id: string }>(rows: T[]): Map<string, T> => new Map(rows.map((row) => [row.id, row]));
 
-export function fromSnapshot(snapshot: Snapshot): Store {
+/** A local day, as the engine counts spend: from local midnight. */
+export const dayOf = (at: Date): string => `${at.getFullYear()}-${at.getMonth() + 1}-${at.getDate()}`;
+
+export function fromSnapshot(snapshot: Snapshot, now: Date = new Date()): Store {
   return {
     version: snapshot.version,
     online: true,
@@ -68,6 +73,7 @@ export function fromSnapshot(snapshot: Snapshot): Store {
     health: snapshot.health,
     planUsage: snapshot.planUsage,
     spend: snapshot.spend,
+    spendDay: dayOf(now),
     lastEventId: snapshot.lastEventId,
     taskSeq: {},
   };
@@ -113,10 +119,14 @@ export function reduce(store: Store, row: EventRow): Store {
   if (row.event.kind === 'run_event' && row.event.event.kind === 'usage') {
     const { costUsd } = row.event.event;
     const { teamId, employeeId } = row.event;
+    // The first spend of a new day starts from nothing, as the engine's own count does.
+    const day = dayOf(new Date(row.at));
+    const sofar: Spend = day === store.spendDay ? store.spend : { company: 0, byTeam: {}, byEmployee: {} };
+    next.spendDay = day;
     next.spend = {
-      company: store.spend.company + costUsd,
-      byTeam: { ...store.spend.byTeam, [teamId]: (store.spend.byTeam[teamId] ?? 0) + costUsd },
-      byEmployee: { ...store.spend.byEmployee, [employeeId]: (store.spend.byEmployee[employeeId] ?? 0) + costUsd },
+      company: sofar.company + costUsd,
+      byTeam: { ...sofar.byTeam, [teamId]: (sofar.byTeam[teamId] ?? 0) + costUsd },
+      byEmployee: { ...sofar.byEmployee, [employeeId]: (sofar.byEmployee[employeeId] ?? 0) + costUsd },
     };
   }
   return next;

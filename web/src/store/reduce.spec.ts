@@ -1,3 +1,4 @@
+import { header, spendToday } from '../model/select.ts';
 import { describe, expect, it } from 'vitest';
 import type { EngineEvent, EventRow } from '../../../src/shared/events.ts';
 import { subjectsOf } from '../../../src/shared/events.ts';
@@ -51,10 +52,24 @@ describe('the store', () => {
   });
 
   it("adds a turn's usage to the company, the team and the employee spend, and to the run", () => {
-    let store = reduce(fromSnapshot(snapshot()), row({ kind: 'run_started', run: run(), requestId: 'req1', teamId: 'team1' }));
+    let store = reduce(fromSnapshot(snapshot(), T0), row({ kind: 'run_started', run: run(), requestId: 'req1', teamId: 'team1' }));
     store = reduce(store, row({ kind: 'run_event', runId: 'run1', taskId: 'task1', employeeId: 'emp1', teamId: 'team1', event: { kind: 'usage', inputTokens: 5, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.5, sessionCostUsd: 0.5 } }));
     expect(store.spend).toEqual({ company: 1.5, byTeam: { team1: 1.5 }, byEmployee: { emp1: 1.5 } });
     expect(store.runs.get('run1')?.costUsd).toBe(0.5);
+  });
+
+  it("starts today's spend again when the day changes", () => {
+    const usage = (costUsd: number, at: Date) => row({ kind: 'run_event', runId: 'run1', taskId: 'task1', employeeId: 'emp1', teamId: 'team1', event: { kind: 'usage', inputTokens: 5, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd, sessionCostUsd: costUsd } }, at);
+    const tomorrow = new Date(T0.getTime() + 24 * 3600_000);
+    const yesterday = reduce(fromSnapshot(snapshot(), T0), usage(0.5, T0));
+    expect(spendToday(yesterday, T0).company).toBe(1.5);
+    // Past midnight with nothing spent yet: the figure is today's, which is nothing.
+    expect(spendToday(yesterday, tomorrow)).toEqual({ company: 0, byTeam: [] });
+    expect(header(yesterday, tomorrow).spentToday).toBe(0);
+    // The first spend of the new day starts from zero, not from yesterday's total.
+    const today = reduce(yesterday, usage(0.25, tomorrow));
+    expect(today.spend).toEqual({ company: 0.25, byTeam: { team1: 0.25 }, byEmployee: { emp1: 0.25 } });
+    expect(header(today, tomorrow).spentToday).toBe(0.25);
   });
 
   it("sets a run's activity, and renews its lease from the event's time", () => {

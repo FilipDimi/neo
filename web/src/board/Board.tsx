@@ -10,7 +10,7 @@ import { NewTask } from './NewTask.tsx';
 export function Board() {
   const now = useNow();
   const columns = useStore((store) => board(store, now), [now]);
-  const spend = useStore(spendToday);
+  const spend = useStore((store) => spendToday(store, now), [now]);
   const [adding, setAdding] = useState(false);
   return (
     <div className="board-view">
