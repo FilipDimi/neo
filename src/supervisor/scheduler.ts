@@ -29,11 +29,17 @@ export function requestFor(task: Task, team: Team): { mode: RunMode; employeeId:
   return { problem: 'no_lead' };
 }
 
-/** Who reviews a piece of work. Never its author. Null means the gates alone decide. */
-export function reviewerFor(task: Task, team: Team, authorId: string): string | null {
+/**
+ * Who reviews a piece of work. Never its author. On a led team the lead reviews its members,
+ * and a teammate reviews the lead: the first one hired who can read the work. Null means there
+ * is nobody, and the gates alone decide; the merge card then says that nobody reviewed it.
+ */
+export function reviewerFor(task: Task, team: Team, authorId: string, staff: Employee[] = []): string | null {
   if (task.reviewerId) return task.reviewerId === authorId ? null : task.reviewerId;
-  if (team.selfManaged || !team.leadId || team.leadId === authorId) return null;
-  return team.leadId;
+  if (team.selfManaged || !team.leadId) return null;
+  if (team.leadId !== authorId) return team.leadId;
+  const teammate = staff.find((employee) => employee.teamId === team.id && employee.id !== authorId && !employee.fired && employee.capabilities.includes('read_files'));
+  return teammate?.id ?? null;
 }
 
 export function pickNext(input: PickInput): Pick {

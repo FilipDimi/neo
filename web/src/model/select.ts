@@ -95,7 +95,7 @@ function card(store: Store, task: Task, now: Date): BoardCard {
       break;
     case 'review': {
       const author = runs.filter(authored).at(-1)?.employeeId ?? task.assigneeId;
-      const reviewer = live?.mode === 'review' ? live.employeeId : team && author ? reviewerFor(task, team, author) : null;
+      const reviewer = live?.mode === 'review' ? live.employeeId : team && author ? reviewerFor(task, team, author, [...store.employees.values()]) : null;
       line2 = parts(team?.name, `${nameOf(store, author ?? null)} → ${nameOf(store, reviewer)}`);
       break;
     }

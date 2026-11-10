@@ -308,7 +308,7 @@ export class Flow {
   /** The work is committed, owned and green. Someone other than its author reviews it; if there is nobody, the gates have decided. */
   private async workAccepted(run: Run, task: Task): Promise<void> {
     const team = store.getTeam(this.db, task.teamId)!;
-    const reviewerId = reviewerFor(task, team, run.employeeId);
+    const reviewerId = reviewerFor(task, team, run.employeeId, store.allEmployees(this.db));
     const reviewer = reviewerId ? store.getEmployee(this.db, reviewerId) : undefined;
     if (!reviewer || reviewer.fired) return this.finish(task.id);
     const site = this.site(task);
@@ -347,7 +347,9 @@ export class Flow {
       const gates = lastRun?.gateResults ?? [];
       const green = gates.length === 0 ? 'no gates' : gates.every((g) => g.exitCode === 0) ? `gates green (${gates.map((g) => g.name).join(', ')})` : 'gates NOT green';
       // The card says how much stands behind the work, so Merge is never pressed on something nobody looked at without knowing it.
-      const reviewed = store.runsOf(this.db, task.id).some((run) => run.mode === 'review' && run.outcome === 'done');
+      // Reviewed means a review came after the last piece of work. Its run may still be closing: the approval is what brought us here.
+      const runs = store.runsOf(this.db, task.id);
+      const reviewed = runs.some((run, index) => run.mode === 'review' && (run.outcome === 'done' || run.outcome === 'running') && index > runs.findLastIndex(authored));
       const checked = reviewed ? `reviewed, ${green}` : gates.length === 0 ? 'Nobody reviewed it and no gate checked it' : `nobody reviewed it, ${green}`;
       return ask(`Merge "${task.title}" into ${site.teamRepo.baseBranch}? ${checked}; the diff is ${lastRun?.diffLines ?? 0} lines. Merging there is outside the team's limits.`, site.teamRepo.baseBranch);
     }

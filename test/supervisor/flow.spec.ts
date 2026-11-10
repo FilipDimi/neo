@@ -125,9 +125,10 @@ describe('briefing', () => {
     expect(store.runsOf(setup.w.db, parent.id)).toMatchObject([{ outcome: 'stopped', reason: 'briefing' }]);
   });
 
-  it('a lead that reports done from a brief run completes the task without review', async () => {
+  it('a lead that does a task itself from a brief run has it reviewed by a teammate, like any other work', async () => {
     const setup = ledWorld(
       async (s) => {
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
         s.write('NOTE.md', 'small enough to do myself\n');
         await s.engine('report_done', { summary: 'Did it myself.' });
       },
@@ -136,7 +137,7 @@ describe('briefing', () => {
     const task = parentTask(setup.w, { gates: [] });
     await drain(setup);
     expect(store.getTask(setup.w.db, task.id)?.state).toBe('done');
-    expect(store.runsOf(setup.w.db, task.id).map((r) => r.mode)).toEqual(['brief']);
+    expect(store.runsOf(setup.w.db, task.id).map((r) => [r.mode, r.employeeId])).toEqual([['brief', 'lead'], ['review', 'emp1']]);
   });
 });
 
@@ -292,17 +293,50 @@ describe('work and review', () => {
     expect(fs.existsSync(outside)).toBe(false);
   });
 
+  it("has a teammate review a lead's own work before it can reach a merge card", async () => {
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        s.write('GREETING.md', 'hello\n');
+        await s.engine('report_done', { summary: 'Wrote it myself.' });
+      },
+      { mergeTarget: null },
+    );
+    const task = parentTask(setup.w, { assigneeId: 'lead', gates: [] });
+    await drain(setup);
+    expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId, run.outcome])).toEqual([['work', 'lead', 'done'], ['review', 'emp1', 'done']]);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'merge' });
+    expect(card!.text).toMatch(/\? reviewed, no gates;/);
+  });
+
+  it("sends a lead's work back to the lead when the teammate does not pass it", async () => {
+    let reviews = 0;
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'review') return void (await s.engine('submit_review', ++reviews === 1 ? { verdict: 'send_back', notes: 'Say who it is for.' } : { verdict: 'approve', notes: '' }));
+        s.write('GREETING.md', s.resumed ? 'hello, reader\n' : 'hello\n');
+        await s.engine('report_done', { summary: s.resumed ? 'Fixed.' : 'Wrote it myself.' });
+      },
+      { mergeTarget: null },
+    );
+    const task = parentTask(setup.w, { assigneeId: 'lead', gates: [] });
+    await drain(setup);
+    expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId])).toEqual([['work', 'lead'], ['review', 'emp1'], ['work', 'lead'], ['review', 'emp1']]);
+    expect(store.openDecisions(setup.w.db)).toMatchObject([{ kind: 'merge' }]);
+  });
+
   it('says on the merge card when nobody reviewed the work and no gate checked it', async () => {
-    // The lead does the task itself. Nobody reviews a lead's own work, and this task has no gates.
+    // A self-managed team has no reviewer unless the task names one, and this task has no gates.
     const setup = ledWorld(
       async (s) => {
         if (s.mode === 'review') throw new Error('nobody should be reviewing this');
         s.write('GREETING.md', 'hello\n');
         await s.engine('report_done', { summary: 'Wrote it myself.' });
       },
-      { mergeTarget: null },
+      { mergeTarget: null, selfManaged: true },
     );
-    parentTask(setup.w, { assigneeId: 'lead', gates: [] });
+    parentTask(setup.w, { assigneeId: 'emp1', gates: [] });
     await drain(setup);
     const [card] = store.openDecisions(setup.w.db);
     expect(card).toMatchObject({ kind: 'merge' });

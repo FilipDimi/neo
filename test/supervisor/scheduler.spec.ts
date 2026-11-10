@@ -115,7 +115,18 @@ describe('reviewerFor', () => {
     expect(reviewerFor(task(), team({ leadId: 'lead' }), 'emp1')).toBe('lead');
   });
 
-  it('is never the author: null when the lead did the work', () => {
+  it("is a teammate when the lead did the work itself: a lead's work is checked like anyone's", () => {
+    const led = team({ leadId: 'lead' });
+    const staff = [employee({ id: 'lead' }), employee({ id: 'emp1' }), employee({ id: 'emp2' }), employee({ id: 'other', teamId: 'elsewhere' })];
+    expect(reviewerFor(task(), led, 'lead', staff)).toBe('emp1');
+    // Someone who was let go, who cannot read, or who is on another team does not review.
+    expect(reviewerFor(task(), led, 'lead', [employee({ id: 'lead' }), employee({ id: 'emp1', fired: true }), employee({ id: 'emp2' })])).toBe('emp2');
+    expect(reviewerFor(task(), led, 'lead', [employee({ id: 'lead' }), employee({ id: 'emp1', capabilities: ['write_code'] }), employee({ id: 'emp2' })])).toBe('emp2');
+    expect(reviewerFor(task(), led, 'lead', [employee({ id: 'lead' }), employee({ id: 'other', teamId: 'elsewhere' })])).toBeNull();
+  });
+
+  it('is never the author: nobody when the lead did the work and has no teammate', () => {
+    expect(reviewerFor(task(), team({ leadId: 'lead' }), 'lead', [employee({ id: 'lead' })])).toBeNull();
     expect(reviewerFor(task(), team({ leadId: 'lead' }), 'lead')).toBeNull();
   });
 
