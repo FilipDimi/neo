@@ -9,6 +9,8 @@ export class ApiError extends Error {
 }
 
 export const pageToken = (): string => document.querySelector<HTMLMetaElement>('meta[name="vs-token"]')?.content ?? '';
+/** The name of the screen this page is, as the engine wrote it when it served the page. Empty when it did not. */
+export const pageScreen = (): string => document.querySelector<HTMLMetaElement>('meta[name="vs-screen"]')?.content ?? '';
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   let response: Response;

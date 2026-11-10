@@ -10,6 +10,8 @@ export type Spend = { company: number; byTeam: Record<string, number>; byEmploye
 
 export type Snapshot = {
   version: number;
+  /** The name of the screen the engine serves now. A page with another name is an older one. */
+  screen?: string;
   company: Company | null;
   repos: Repo[];
   teams: Team[];

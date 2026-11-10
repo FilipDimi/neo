@@ -245,6 +245,23 @@ describe('Supervisor', () => {
     expect(readEvents(w.db, 0, 1000).some((row) => row.event.kind === 'run_event' && row.event.event.kind === 'usage_so_far')).toBe(false);
   });
 
+  it('charges a run that is in flight when the engine stops for what the model had already used', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn, { employees: [employee({ model: 'claude-haiku-5-5' }), employee({ id: 'emp2', name: 'Grace' })] }));
+    const task = newTask(w);
+    await w.sup.tick();
+    fake.workers[0]!.say(started);
+    fake.workers[0]!.say({ t: 'event', event: { kind: 'usage_so_far', messageId: 'msg-1', inputTokens: 100_000, outputTokens: 4_000, cacheReadTokens: 0, cacheWriteTokens: 0 } });
+    await w.sup.stop();
+
+    // The run is still the next start's to recover, but what it used is on the books already.
+    const [run] = store.runsOf(w.db, task.id);
+    expect(run).toMatchObject({ outcome: 'running', inputTokens: 100_000, outputTokens: 4_000 });
+    expect(run!.costUsd).toBeCloseTo(costOf({ inputTokens: 100_000, outputTokens: 4_000, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 }, 'claude-haiku-5-5'), 6);
+    expect(store.spentOn(w.db, task.id)).toBeCloseTo(run!.costUsd, 6);
+    expect(store.spentOn(w.db, task.id)).toBeGreaterThan(0);
+  });
+
   it("does not charge twice when the turn finishes and reports its own account", async () => {
     const fake = scripted();
     const w = track(world(fake.spawn, { employees: [employee({ model: 'claude-haiku-5-5' }), employee({ id: 'emp2', name: 'Grace' })] }));

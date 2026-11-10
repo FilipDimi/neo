@@ -8,12 +8,14 @@
  *
  * A release is a folder named after its commit under ~/.virtual-startup-app/releases, and
  * `current` is a link to one of them. An engine that is already running keeps the release it
- * started from; it picks up a new one the next time it is started. The two newest are kept.
+ * started from; it picks up a new one the next time it is started. The two newest are kept, and
+ * so is any release an engine is running from.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removable } from '../src/release.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const HOME = path.join(process.env.VS_APP_DIR ?? path.join(os.homedir(), '.virtual-startup-app'));
@@ -57,15 +59,8 @@ fs.symlinkSync(dir, next);
 fs.renameSync(next, CURRENT);
 step(`current is ${sha.slice(0, 12)}`);
 
-// Keep the two newest releases: the current one, and the one before it to go back to.
-const built = fs
-  .readdirSync(RELEASES)
-  .map((name) => path.join(RELEASES, name))
-  .filter((release) => fs.existsSync(path.join(release, 'RELEASE.json')))
-  .sort((a, b) => fs.statSync(path.join(b, 'RELEASE.json')).mtimeMs - fs.statSync(path.join(a, 'RELEASE.json')).mtimeMs);
-const keep = new Set([fs.realpathSync(dir), ...(previous ? [previous] : []), ...built.slice(0, KEPT).map((release) => fs.realpathSync(release))]);
-for (const release of built) {
-  if (keep.has(fs.realpathSync(release))) continue;
+// Keep the two newest releases, the one before this to go back to, and any that an engine is running from right now.
+for (const release of removable(RELEASES, [dir, ...(previous ? [previous] : [])], KEPT)) {
   step(`removing the old release ${path.basename(release)}`);
   fs.rmSync(release, { recursive: true, force: true });
 }

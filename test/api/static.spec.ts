@@ -13,7 +13,7 @@ afterEach(async () => {
   open = undefined;
 });
 
-const PAGE = '<!doctype html><html><head><meta name="vs-token" content=""><title>Virtual startup</title></head><body><div id="root"></div><script type="module" src="/assets/app.js"></script></body></html>';
+const PAGE = '<!doctype html><html><head><meta name="vs-token" content=""><meta name="vs-screen" content=""><title>Virtual startup</title></head><body><div id="root"></div><script type="module" src="/assets/app.js"></script></body></html>';
 
 /** A built app as Vite leaves it: an index and hashed files under assets. */
 function builtApp(): string {
@@ -50,6 +50,21 @@ describe('the engine serves the app', () => {
     expect(script.body).toBe('console.log("the app")');
     expect((await get('/assets/app.css')).headers['content-type']).toMatch(/^text\/css/);
     expect(script.body).not.toContain(token);
+  });
+
+  it('names the screen it serves, in the page and in the snapshot, and the name changes when the built app does', async () => {
+    const dir = builtApp();
+    const { get, token } = await server(dir);
+    const snapshot = async () => (await get('/api/snapshot', { authorization: `Bearer ${token}` })).json() as { screen: string };
+    const inPage = async () => /<meta name="vs-screen" content="([0-9a-f]{12})">/.exec((await get('/')).body)?.[1];
+    const first = await inPage();
+    expect(first).toBeDefined();
+    expect((await snapshot()).screen).toBe(first);
+    // A new build: the page someone still has open carries the old name, and the engine now says another.
+    fs.writeFileSync(path.join(dir, 'index.html'), PAGE.replace('/assets/app.js', '/assets/app-2.js'));
+    const second = (await snapshot()).screen;
+    expect(second).not.toBe(first);
+    expect(await inPage()).toBe(second);
   });
 
   it('serves the plain page when the app is not built', async () => {

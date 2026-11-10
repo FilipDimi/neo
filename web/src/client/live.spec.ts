@@ -29,7 +29,7 @@ class FakeSocket implements SocketLike {
   }
 }
 
-function setup(snapshots: Snapshot[]) {
+function setup(snapshots: Snapshot[], screen?: string) {
   const sockets: FakeSocket[] = [];
   const store = createStore(fromSnapshot(snapshots[0]!));
   let fetched = 0;
@@ -43,6 +43,7 @@ function setup(snapshots: Snapshot[]) {
       return socket;
     },
     retryMs: 10,
+    ...(screen !== undefined && { screen }),
   });
   return { store, sockets, live, fetches: () => fetched };
 }
@@ -117,6 +118,26 @@ describe('the live connection', () => {
     sockets[0]!.say({ resync: true });
     await vi.waitFor(() => expect(store.get().needsReload).toBe(true));
     live.close();
+  });
+
+  it('asks for a reload when the engine now serves another screen than the one this page is', async () => {
+    const { store, sockets, live } = setup([snapshot(7, { screen: 'aaaaaaaaaaaa' }), snapshot(9, { screen: 'bbbbbbbbbbbb' })], 'aaaaaaaaaaaa');
+    sockets[0]!.open();
+    sockets[0]!.say({ resync: true });
+    await vi.waitFor(() => expect(store.get().needsReload).toBe(true));
+    expect(sockets).toHaveLength(1);
+    live.close();
+  });
+
+  it('carries on when the engine serves the same screen, or the page does not know its own', async () => {
+    for (const own of ['aaaaaaaaaaaa', '']) {
+      const { store, sockets, live } = setup([snapshot(7, { screen: 'aaaaaaaaaaaa' }), snapshot(9, { screen: 'aaaaaaaaaaaa' })], own);
+      sockets[0]!.open();
+      sockets[0]!.say({ resync: true });
+      await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      expect(store.get().needsReload).toBe(false);
+      live.close();
+    }
   });
 
   it('asks for a reload, and stops trying, when the engine no longer accepts the token this page was given', async () => {

@@ -4,7 +4,7 @@ import './app/app.css';
 import { UiContext, useApi, type TaskTab, type Ui, type View } from './app/context.ts';
 import { Board } from './board/Board.tsx';
 import { TaskDrawer } from './board/TaskDrawer.tsx';
-import { ApiError, pageToken } from './client/api.ts';
+import { ApiError, pageScreen, pageToken } from './client/api.ts';
 import { connect, type SocketLike } from './client/live.ts';
 import { Company } from './company/Company.tsx';
 import { PersonPage } from './company/PersonPage.tsx';
@@ -44,7 +44,7 @@ export function App({ socket = liveSocket, retryMs = 2000 }: { socket?: () => So
         if (gone) return;
         if (first.version !== EVENT_VERSION) return setWaiting('reload');
         const made = createStore(fromSnapshot(first));
-        live = connect({ store: made, token: pageToken(), snapshot, socket, retryMs });
+        live = connect({ store: made, token: pageToken(), snapshot, socket, retryMs, screen: pageScreen() });
         setStore(made);
       } catch (failure) {
         if (gone) return;

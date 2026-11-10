@@ -7,7 +7,7 @@ import type { Db } from '../db/open.ts';
 import type { Supervisor } from '../supervisor/supervisor.ts';
 import { routes } from './routes.ts';
 import { guard, loadToken } from './security.ts';
-import { WEB_DIST } from './webBuild.ts';
+import { screenId, WEB_DIST } from './webBuild.ts';
 import { eventStream } from './ws.ts';
 
 export const DEFAULT_PORT = 4317;
@@ -50,9 +50,9 @@ function builtFile(root: string, address: string): string | null {
   return fs.realpathSync(file).startsWith(`${fs.realpathSync(root)}${path.sep}`) ? file : null;
 }
 
-/** The page with the per-install token in it. Only a request to our own Host ever gets this far. */
-export function withToken(html: string, token: string): string {
-  return html.replace('<meta name="vs-token" content="">', `<meta name="vs-token" content="${token}">`);
+/** The page with the per-install token in it, and the name of the screen it is. Only a request to our own Host ever gets this far. */
+export function withToken(html: string, token: string, screen = ''): string {
+  return html.replace('<meta name="vs-token" content="">', `<meta name="vs-token" content="${token}">`).replace('<meta name="vs-screen" content="">', `<meta name="vs-screen" content="${screen}">`);
 }
 
 export async function buildServer(options: ServerOptions): Promise<FastifyInstance> {
@@ -67,7 +67,7 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   // The screen. The built app when there is one, the plain page when there is not; looked up on
   // every request, so building while the engine runs is enough. The page carries the token and is never cached.
   const webDir = options.webDir ?? WEB_DIST;
-  const page = (reply: FastifyReply, html: string) => reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').send(withToken(html, token));
+  const page = (reply: FastifyReply, html: string) => reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').send(withToken(html, token, screenId(webDir)));
   const screen = async (request: FastifyRequest, reply: FastifyReply) => {
     const pathname = request.url.split('?')[0]!;
     if (looksLikeApi(pathname)) return reply.code(404).send({ error: 'There is no such address.' });

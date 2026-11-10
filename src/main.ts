@@ -8,11 +8,13 @@
  *   VS_NO_OPEN=1         do not open the browser
  *   VS_RUNTIME_MODULE=…  a module exporting startSession, to run without a model (demos, tests)
  */
+import path from 'node:path';
 import open from 'open';
 import { buildServer, DEFAULT_PORT } from './api/server.ts';
 import { ensureWebBuilt } from './api/webBuild.ts';
 import { dataDir, paths } from './db/dataDir.ts';
 import { openDb } from './db/open.ts';
+import { markRunning } from './release.ts';
 import { Supervisor } from './supervisor/supervisor.ts';
 
 ensureWebBuilt();
@@ -23,6 +25,8 @@ const supervisor = new Supervisor({ db, dataDir: dir, apiPort: port, ...(process
 const app = await buildServer({ db, dataDir: dir, supervisor, port });
 await app.listen({ host: '127.0.0.1', port });
 supervisor.start();
+// When this is a release, say that an engine runs from it, so that making a newer release leaves it in place.
+markRunning(path.resolve(import.meta.dirname, '..'));
 
 const url = `http://127.0.0.1:${port}/`;
 console.log(`The company in ${dir} is running at ${url}`);

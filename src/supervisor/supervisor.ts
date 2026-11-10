@@ -131,7 +131,12 @@ export class Supervisor {
     clearInterval(this.timer);
     clearInterval(this.healthTimer);
     this.timer = undefined;
-    for (const link of this.links.values()) link.kill();
+    // A run cut off here is ended by the next start, which cannot know what its unfinished turn had used: it is put on the books now.
+    for (const [runId, link] of this.links) {
+      const run = store.getRun(this.db, runId);
+      if (run?.outcome === 'running') this.chargeUnfinishedTurn(run);
+      link.kill();
+    }
     this.links.clear();
     await this.settle();
   }

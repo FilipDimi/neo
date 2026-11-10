@@ -2,6 +2,7 @@
  * The web app is built into web/dist, and the engine serves it from there. `npm start` builds it
  * when there is no build or the source has changed since, so one command is always enough.
  */
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,6 +23,12 @@ function newest(dir: string): number {
 }
 
 /** True when there is no build, or something that goes into it is newer than it. */
+/** A name for the screen the engine serves right now. It changes when the built app does, so a page can tell that it is an older one. */
+export function screenId(webDir: string = WEB_DIST): string {
+  const index = path.join(webDir, 'index.html');
+  return fs.existsSync(index) ? createHash('sha256').update(fs.readFileSync(index)).digest('hex').slice(0, 12) : 'plain';
+}
+
 export function webIsStale(webRoot = WEB_ROOT): boolean {
   const built = path.join(webRoot, 'dist/index.html');
   if (!fs.existsSync(built)) return true;

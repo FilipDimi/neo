@@ -3,6 +3,7 @@
  * supervisor or the same write path it uses. The shape of what a screen needs was designed with
  * the screen plan in front of it (docs/superpowers/plans/2026-11-09-virtual-startup-screen.md).
  */
+import { screenId } from './webBuild.ts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { apply, lastEventId, readEvents } from '../db/apply.ts';
@@ -71,7 +72,7 @@ const AnswerBody = z.object({ optionId: text, text: z.string().optional() });
 const record = (map: Map<string, number>): Record<string, number> => Object.fromEntries(map);
 const midnight = (now: Date): string => new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 
-export function routes(app: FastifyInstance, options: { db: Db; dataDir: string; supervisor: Supervisor }): void {
+export function routes(app: FastifyInstance, options: { db: Db; dataDir: string; supervisor: Supervisor; webDir?: string }): void {
   const { db, supervisor } = options;
   const paths = pathsOf(options.dataDir);
   const now = () => supervisor.now();
@@ -109,6 +110,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     const spend = store.spendToday(db, at);
     return {
       version: EVENT_VERSION,
+      screen: screenId(options.webDir),
       company,
       repos: store.allRepos(db),
       teams: store.allTeams(db),

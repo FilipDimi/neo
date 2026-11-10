@@ -11,7 +11,7 @@ import type { StoreHandle } from '../store/store.ts';
 
 export type SocketLike = { send(data: string): void; close(): void; onopen: (() => void) | null; onmessage: ((event: { data: string }) => void) | null; onclose: (() => void) | null };
 
-export function connect(options: { store: StoreHandle; token: string; snapshot: () => Promise<Snapshot>; socket: () => SocketLike; retryMs?: number }): { close(): void } {
+export function connect(options: { store: StoreHandle; token: string; snapshot: () => Promise<Snapshot>; socket: () => SocketLike; retryMs?: number; /** The name of the screen this page is. */ screen?: string }): { close(): void } {
   const { store } = options;
   let closed = false;
   let current: SocketLike | null = null;
@@ -50,7 +50,8 @@ export function connect(options: { store: StoreHandle; token: string; snapshot: 
       try {
         const snapshot = await options.snapshot();
         if (closed) return;
-        if (snapshot.version !== EVENT_VERSION) return store.patch({ needsReload: true });
+        // The engine came back speaking a newer version, or serving a newer screen than this page: only a fresh page is right.
+        if (snapshot.version !== EVENT_VERSION || (options.screen && snapshot.screen && snapshot.screen !== options.screen)) return store.patch({ needsReload: true });
         // Offline until the new stream is open: the snapshot is fresh, but nothing is arriving yet.
         store.set({ ...fromSnapshot(snapshot), online: false });
         return open();
