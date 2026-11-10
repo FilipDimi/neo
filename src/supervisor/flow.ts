@@ -224,7 +224,7 @@ export class Flow {
     const site = this.site(task)!;
     const employee = store.getEmployee(this.db, run.employeeId);
     const author: Identity = { name: employee?.name ?? 'Employee', email: `${run.employeeId}@virtual-startup.invalid` };
-    const commit = await commitAll(site.folder, author, `${task.title}${run.summary ? `\n\n${run.summary}` : ''}`);
+    const commit = await commitAll(site.folder, author, `${task.title}${run.summary ? `\n\n${run.summary}` : ''}`, task.branch ?? undefined);
     await publish(site.repo.path, site.folder, task.branch!);
     const stat = await diffStat(site.folder, this.baseOf(task, site.teamRepo));
     this.change((tx) => tx.emit({ kind: 'run_ended', run: { ...store.getRun(this.db, run.id)!, commit, diffLines: stat.lines }, teamId: site.team.id }));

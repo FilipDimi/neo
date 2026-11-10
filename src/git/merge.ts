@@ -3,19 +3,21 @@
  * folder; a finished branch lands on its target only by fast-forward, and never under a
  * checkout that has uncommitted changes.
  */
-import { git, must, type Identity } from './git.ts';
+import { assertOwnGitDir, git, must, type Identity } from './git.ts';
 import { publish } from './folder.ts';
 
 const names = (text: string): string[] => text.split('\n').filter(Boolean).sort();
 
 /** Whether the folder's branch already contains a published branch. */
 export async function isMerged(dir: string, otherBranch: string): Promise<boolean> {
+  assertOwnGitDir(dir);
   await must(dir, ['fetch', '-q', 'origin', `refs/heads/${otherBranch}`]);
   return (await git(dir, ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'])).code === 0;
 }
 
 /** Merges a published branch into the folder's branch. A conflict is left in the folder for someone to resolve. */
 export async function mergeInto(dir: string, otherBranch: string, engine: Identity): Promise<{ ok: true; commit: string } | { ok: false; conflicts: string[] }> {
+  assertOwnGitDir(dir);
   await must(dir, ['fetch', '-q', 'origin', `refs/heads/${otherBranch}`]);
   const merged = await git(dir, ['merge', '-q', '--no-ff', '--no-edit', '-m', `Merge ${otherBranch}`, 'FETCH_HEAD'], engine);
   if (merged.code === 0) return { ok: true, commit: await must(dir, ['rev-parse', 'HEAD']) };
@@ -39,6 +41,7 @@ async function checkoutOf(repoPath: string, branch: string): Promise<string | nu
  * `recheck` (the gates) must pass on the result. Then the target moves by fast-forward only.
  */
 export async function landOn(repoPath: string, dir: string, branch: string, target: string, engine: Identity, recheck?: () => Promise<boolean>): Promise<Landing> {
+  assertOwnGitDir(dir);
   await must(dir, ['fetch', '-q', 'origin', `refs/heads/${target}`]);
   const upToDate = (await git(dir, ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'])).code === 0;
   if (!upToDate) {
