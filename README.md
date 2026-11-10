@@ -21,6 +21,8 @@ Status: built, and in use on Receipts since 2026-11-09 (engine plan task 15; `do
 ```bash
 npm run release     # copies the last commit to ~/.virtual-startup-app, installs, builds and tests it there, and makes it current
 npm run live        # starts the real company from the current release: the code it runs is never this working folder
+npm run stop        # stops the real company: asks every engine that runs from a release to end, as Ctrl-C would
+npm run mcp         # the company's tools for a Claude session, as a server over stdio (a session starts this itself; see below)
 npm start           # starts an engine from this working folder, for development; do not point it at a company that is at work
 npm run demo        # a throwaway company on a scripted runtime: no model, nothing spent (see scripts/demo.ts for the words that make an employee hang, ask or be refused)
 npm run build:web   # builds the screen into web/dist, which the engine serves; without it the engine serves a plain page
@@ -38,6 +40,18 @@ Node 20.19 or newer. `npm run spike auth` checks the login with no model turn. T
 ## Where the real company runs
 
 The company in `~/.virtual-startup` runs from a release, a copy of one commit under `~/.virtual-startup-app/releases/<commit>` with its own dependencies and built screen; `~/.virtual-startup-app/current` links to the one in use. Editing code here, running tests here, or breaking something here cannot touch a company at work. A fix reaches it in three steps: commit, `npm run release`, then stop the engine and `npm run live`. An engine that is running stays on the release it started from, and a release an engine is running from is never removed. The two newest releases are kept besides, so the one before is there to go back to: point `current` at it and start again. A page that was open across the change says so and asks to be reloaded.
+
+## Tools for a Claude session
+
+The company can be worked from any Claude session on this Mac, and so from a phone through one: `src/mcp/` is a small server with ten tools. `now`, `tasks`, `task`, `cards` and `replies` read and cost nothing. `chat` talks to the chief of staff and `message` to one employee by name; both wait for the reply. `answer_card` presses a button on a card and `new_task` puts work on a team; a session is told to ask first for both. `start` starts the company when it is not running, as a process of its own that outlives the session.
+
+The tools hold nothing and decide nothing: each is a call to the engine's own API on this machine, with the same token the screen uses. A session opened in this folder is offered them through `.mcp.json`. To have them in every session, as jarvis is:
+
+```bash
+claude mcp add --scope user company -- bash -c 'cd "$HOME/.virtual-startup-app/current" && exec node_modules/.bin/tsx src/mcp/server.ts'
+```
+
+They run from the current release, like the company itself.
 
 ## Runtime
 
