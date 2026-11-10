@@ -29,7 +29,7 @@ export const getPlanUsage = (db: Db) => getRow<PlanUsage & { id: string; at: str
 export const allTeams = (db: Db) => rows<Team>(db, 'teams');
 export const allEmployees = (db: Db) => rows<Employee>(db, 'employees');
 export const allRepos = (db: Db) => rows<Repo>(db, 'repos');
-export const allRuns = (db: Db) => rows<Run>(db, 'runs').sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+export const allRuns = (db: Db) => rows<Run>(db, 'runs', 'ORDER BY rowid');
 export const allDecisions = (db: Db) => rows<Decision>(db, 'decisions').sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 
 /** Tasks by priority, then age. */
@@ -46,7 +46,8 @@ export function listTasks(db: Db, where: { state?: TaskState; parentId?: string;
 export const openRequests = (db: Db) => rows<RunRequest>(db, 'run_requests').sort(byAge);
 export const requestsOf = (db: Db, taskId: string) => rows<RunRequest>(db, 'run_requests', 'WHERE task_id = ?', taskId).sort(byAge);
 export const liveRuns = (db: Db) => rows<Run>(db, 'runs', "WHERE outcome = 'running'");
-export const runsOf = (db: Db, taskId: string) => rows<Run>(db, 'runs', 'WHERE task_id = ?', taskId).sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
+/** A task's runs in the order they started. */
+export const runsOf = (db: Db, taskId: string) => rows<Run>(db, 'runs', 'WHERE task_id = ? ORDER BY rowid', taskId);
 export const grantsOf = (db: Db, taskId: string) => rows<Grant>(db, 'grants', 'WHERE task_id = ?', taskId);
 
 export function openDecisions(db: Db, taskId?: string): Decision[] {

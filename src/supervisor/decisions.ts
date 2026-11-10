@@ -199,8 +199,13 @@ function applyEffect(tx: Tx, db: Db, now: Date, decision: Decision, option: Deci
       const working = canTransition(back, 'sent_back') ? move(tx, back, 'sent_back', now) : back;
       return requestAgain(tx, db, now, working, author, 'send_back', `This was sent back to you:\n\n${text?.trim() || 'See the card.'}`);
     }
-    case 'recheck':
-      return requestAgain(tx, db, now, unblock(tx, task, now), last, 'resume', 'Carry on with the task where you left off.');
+    case 'recheck': {
+      const open = unblock(tx, task, now);
+      // A card may name the run it wants (integrate the rest); otherwise the last run carries on.
+      const { mode, employeeId } = option.params ?? {};
+      if (mode === 'integrate' && typeof employeeId === 'string') return void tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode, employeeId, reason: 'integrate' }, now) });
+      return requestAgain(tx, db, now, open, last, 'resume', 'Carry on with the task where you left off.');
+    }
     case 'merge':
     case 'complete':
     case 'accept':

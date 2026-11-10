@@ -9,15 +9,16 @@ import * as store from '../db/store.ts';
 import type { RuntimeEvent } from '../shared/runtime.ts';
 import type { Message, Run, RunOutcome, RunRequest, Task } from '../shared/types.ts';
 import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
+import { GateQueue } from '../git/gates.ts';
 import { envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
 import * as decisions from './decisions.ts';
 import type { TeamView } from './definition.ts';
+import { Flow } from './flow.ts';
 import { buildJob, folderOf } from './jobs.ts';
 import { remember } from './memory.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
 import { pickNext, requestFor } from './scheduler.ts';
-import { canTransition } from './taskState.ts';
 
 export type SupervisorOptions = {
   db: Db;
@@ -57,6 +58,7 @@ export class Supervisor {
   private readonly work = new Set<Promise<void>>();
   private timer: NodeJS.Timeout | undefined;
   private ticking = false;
+  protected readonly flow: Flow;
 
   constructor(options: SupervisorOptions) {
     this.db = options.db;
@@ -66,6 +68,14 @@ export class Supervisor {
     this.runtimeModule = options.runtimeModule;
     this.processes = options.processes ?? processes;
     this.spawn = options.spawn ?? forkSpawn(options.workerEntry ?? DEFAULT_WORKER, { logDir: this.paths.logs });
+    this.flow = new Flow({
+      db: this.db,
+      paths: this.paths,
+      now: this.now,
+      gates: new GateQueue(),
+      engineWork: (taskId, work) => this.engineWork(taskId, work),
+      planRunEnd: (runId, outcome, reason) => void this.planned.set(runId, { outcome, reason }),
+    });
   }
 
   start(): void {
@@ -166,6 +176,7 @@ export class Supervisor {
         if (state === 'failed') this.endRunNow(run, 'stopped', 'task_stopped');
       }
     }
+    this.flow.afterAnswer(answered);
   }
 
   // ---------- the loop ----------
@@ -239,18 +250,17 @@ export class Supervisor {
     );
   }
 
-  /** Anything the engine must do before a run starts on a task (its folder). Returns what to record on the task. */
-  protected async prepare(_task: Task, _request: RunRequest): Promise<Partial<Task>> {
-    return {};
-  }
-
-  private async startRun(request: RunRequest): Promise<void> {
+  private async startRun(asked: RunRequest): Promise<void> {
+    let request = asked;
     const task = store.getTask(this.db, request.taskId)!;
     const team = store.getTeam(this.db, task.teamId)!;
     const employee = store.getEmployee(this.db, request.employeeId)!;
     const company = store.getCompany(this.db)!;
     try {
-      const prepared = { ...task, ...(await this.prepare(task, request)) };
+      // The engine readies the task's folder first; for an integration it also merges the children.
+      const ready = await this.flow.prepare(task, request);
+      const prepared: Task = Object.keys(ready.task).length > 0 ? { ...task, ...ready.task } : task;
+      if (ready.firstTurn) request = { ...request, firstTurn: ready.firstTurn };
       const now = this.now();
       const run = store.newRun(request, now, leaseMinutesFor(request, task, team));
       const messages = store.waitingMessages(this.db, employee.id);
@@ -437,6 +447,12 @@ export class Supervisor {
         this.planned.set(run.id, { outcome: 'stopped', reason: 'question' });
         return { ok: true, text: 'Your question is on the user\'s desk. End your turn now: you will be resumed with the answer.' };
       }
+      case 'propose_subtasks':
+        return this.flow.onProposal(run, input);
+      case 'submit_review':
+        return this.flow.onReview(run, input);
+      case 'run_gate':
+        return this.flow.runGateTool(run, input);
       default:
         return { ok: false, text: `The tool ${name} is not available in this run.` };
     }
@@ -504,10 +520,9 @@ export class Supervisor {
     }
   }
 
-  /** A run finished its work. Without a team flow, that completes the task. */
-  protected async onRunDone(_run: Run, task: Task): Promise<void> {
-    const now = this.now();
-    if (canTransition(task, 'complete')) apply(this.db, (tx) => void decisions.move(tx, task, 'complete', now), now);
+  /** A run finished its part. What happens next depends on its mode and its team: that is the flow. */
+  protected async onRunDone(run: Run, task: Task): Promise<void> {
+    await this.flow.onRunDone(run, task);
   }
 
   private onRunFailed(run: Run, task: Task): void {

@@ -1,0 +1,430 @@
+/**
+ * How work moves through a team: a lead briefs, members work, the engine commits and runs the
+ * gates, a reviewer who is not the author approves or sends back, the lead integrates, and the
+ * result lands where the team may merge, or becomes a decision. Each step that needs a run is a
+ * request for the scheduler; each step the engine does itself (git, gates) happens here.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { apply, type Tx } from '../db/apply.ts';
+import type { Paths } from '../db/dataDir.ts';
+import type { Db } from '../db/open.ts';
+import * as store from '../db/store.ts';
+import { changedFiles, commitAll, diffStat, patch } from '../git/commit.ts';
+import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
+import type { GateQueue } from '../git/gates.ts';
+import type { Identity } from '../git/git.ts';
+import { isMerged, landOn, mergeInto } from '../git/merge.ts';
+import { outside } from '../git/ownership.ts';
+import type { ToolReply } from '../runtime/tools.ts';
+import type { GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
+import { TOOL_INPUT } from '../worker/protocol.ts';
+import { validateProposal } from './briefing.ts';
+import * as decisions from './decisions.ts';
+import { buildFirstTurn } from './definition.ts';
+import { reviewerFor } from './scheduler.ts';
+import { canTransition } from './taskState.ts';
+
+const ENGINE: Identity = { name: 'Virtual Startup', email: 'engine@virtual-startup.invalid' };
+const PATCH_CAP = 20_000;
+const authored = (run: Run): boolean => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate';
+
+export type FlowHost = {
+  db: Db;
+  paths: Paths;
+  now(): Date;
+  gates: GateQueue;
+  /** Runs a piece of engine work for a task; while it runs the task is not idle. */
+  engineWork(taskId: string, work: () => Promise<void>): void;
+  /** How a live run will be recorded when its worker exits. */
+  planRunEnd(runId: string, outcome: RunOutcome, reason: string): void;
+};
+
+export class Flow {
+  private readonly refusedProposals = new Map<string, number>();
+
+  constructor(private readonly host: FlowHost) {}
+
+  private get db(): Db {
+    return this.host.db;
+  }
+
+  private change(write: (tx: Tx, now: Date) => void): void {
+    const now = this.host.now();
+    apply(this.db, (tx) => write(tx, now), now);
+  }
+
+  private site(task: Task): { repo: Repo; teamRepo: TeamRepo; team: Team; folder: string } | null {
+    const team = store.getTeam(this.db, task.teamId);
+    const repo = task.repoId ? store.getRepo(this.db, task.repoId) : undefined;
+    const teamRepo = team?.repos.find((r) => r.repoId === task.repoId);
+    if (!team || !repo || !teamRepo) return null;
+    return { repo, teamRepo, team, folder: task.folder ?? path.join(this.host.paths.folders, task.id) };
+  }
+
+  /** What a task's branch is measured against: its parent's branch, or the team's base. */
+  private baseOf(task: Task, teamRepo: TeamRepo): string {
+    const parent = task.parentId ? store.getTask(this.db, task.parentId) : undefined;
+    return `origin/${parent?.branch ?? teamRepo.baseBranch}`;
+  }
+
+  // ---------- before a run ----------
+
+  /** Makes sure the task has its folder, and for an integration merges the children first. */
+  async prepare(task: Task, request: RunRequest): Promise<{ task: Partial<Task>; firstTurn?: string }> {
+    const site = this.site(task);
+    if (!site) return { task: {} };
+    const changes: Partial<Task> = {};
+    if (!task.folder || !fs.existsSync(task.folder)) {
+      const parent = task.parentId ? store.getTask(this.db, task.parentId) : undefined;
+      // A child starts from its parent's branch, so that branch must be in the user's repository first.
+      if (parent?.branch && parent.folder && fs.existsSync(parent.folder)) await publish(site.repo.path, parent.folder, parent.branch);
+      const dir = path.join(this.host.paths.folders, task.id);
+      const branch = task.branch ?? branchName(task);
+      // A task that was worked before has its branch published: pick up from there.
+      await createFolder({ repoPath: site.repo.path, dir, branch, startPoint: task.branch ? branch : (parent?.branch ?? site.teamRepo.baseBranch) }).catch(async (error) => {
+        if (!task.branch) throw error;
+        await createFolder({ repoPath: site.repo.path, dir, branch, startPoint: parent?.branch ?? site.teamRepo.baseBranch });
+      });
+      Object.assign(changes, { folder: dir, branch });
+    }
+    if (request.mode !== 'integrate' || request.firstTurn) return { task: changes };
+    const ready = { ...task, ...changes };
+    const mergeState = await this.mergeChildren(ready);
+    return { task: changes, firstTurn: buildFirstTurn({ task: ready, mode: 'integrate', team: site.team, repo: site.repo, teammates: [], remainingUsd: 0, material: { mergeState } }) };
+  }
+
+  /** Merges each finished child's branch into the parent's, in creation order, stopping at the first conflict. */
+  private async mergeChildren(parent: Task): Promise<string> {
+    const children = store.listTasks(this.db, { parentId: parent.id }).filter((c) => c.state === 'done' && c.branch).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const lines: string[] = [];
+    for (const [index, child] of children.entries()) {
+      if (await isMerged(parent.folder!, child.branch!)) {
+        lines.push(`- "${child.title}": merged.`);
+        continue;
+      }
+      const merged = await mergeInto(parent.folder!, child.branch!, ENGINE);
+      if (merged.ok) {
+        lines.push(`- "${child.title}": merged.`);
+        continue;
+      }
+      lines.push(`- "${child.title}": CONFLICT in ${merged.conflicts.join(', ')}. The conflict markers are in those files; resolve them.`);
+      for (const later of children.slice(index + 1)) lines.push(`- "${later.title}": not merged yet; the engine merges it after this conflict is resolved.`);
+      break;
+    }
+    return lines.join('\n') || '- (no finished sub-tasks)';
+  }
+
+  // ---------- the engine's tools ----------
+
+  onProposal(run: Run, input: unknown): ToolReply {
+    const { subtasks } = TOOL_INPUT.propose_subtasks.parse(input);
+    const parent = store.getTask(this.db, run.taskId)!;
+    const team = store.getTeam(this.db, parent.teamId)!;
+    const repo = (parent.repoId && store.getRepo(this.db, parent.repoId)) || null;
+    const checked = validateProposal({ parent, team, employees: store.allEmployees(this.db), repo, remainingUsd: parent.capUsd - store.spentOn(this.db, parent.id), subtasks });
+    if (!checked.ok) {
+      const refusals = (this.refusedProposals.get(run.id) ?? 0) + 1;
+      this.refusedProposals.set(run.id, refusals);
+      const why = checked.reasons.map((r) => `- ${r.text}`).join('\n');
+      if (refusals < 2) return { ok: false, text: `The proposal was refused:\n${why}\nFix these and propose again.` };
+      // An invalid briefing is sent back once, then it is the user's to decide.
+      const lead = store.getEmployee(this.db, run.employeeId)?.name ?? 'The lead';
+      this.change((tx, now) =>
+        decisions.raise(tx, this.db, now, { taskId: parent.id, runId: run.id, employeeId: run.employeeId, kind: 'briefing', text: `${lead}'s split of "${parent.title}" was refused twice:\n${why}`, freeText: true, options: decisions.optionsFor('briefing') }),
+      );
+      this.host.planRunEnd(run.id, 'stopped', 'briefing');
+      return { ok: true, text: 'The proposal was refused a second time, so the user has been asked. End your turn now.' };
+    }
+    this.change((tx, now) => {
+      for (const [index, sub] of subtasks.entries()) {
+        // Created a millisecond apart, so that creation order is the order they were proposed in.
+        const child = store.newTask({ ...sub, teamId: parent.teamId, parentId: parent.id, repoId: parent.repoId, createdBy: run.employeeId }, new Date(now.getTime() + index));
+        tx.emit({ kind: 'task_changed', task: child, cause: 'created' });
+        tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: child.id, mode: 'work', employeeId: sub.assigneeId, reason: 'new' }, new Date(now.getTime() + index)) });
+      }
+      decisions.move(tx, store.getTask(this.db, parent.id)!, 'subtasks_created', now);
+    });
+    return { ok: true, text: `Accepted: ${subtasks.length} sub-task${subtasks.length === 1 ? '' : 's'} created and queued. End your turn now.` };
+  }
+
+  onReview(run: Run, input: unknown): ToolReply {
+    const { verdict, notes } = TOOL_INPUT.submit_review.parse(input);
+    const task = store.getTask(this.db, run.taskId)!;
+    const reviewer = store.getEmployee(this.db, run.employeeId)?.name ?? 'The reviewer';
+    if (verdict === 'approve') this.host.engineWork(task.id, () => this.finish(task.id));
+    else if (verdict === 'send_back') this.sendBack(task, `Your work was reviewed by ${reviewer} and sent back:\n\n${notes.trim() || '(no notes)'}\n\nFix it, then call mcp__engine__report_done again.`, `${reviewer} has sent "${task.title}" back`);
+    else
+      this.change((tx, now) =>
+        decisions.raise(tx, this.db, now, { taskId: task.id, runId: run.id, employeeId: run.employeeId, kind: 'review', text: `${reviewer} could not decide on "${task.title}": ${notes.trim() || '(no notes)'}`, freeText: true, options: decisions.optionsFor('review') }),
+      );
+    return { ok: true, text: 'Recorded. End your turn now.' };
+  }
+
+  async runGateTool(run: Run, input: unknown): Promise<ToolReply> {
+    const { name } = TOOL_INPUT.run_gate.parse(input);
+    const task = store.getTask(this.db, run.taskId)!;
+    const site = this.site(task);
+    const gate = site?.repo.gates.find((g) => g.name === name);
+    if (!site || !gate) return { ok: false, text: `There is no gate named "${name}" for this task. The gates are: ${site?.repo.gates.map((g) => g.name).join(', ') || 'none'}.` };
+    const [result] = await this.host.gates.run([gate], site.folder);
+    return { ok: true, text: `${name}: ${result!.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${result!.exitCode})\n${result!.output.slice(-3000)}` };
+  }
+
+  // ---------- after a run ----------
+
+  async onRunDone(run: Run, task: Task): Promise<void> {
+    this.refusedProposals.delete(run.id);
+    switch (run.mode) {
+      case 'route':
+        return this.complete(task.id);
+      case 'review':
+        return; // The verdict was acted on when it was given.
+      case 'brief':
+        if (store.listTasks(this.db, { parentId: task.id }).length > 0) return; // Split: the children carry it from here.
+      // Otherwise the lead did the task itself: it is work like any other.
+      // falls through
+      case 'work': {
+        if (this.site(task)) {
+          await this.commitWork(run, task);
+          if (!this.ownershipHolds(run, await this.changed(task), task)) return;
+          if (!(await this.gatesPass(run.id, task))) return;
+        }
+        return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
+      }
+      case 'integrate': {
+        await this.commitWork(run, task);
+        // A conflict stopped the merging part-way: merge the rest in another integration run.
+        const site = this.site(task)!;
+        for (const child of store.listTasks(this.db, { parentId: task.id }).filter((c) => c.state === 'done' && c.branch)) {
+          if (!(await isMerged(site.folder, child.branch!))) return this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'integrate', employeeId: run.employeeId, reason: 'integrate' }, now) }));
+        }
+        if (!(await this.gatesPass(run.id, task))) return;
+        return this.finish(task.id);
+      }
+    }
+  }
+
+  /** Commits what the run left in the folder, publishes the branch, and records the commit and the size of the diff. */
+  private async commitWork(run: Run, task: Task): Promise<void> {
+    const site = this.site(task)!;
+    const employee = store.getEmployee(this.db, run.employeeId);
+    const author: Identity = { name: employee?.name ?? 'Employee', email: `${run.employeeId}@virtual-startup.invalid` };
+    const commit = await commitAll(site.folder, author, `${task.title}${run.summary ? `\n\n${run.summary}` : ''}`);
+    await publish(site.repo.path, site.folder, task.branch!);
+    const stat = await diffStat(site.folder, this.baseOf(task, site.teamRepo));
+    this.change((tx) => tx.emit({ kind: 'run_ended', run: { ...store.getRun(this.db, run.id)!, commit, diffLines: stat.lines }, teamId: site.team.id }));
+  }
+
+  private async changed(task: Task): Promise<string[]> {
+    const site = this.site(task)!;
+    return changedFiles(site.folder, this.baseOf(task, site.teamRepo));
+  }
+
+  /** Ownership is checked after the work as well as before it: a command can change a file no tool call named. */
+  private ownershipHolds(run: Run, files: string[], task: Task): boolean {
+    const strays = outside(files, task.ownership);
+    if (strays.length === 0) return true;
+    const name = store.getEmployee(this.db, run.employeeId)?.name ?? 'An employee';
+    this.change((tx, now) =>
+      decisions.raise(tx, this.db, now, {
+        taskId: task.id,
+        runId: run.id,
+        employeeId: run.employeeId,
+        kind: 'ownership',
+        text: `${name} changed files outside what "${task.title}" owns (${task.ownership.join(', ')}): ${strays.slice(0, 8).join(', ')}${strays.length > 8 ? ` and ${strays.length - 8} more` : ''}.`,
+        freeText: true,
+        options: decisions.optionsFor('ownership'),
+      }),
+    );
+    return false;
+  }
+
+  /** Runs the task's gates in its folder and stores the real results with the run. A failure sends the work back. */
+  private async gatesPass(runId: string, task: Task): Promise<boolean> {
+    const site = this.site(task);
+    const gates = (site?.repo.gates ?? []).filter((gate) => task.gates.includes(gate.name)).sort((a, b) => task.gates.indexOf(a.name) - task.gates.indexOf(b.name));
+    if (!site || gates.length === 0) return true;
+    const results = await this.host.gates.run(gates, site.folder, {
+      onStart: (gate) => this.change((tx) => tx.emit({ kind: 'gate_started', runId, taskId: task.id, name: gate.name })),
+      onFinish: (result) => this.change((tx) => tx.emit({ kind: 'gate_finished', runId, taskId: task.id, result })),
+    });
+    const failed = results.find((r) => r.exitCode !== 0);
+    if (!failed) return true;
+    this.sendBackForGate(store.getTask(this.db, task.id)!, failed);
+    return false;
+  }
+
+  private sendBackForGate(task: Task, failed: GateResult): void {
+    this.sendBack(
+      task,
+      `The engine ran the gates on your work and "${failed.name}" failed (exit ${failed.exitCode}):\n\`\`\`\n${failed.output.trim().slice(-3000) || '(no output)'}\n\`\`\`\nFix it, then call mcp__engine__report_done again.`,
+      `"${task.title}" failed its gate "${failed.name}"`,
+    );
+  }
+
+  /** Sends work back to its author: the same session resumes with the notes. Bounded: past the team's rounds it is a card. */
+  private sendBack(task: Task, firstTurn: string, what: string): void {
+    const team = store.getTeam(this.db, task.teamId)!;
+    const author = store.runsOf(this.db, task.id).filter(authored).at(-1);
+    const rounds = task.reviewRounds + 1;
+    this.change((tx, now) => {
+      if (!author || rounds > team.maxReviewRounds) {
+        return void decisions.raise(tx, this.db, now, {
+          taskId: task.id,
+          runId: author?.id ?? null,
+          employeeId: author?.employeeId ?? null,
+          kind: 'review',
+          text: `${what}, and it has already been sent back ${task.reviewRounds} time${task.reviewRounds === 1 ? '' : 's'}. Send it back once more, accept it as it is, or stop?`,
+          freeText: true,
+          options: decisions.optionsFor('review'),
+        });
+      }
+      const counted: Task = { ...task, reviewRounds: rounds };
+      if (canTransition(counted, 'sent_back')) decisions.move(tx, counted, 'sent_back', now);
+      else tx.emit({ kind: 'task_changed', task: { ...counted, updatedAt: now.toISOString() }, cause: 'edited' });
+      tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: author.mode === 'integrate' ? 'integrate' : 'work', employeeId: author.employeeId, reason: 'send_back', resumeSessionId: author.sessionId, firstTurn }, now) });
+    });
+  }
+
+  /** The work is committed, owned and green. Someone other than its author reviews it; if there is nobody, the gates have decided. */
+  private async workAccepted(run: Run, task: Task): Promise<void> {
+    const team = store.getTeam(this.db, task.teamId)!;
+    const reviewerId = reviewerFor(task, team, run.employeeId);
+    const reviewer = reviewerId ? store.getEmployee(this.db, reviewerId) : undefined;
+    if (!reviewer || reviewer.fired) return this.finish(task.id);
+    const site = this.site(task);
+    const base = site ? this.baseOf(task, site.teamRepo) : null;
+    const material = {
+      summary: run.summary,
+      gateResults: run.gateResults,
+      ...(site && base ? { diffStat: (await diffStat(site.folder, base)).text, patch: await patch(site.folder, base, PATCH_CAP) } : {}),
+    };
+    const firstTurn = buildFirstTurn({ task, mode: 'review', team, repo: site?.repo ?? null, teammates: [], remainingUsd: 0, material });
+    this.change((tx, now) => {
+      const current = store.getTask(this.db, task.id)!;
+      if (canTransition(current, 'reported_done')) decisions.move(tx, current, 'reported_done', now);
+      tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'review', employeeId: reviewer.id, reason: 'review', firstTurn }, now) });
+    });
+  }
+
+  // ---------- finishing ----------
+
+  /** A top-level task with a repository lands before it is done. Everything else is simply done. */
+  async finish(taskId: string): Promise<void> {
+    const task = store.getTask(this.db, taskId);
+    if (!task || task.state === 'done' || task.state === 'failed') return;
+    if (this.site(task) && task.parentId === null) return this.land(task);
+    return this.complete(taskId);
+  }
+
+  /** Lands the task's branch on a target, or asks. Without a merge target every merge is the user's decision. */
+  async land(task: Task, onto?: string): Promise<void> {
+    const site = this.site(task)!;
+    const target = onto ?? site.teamRepo.mergeTarget;
+    const lastRun = store.runsOf(this.db, task.id).filter(authored).at(-1);
+    const ask = (text: string, to: string) =>
+      this.change((tx, now) => decisions.raise(tx, this.db, now, { taskId: task.id, runId: lastRun?.id ?? null, employeeId: lastRun?.employeeId ?? null, kind: 'merge', text, options: decisions.optionsFor('merge'), subject: { target: to } }));
+    if (!target) {
+      const gates = lastRun?.gateResults ?? [];
+      const green = gates.length === 0 ? 'no gates' : gates.every((g) => g.exitCode === 0) ? `gates green (${gates.map((g) => g.name).join(', ')})` : 'gates NOT green';
+      return ask(`Merge "${task.title}" into ${site.teamRepo.baseBranch}? ${green}, diff ${lastRun?.diffLines ?? 0} lines. Merging there is outside the team's limits.`, site.teamRepo.baseBranch);
+    }
+    let failedGate: GateResult | undefined;
+    const recheck = async () => {
+      const gates = site.repo.gates.filter((gate) => task.gates.includes(gate.name));
+      const results = await this.host.gates.run(gates, site.folder);
+      failedGate = results.find((r) => r.exitCode !== 0);
+      return failedGate === undefined;
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const landing = await landOn(site.repo.path, site.folder, task.branch!, target, ENGINE, recheck);
+      switch (landing.result) {
+        case 'landed':
+          this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(this.db, task.id)!, mergedInto: target, updatedAt: now.toISOString() }, cause: 'edited' }));
+          return this.complete(task.id);
+        case 'checkout_dirty':
+          return ask(`"${task.title}" is ready to merge into ${target}, but your checkout at ${landing.where} has uncommitted changes on that branch, so the engine did not touch it. Merge once it is clean, or keep the branch.`, target);
+        case 'gates_failed':
+          return this.sendBackForGate(store.getTask(this.db, task.id)!, failedGate!);
+        case 'conflict': {
+          // The target moved and conflicts with this work. The merge is left in the folder for the author to resolve.
+          const firstTurn = buildFirstTurn({ task, mode: 'integrate', team: site.team, repo: site.repo, teammates: [], remainingUsd: 0, material: { mergeState: `- ${target} moved while this task was worked on. The engine merged it into your branch: CONFLICT in ${landing.conflicts.join(', ')}. The conflict markers are in those files; resolve them.` } });
+          const who = lastRun?.employeeId ?? site.team.leadId;
+          if (!who) return ask(`"${task.title}" conflicts with ${target} in ${landing.conflicts.join(', ')}, and there is nobody to resolve it.`, target);
+          return this.change((tx, now) => {
+            const current = store.getTask(this.db, task.id)!;
+            if (canTransition(current, 'sent_back')) decisions.move(tx, current, 'sent_back', now);
+            tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'integrate', employeeId: who, reason: 'integrate', firstTurn }, now) });
+          });
+        }
+        case 'target_moved':
+          continue; // Someone else landed first: take their work in and try again.
+      }
+    }
+    throw new Error(`${target} kept moving while "${task.title}" tried to land on it`);
+  }
+
+  /** Marks the task done, clears its folder, and tells its parent. */
+  async complete(taskId: string): Promise<void> {
+    const task = store.getTask(this.db, taskId);
+    if (!task || task.state === 'done' || task.state === 'failed') return;
+    const event = canTransition(task, 'approved') ? 'approved' : 'complete';
+    if (!canTransition(task, event)) return;
+    const site = this.site(task);
+    // A repository task's work lives on in its published branch. A task without one keeps its folder: that is its result.
+    if (site && task.folder) await removeFolder(task.folder);
+    this.change((tx, now) => void decisions.move(tx, store.getTask(this.db, taskId)!, event, now, site ? { folder: null } : {}));
+    if (task.parentId) this.checkParent(task.parentId);
+  }
+
+  /** When the last child of a task is finished, its lead integrates. If one was stopped, the user decides. */
+  checkParent(parentId: string): void {
+    const parent = store.getTask(this.db, parentId);
+    if (!parent || parent.state !== 'running') return;
+    const children = store.listTasks(this.db, { parentId });
+    if (children.length === 0 || children.some((c) => c.state !== 'done' && c.state !== 'failed')) return;
+    if (store.requestsOf(this.db, parentId).length > 0 || store.liveRuns(this.db).some((r) => r.taskId === parentId)) return;
+    const team = store.getTeam(this.db, parent.teamId)!;
+    const leadId = team.leadId ?? store.runsOf(this.db, parentId).find((r) => r.mode === 'brief')?.employeeId;
+    const failed = children.filter((c) => c.state === 'failed');
+    this.change((tx, now) => {
+      if (!leadId) return void decisions.raise(tx, this.db, now, { taskId: parentId, kind: 'staffing', text: decisions.staffingText(parent, 'no_lead'), options: decisions.optionsFor('staffing') });
+      if (failed.length === 0) return void tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: parentId, mode: 'integrate', employeeId: leadId, reason: 'integrate' }, now) });
+      decisions.raise(tx, this.db, now, {
+        taskId: parentId,
+        kind: 'question',
+        text: `${failed.length} of the ${children.length} sub-tasks of "${parent.title}" did not finish: ${failed.map((c) => `"${c.title}"`).join(', ')}. Integrate what was finished, or stop the whole task?`,
+        options: [{ id: 'integrate', label: 'Integrate the rest', effect: 'recheck', params: { mode: 'integrate', employeeId: leadId } }, { id: 'stop', label: 'Stop it', effect: 'stop_task' }],
+      });
+    });
+  }
+
+  // ---------- after the user answers a card ----------
+
+  afterAnswer(answered: decisions.Answered): void {
+    const { decision, effect } = answered;
+    const task = decision.taskId ? store.getTask(this.db, decision.taskId) : undefined;
+    if (!task) return;
+    switch (effect) {
+      case 'merge':
+        return this.host.engineWork(task.id, () => this.land(task, typeof decision.subject?.target === 'string' ? decision.subject.target : undefined));
+      case 'complete': // Keep the branch: done, unmerged.
+        return this.host.engineWork(task.id, () => this.complete(task.id));
+      case 'accept':
+        if (decision.kind !== 'ownership') return this.host.engineWork(task.id, () => this.finish(task.id));
+        // The stray files are accepted: carry on from where the check stopped.
+        return this.host.engineWork(task.id, async () => {
+          const run = decision.runId ? store.getRun(this.db, decision.runId) : undefined;
+          if (!run || !(await this.gatesPass(run.id, task))) return;
+          if (run.mode === 'integrate') return this.finish(task.id);
+          return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
+        });
+      case 'stop_task':
+        if (task.parentId) this.checkParent(task.parentId);
+        return;
+      default:
+        return;
+    }
+  }
+}
