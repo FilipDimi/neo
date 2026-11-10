@@ -22,6 +22,7 @@ const GATES: Gate[] = [
   { name: 'farewell', command: 'test -f FAREWELL.md', timeoutMinutes: 1, lock: null },
   { name: 'no-todo', command: '! grep -rn TODO --include=*.md .', timeoutMinutes: 1, lock: null },
   { name: 'script', command: 'bash check.sh', timeoutMinutes: 1, lock: null },
+  { name: 'both', command: 'test -f GREETING.md && test -f FAREWELL.md', timeoutMinutes: 1, lock: null },
 ];
 
 type Setup = { w: World; fixture: InProcess; repoPath: string | null };
@@ -271,6 +272,57 @@ describe('work and review', () => {
     expect(prompts[1]).toContain('greeting');
     expect(prompts[1]).toContain('exit 1');
     expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', reviewRounds: 1 });
+  });
+
+  it('gives a sub-task whose gate still fails after one send-back to its lead to judge, not back to its author for ever', async () => {
+    // The lead gives each half the gate of the whole. Neither half can make it pass alone: it needs the other.
+    const halves = proposal([
+      { title: 'Greeting', assigneeId: 'emp1', ownership: ['GREETING.md'], gates: ['both'] },
+      { title: 'Farewell', assigneeId: 'emp2', ownership: ['FAREWELL.md'], gates: ['both'] },
+    ]);
+    const sentBack: string[] = [];
+    const reviews: string[] = [];
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'brief') return void (await s.engine('propose_subtasks', halves));
+      if (s.mode === 'review') reviews.push(s.input.prompt);
+      if (s.mode === 'work' && s.resumed) {
+        sentBack.push(s.input.prompt);
+        return void (await s.engine('report_done', { summary: 'My file is there. The gate also needs the other half, which is not mine.' }));
+      }
+      return straight(s);
+    });
+    const parent = parentTask(setup.w, { gates: ['both'] });
+    await drain(setup);
+    // Each author is sent back once, told what to do if the failure is not its own, and then the lead decides.
+    for (const child of store.listTasks(setup.w.db, { parentId: parent.id })) {
+      const runs = store.runsOf(setup.w.db, child.id);
+      expect(runs.map((run) => run.mode), child.title).toEqual(['work', 'work', 'review']);
+      expect(runs.slice(0, 2).map((run) => run.gateResults.map((gate) => [gate.name, gate.exitCode]))).toEqual([[['both', 1]], [['both', 1]]]);
+      expect(child).toMatchObject({ state: 'done', reviewRounds: 1 });
+    }
+    expect(sentBack).toHaveLength(2);
+    for (const turn of sentBack) expect(turn).toMatch(/files this sub-task does not own.*do not ask about it.*report_done again/s);
+    expect(reviews).toHaveLength(2);
+    for (const turn of reviews) {
+      expect(turn).toContain('both: FAILED (exit 1)');
+      expect(turn).toMatch(/The gate both still fails after the author was sent back for it/);
+      expect(turn).toContain('The gate also needs the other half');
+    }
+    // Nobody had to be asked, and on the whole the gate is held as ever: here it passes.
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    expect(store.runsOf(setup.w.db, parent.id).at(-1)).toMatchObject({ mode: 'integrate', gateResults: [{ name: 'both', exitCode: 0 }] });
+    expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+  });
+
+  it('keeps sending a task that is not a sub-task back for a failing gate: there the gate is the user\'s, and it holds', async () => {
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'work') await s.engine('report_done', { summary: 'It is fine, really.' });
+      if (s.mode === 'review') throw new Error('work with a failing gate must not reach review');
+    });
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: ['greeting'] });
+    await drain(setup);
+    expect(store.runsOf(setup.w.db, task.id).map((run) => run.mode)).toEqual(['work', 'work', 'work', 'work']);
+    expect(store.openDecisions(setup.w.db)).toMatchObject([{ kind: 'review', taskId: task.id }]);
   });
 
   it('a file changed outside the ownership raises an ownership card naming it', async () => {

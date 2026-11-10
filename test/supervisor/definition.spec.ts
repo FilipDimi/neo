@@ -115,6 +115,12 @@ describe('buildFirstTurn', () => {
     expect(turn).toMatch(/that is an instruction: split/);
   });
 
+  it('tells a briefing lead which gates a sub-task can carry: only ones that pass with that part alone', () => {
+    const turn = buildFirstTurn({ task: task({ gates: ['all'] }), mode: 'brief', team: led, repo: repo({ gates: [{ name: 'all', command: 'npm test', timeoutMinutes: 5, lock: null }, { name: 'unit', command: 'npm run unit', timeoutMinutes: 5, lock: null }] }), teammates: [lead, ada], remainingUsd: 2 });
+    expect(turn).toMatch(/A sub-task's gates run on that sub-task's work alone/);
+    expect(turn).toMatch(/The gates of this task \(all\) are run on the whole when you put the parts together/);
+  });
+
   it('the review turn carries the summary, the diff stat and the gate results', () => {
     const turn = buildFirstTurn({
       ...base,

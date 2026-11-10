@@ -319,14 +319,39 @@ export class Flow {
     });
     const failed = results.find((r) => r.exitCode !== 0);
     if (!failed) return true;
-    this.sendBackForGate(store.getTask(this.db, task.id)!, failed);
+    const current = store.getTask(this.db, task.id)!;
+    // A sub-task's gates are its lead's choice, and a gate may need more than this one part (each half given the test
+    // suite of the whole). The author is sent back once, to fix what is its own. If the same gate still fails, another
+    // send-back would only repeat it: the lead who chose the gate judges it in review, with the failure in front of it.
+    // The gates of the whole task are the user's, and those hold: they are run when the parts are put together.
+    if (current.parentId && this.failedLastTime(current.id, runId, failed.name) && this.hasReviewer(current, runId)) return true;
+    this.sendBackForGate(current, failed);
     return false;
+  }
+
+  /** True when the piece of work before this one, on the same task, failed the same gate. */
+  private failedLastTime(taskId: string, runId: string, gate: string): boolean {
+    const work = store.runsOf(this.db, taskId).filter(authored);
+    const before = work[work.findIndex((run) => run.id === runId) - 1];
+    return before?.gateResults.some((result) => result.name === gate && result.exitCode !== 0) ?? false;
+  }
+
+  private hasReviewer(task: Task, runId: string): boolean {
+    const run = store.getRun(this.db, runId);
+    const team = store.getTeam(this.db, task.teamId);
+    const reviewerId = run && team ? reviewerFor(task, team, run.employeeId, store.allEmployees(this.db)) : null;
+    const reviewer = reviewerId ? store.getEmployee(this.db, reviewerId) : undefined;
+    return reviewer !== undefined && !reviewer.fired;
   }
 
   private sendBackForGate(task: Task, failed: GateResult): void {
     this.sendBack(
       task,
-      `The engine ran the gates on your work and "${failed.name}" failed (exit ${failed.exitCode}):\n\`\`\`\n${failed.output.trim().slice(-3000) || '(no output)'}\n\`\`\`\nFix it, then call mcp__engine__report_done again.`,
+      `The engine ran the gates on your work and "${failed.name}" failed (exit ${failed.exitCode}):\n\`\`\`\n${failed.output.trim().slice(-3000) || '(no output)'}\n\`\`\`\nFix it, then call mcp__engine__report_done again.${
+        task.parentId
+          ? `\nIf it fails only because of files this sub-task does not own (it owns ${task.ownership.join(', ') || 'everything in its folder'}), do not touch those files and do not ask about it: call mcp__engine__report_done again and say in your summary what the gate needs that is not yours. Your lead decides from there.`
+          : ''
+      }`,
       `"${task.title}" failed its gate "${failed.name}"`,
     );
   }

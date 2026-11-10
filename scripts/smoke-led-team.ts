@@ -3,7 +3,8 @@
  * two engineers work them, the lead reviews and integrates, and the engine lands the result on
  * the team branch. Real sessions on the claude.ai login; a throwaway repository and data directory.
  *
- * Usage: npx tsx scripts/smoke-led-team.ts        (about ten short sessions; VS_LIVE_MODEL picks the model)
+ * Usage: npx tsx scripts/smoke-led-team.ts        (about ten short sessions; VS_LIVE_MODEL picks the model,
+ *        VS_LIVE_CONCURRENCY how many run at once, 3 unless said)
  * The throwaway folder is left in the system temp directory and its path is printed.
  */
 import { execFileSync } from 'node:child_process';
@@ -38,7 +39,7 @@ const company: Company = {
   name: 'Smoke Test Inc.',
   rules: 'Nothing invented. Keep files short.',
   auth: 'subscription',
-  concurrency: 3,
+  concurrency: Number(process.env.VS_LIVE_CONCURRENCY ?? 3),
   dailyCapUsd: 5,
   models: { lead: MODEL, member: MODEL, routine: MODEL },
   denyRead: [],
