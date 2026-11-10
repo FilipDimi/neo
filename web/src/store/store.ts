@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { EventRow } from '../../../src/shared/events.ts';
+import { NowContext } from '../app/context.ts';
 import { reduce, type Store } from './reduce.ts';
 
 export type StoreHandle = {
@@ -48,10 +49,13 @@ export function useStore<T>(select: (store: Store) => T, inputs: unknown[] = [])
 
 /** The clock, ticking. Ages on screen are computed from it, never stored. */
 export function useNow(everyMs = 1000): Date {
-  const [now, setNow] = useState(() => new Date());
+  const fixed = useContext(NowContext);
+  const [ticking, setNow] = useState(() => new Date());
+  const now = fixed ?? ticking;
   useEffect(() => {
+    if (fixed) return;
     const timer = setInterval(() => setNow(new Date()), everyMs);
     return () => clearInterval(timer);
-  }, [everyMs]);
+  }, [everyMs, fixed]);
   return now;
 }

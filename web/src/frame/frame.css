@@ -1,0 +1,26 @@
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.grow { flex-grow: 1; }
+.header { height: 64px; flex: none; padding: 0 24px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--header-line); }
+.header .company { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; white-space: nowrap; }
+.header strong { color: var(--text); font-weight: 600; }
+.header .rule { width: 1px; height: 28px; background: var(--line); margin: 0 4px; }
+.header .paused { font-size: 12px; font-weight: 600; color: var(--waiting); }
+.pills { display: flex; gap: 8px; }
+.pill.small { font-size: 12px; padding: 7px 12px; }
+.pill:disabled { opacity: 0.5; cursor: default; }
+.amber-text { color: var(--waiting); }
+.banner { flex: none; padding: 8px 24px; background: var(--silent-ground); border-bottom: 1px solid var(--silent-edge); color: var(--silent); font-size: 12px; font-weight: 600; }
+.deck { flex: none; padding: 14px 24px; border-bottom: 1px solid var(--header-line); background: #111113; display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; }
+.deck > div { flex: none; }
+.deck .focused .decision { box-shadow: 0 0 0 2px var(--waiting); }
+.decision { width: 360px; margin: 0; padding: 12px 14px; border-radius: var(--deck-card); background: var(--waiting-ground); border: 1px solid var(--waiting-edge); display: flex; flex-direction: column; gap: 8px; }
+.decision-text { margin: 0; font-size: 14px; font-weight: 600; line-height: 19px; overflow-wrap: anywhere; white-space: pre-line; }
+.decision textarea { width: 100%; resize: vertical; font-size: 13px; }
+.decision-buttons { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.deck .aside { align-self: center; }
+.chat { display: flex; flex-direction: column; gap: 6px; }
+.chat-line { height: 54px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 16px; border-radius: var(--pill); background: var(--ground); box-shadow: inset 0 0 0 1px var(--line); }
+.chat-line input { flex-grow: 1; min-width: 0; background: transparent; border: 0; font-size: 12px; outline-offset: 6px; }
+.chat-line .send { font-size: 11px; font-weight: 700; padding: 8px 12px; border-radius: var(--pill); background: var(--text); color: var(--ground); border: 0; }
+.chat-line .send:disabled { opacity: 0.4; cursor: default; }
+.chat-reply { font-size: 12px; color: var(--soft); padding: 0 16px; overflow-wrap: anywhere; }
