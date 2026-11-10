@@ -8,13 +8,13 @@
  *   OUTSIDE  tries to write a file outside its folder (refused, with a card)
  *   ASK      asks the user a question
  *   REDO     the reviewer sends the work back once
+ *   LIMIT    the plan's usage limit is reached while it works
  */
 import type { RuntimeFactory } from '../../src/runtime/sdk.ts';
 import { staged, type Scene } from './staged.ts';
 
 const pace = Number(process.env.VS_DEMO_DELAY_MS ?? 1500);
-const wait = (factor = 1) => new Promise((resolve) => setTimeout(resolve, pace * factor));
-const sentBack = new Set<string>();
+const byTheClock = (factor = 1) => new Promise<void>((resolve) => setTimeout(resolve, pace * factor));
 
 const titleOf = (s: Scene): string => /^# Task: (.+)$/m.exec(s.input.prompt)?.[1] ?? 'the task';
 const slug = (text: string): string =>
@@ -24,7 +24,11 @@ const slug = (text: string): string =>
     .replace(/^-|-$/g, '')
     .slice(0, 30) || 'work';
 
-async function play(s: Scene): Promise<void> {
+/** The play, with its pauses supplied by the caller: the demo waits by the clock, the recorded story waits to be released. */
+export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock): (s: Scene) => Promise<void> {
+  const sentBack = new Set<string>();
+  const limited = new Set<string>();
+  return async function play(s: Scene): Promise<void> {
   const prompt = s.input.prompt;
   const title = titleOf(s);
   switch (s.mode) {
@@ -70,6 +74,12 @@ async function play(s: Scene): Promise<void> {
     }
     case 'work': {
       if (prompt.includes('HANG')) return new Promise(() => {});
+      if (prompt.includes('LIMIT') && !limited.has(title)) {
+        limited.add(title);
+        await s.engine('set_status', { text: `working on ${title.slice(0, 36)}` });
+        await wait();
+        return s.emit({ kind: 'plan_usage', status: 'rejected', window: 'five_hour', utilization: 1, resetsAt: null });
+      }
       await s.engine('set_status', { text: `${s.resumed ? 'fixing' : 'working on'} ${title.slice(0, 36)}` });
       await wait(2);
       if (prompt.includes('ASK') && !s.resumed) return void (await s.engine('request_decision', { question: `For "${title}": should this follow the old layout or the new one?`, options: ['The old layout', 'The new layout'] }));
@@ -95,6 +105,7 @@ async function play(s: Scene): Promise<void> {
       return void (await s.engine('report_done', { summary: `Integrated the parts of "${title}".` }));
     }
   }
+  };
 }
 
-export const startSession: RuntimeFactory = staged(play);
+export const startSession: RuntimeFactory = staged(demoPlay());

@@ -16,6 +16,8 @@ export type Turn = {
   tool(name: string, toolInput: unknown): Promise<boolean>;
   /** A call to one of the engine's tools. */
   engine(name: string, toolInput: unknown): Promise<{ ok: boolean; text: string }>;
+  /** Reports any other event, as the SDK would (the plan's usage notice, an API error). */
+  emit(event: RuntimeEvent): void;
   /** Ends the session with an error result, as the SDK does at a limit. */
   fail(reason: string): never;
 };
@@ -63,6 +65,7 @@ export function fakeRuntime(onTurn: (turn: Turn) => Promise<void> | void = () =>
             text,
             input,
             say: (said) => void out.push({ kind: 'assistant_text', text: said }),
+            emit: (event) => void out.push(event),
             tool: async (name, toolInput) => (await call(name, toolInput, async () => ({ ok: true, text: '' }))).ok,
             engine: (name, toolInput) => call(`mcp__engine__${name}`, toolInput, () => input.engineTools?.call(name as EngineTool, toolInput) ?? Promise.resolve({ ok: false, text: 'no such tool' })),
             fail: (reason) => {
