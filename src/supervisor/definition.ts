@@ -94,7 +94,9 @@ End with one or two plain sentences to the user: what you created and for whom, 
 You are briefing this task. Choose one:
 
 1. Split it. Call mcp__engine__propose_subtasks with one sub-task per piece of work. Each needs an assignee from the list below, a brief that stands on its own, the files or folders it owns, a done-condition and its gates. No two sub-tasks may own the same file or folder. The caps together may not exceed ${usd(input.remainingUsd)}, which is what this task has left.${gateNames.length > 0 ? ` Gates you can name: ${gateNames.join(', ')}.` : ''}
-2. Do it yourself, when it is small enough that splitting would cost more than doing. Then do the work and call mcp__engine__report_done.
+2. Do it yourself, but only when the brief does not ask you to split or assign it, and it is small enough that splitting would cost more than doing. Then do the work and call mcp__engine__report_done.
+
+If the brief says who should do what, or asks for a split, that is an instruction: split.
 
 Who you can assign:
 ${assignable.map((mate) => `- ${mate.name} (assigneeId: ${mate.id}): ${mate.role}`).join('\n') || '- nobody: you have no team members, so do it yourself or ask with mcp__engine__request_decision'}`;
