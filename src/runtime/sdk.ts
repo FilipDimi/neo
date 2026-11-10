@@ -8,21 +8,9 @@
  */
 import { query, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
-export type RuntimeEvent =
-  | { kind: 'session_started'; sessionId: string; model: string; loginSource: string; tools: string[] }
-  | { kind: 'assistant_text'; text: string }
-  | { kind: 'tool_call'; id: string; tool: string; input: unknown }
-  | { kind: 'tool_result'; id: string; ok: boolean }
-  /** One per finished turn: that turn's own tokens and cost, and the session's running cost (it carries over a resume). */
-  | { kind: 'usage'; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number; sessionCostUsd: number }
-  | { kind: 'turn_finished'; sessionId: string; ok: boolean; reason: string; turns: number; denials: string[] }
-  /** The subscription's own limit: sent on every session, and with status "rejected" at the limit. */
-  | { kind: 'plan_usage'; status: string; window: string | null; utilization: number | null; resetsAt: number | null }
-  | { kind: 'api_error'; error: string }
-  | { kind: 'finished'; sessionId: string | null; ok: boolean; reason?: string };
+import type { RuntimeEvent, ToolCall, ToolDecision } from '../shared/runtime.ts';
 
-export type ToolCall = { id: string; tool: string; input: unknown };
-export type ToolDecision = { allow: boolean; reason?: string };
+export type { RuntimeEvent, ToolCall, ToolDecision };
 
 export type SessionInput = {
   cwd: string;

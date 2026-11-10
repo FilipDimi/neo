@@ -28,18 +28,18 @@
 - Commit messages carry no attribution lines. There is no remote; never push.
 - Live tests run only with `VS_LIVE=1`, one at a time, on `VS_LIVE_MODEL` (default `claude-haiku-5-5`).
 
-## Decisions waiting on Filip
+## Filip's decisions
 
-The plan is written on the recommended answer, so nothing here blocks the text. Each is asked, in one short message, before the task that needs it.
+Answered on 2026-11-09 ("Go, as recommended") for 1 to 5. Question 6 is asked at Task 15.
 
-| # | Question | Plan assumes | Needed by |
+| # | Question | Answer | Used by |
 |---|---|---|---|
 | 1 | Caps shown in dollars or tokens | Dollars at list price, as the SDK estimates and enforces them, with the plan's own weekly percentage beside | Task 11, plan 2 |
-| 2 | Model for each preset tier (Receipts rule D-182) | A company setting `models: { lead, member, routine }`, empty until answered | Task 13 |
+| 2 | Model for each preset tier (Receipts rule D-182) | `models: { lead: claude-opus-5-5, member: claude-sonnet-5-5, routine: claude-haiku-5-5 }` by default; the Receipts company sets `member` to `claude-opus-5-5` | Task 13 |
 | 3 | The product's name and final folder | `startup`, provisional | any time |
 | 4 | Can Filip be assigned tasks | No; the "you" card on the Board artboard is illustrative | plan 2 |
 | 5 | Task folder: a clone (prevention) or a linked worktree (detect and repair) | A clone (spike §6) | Task 8 |
-| 6 | Receipts: CLAUDE.md, role mapping, first task, the one-Xcode-run lock | nothing | Task 15 |
+| 6 | Receipts: CLAUDE.md, role mapping, first task, the one-Xcode-run lock | not asked yet | Task 15 |
 
 ## Review Focus
 
@@ -85,6 +85,7 @@ Built: the toolchain; `subscriptionEnv` (`src/runtime/env.ts`); `sanitise` and `
   `company_changed{company}` | `repo_changed{repo}` | `team_changed{team}` | `employee_changed{employee}` | `task_changed{task, cause: 'created'|'state'|'edited'}` | `run_requested{request}` | `run_started{run}` | `run_activity{runId, employeeId, text}` | `run_event{runId, event: RuntimeEvent}` (tool inputs trimmed to 2 KB) | `gate_started{runId, taskId, name}` | `gate_finished{runId, taskId, result}` | `run_ended{run}` | `decision_raised{decision}` | `decision_answered{decision}` | `message_sent{message}` | `message_delivered{message}` | `health_changed{report: HealthReport}` | `plan_usage{status, window, utilization, resetsAt}`.
   `EventRow = { id: number; at: string; taskId: string|null; runId: string|null; employeeId: string|null; event: EngineEvent }`.
 - Produces (`dataDir.ts`): `dataDir(): string` (`VS_DATA_DIR` or `~/.virtual-startup`, created with mode 0700) and `paths(dir): { db; token; folders; memory; mounts; skills; logs }`.
+- As built: each state table stores a row as the JSON of its zod schema, with generated columns for searching, so the schema cannot drift from the types; `apply(db, (tx) => { tx.emit(event) })` is the write path, and one shared function, `changesOf` in `src/shared/project.ts`, turns an event into row changes for the database and for the web app's store alike.
 - Produces (`open.ts`): `openDb(path): Db` (WAL on, `schema.sql` applied idempotently). Tables: `company` (one row), `repos`, `teams`, `employees`, `tasks`, `runs`, `run_requests`, `decisions`, `messages`, `grants`, `events(id INTEGER PRIMARY KEY, at, task_id, run_id, employee_id, team_id, kind, payload)`. Indexes: `events(task_id)`, `events(run_id)`, `events(kind, at)`, `tasks(state)`, `runs(task_id)`, `runs(outcome)`.
 - Produces (`apply.ts`): `apply(db, change: (tx: Tx) => EngineEvent[]): EventRow[]`: runs `change` in one transaction, where `Tx` exposes `upsert(table, row)` and `remove(table, id)`, validates each returned event against the catalogue, appends it, and commits rows and events together. It is the only function that writes state (P74). `readEvents(db, sinceId, limit?, taskId?)`; `replay(db, events): void` upserts the rows events carry into an empty database.
 
