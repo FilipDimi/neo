@@ -3,7 +3,7 @@ import { apply } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import type { ToSupervisor } from '../../src/worker/protocol.ts';
 import { exit, scripted } from '../fixtures/scriptedLink.ts';
-import { employee, plus, run, T0, world, type World } from '../helpers.ts';
+import { employee, plus, run, T0, team, world, type World } from '../helpers.ts';
 
 let open: World | undefined;
 afterEach(async () => {
@@ -146,5 +146,91 @@ describe('the usage limit', () => {
     await w.sup.settle();
     expect(store.openDecisions(w.db)).toHaveLength(1);
     expect(store.openRequests(w.db)).toHaveLength(2);
+  });
+});
+
+describe('daily caps', () => {
+  /** One task runs, spends, and finishes; a second is queued behind it. */
+  async function spentWorld(over: Parameters<typeof world>[1], costUsd: number) {
+    const fake = scripted((worker) => {
+      if (fake.workers.length > 1) return;
+      worker.say(started);
+      worker.say(usage(costUsd));
+      worker.say({ t: 'tool', askId: 'done', name: 'report_done', input: { summary: 'Done.' } });
+      worker.say(exit('done'));
+    });
+    const w = (open = world(fake.spawn, over));
+    newTask(w, { title: 'The first' });
+    await w.sup.tick();
+    await w.sup.settle();
+    const second = newTask(w, { title: 'The second', assigneeId: 'emp2' });
+    return { w, fake, second };
+  }
+
+  it("says so with a card when the company's daily cap stops work, once", async () => {
+    const { w, fake } = await spentWorld({ company: { dailyCapUsd: 1 } }, 1.2);
+    await w.sup.tick();
+    await w.sup.tick();
+    expect(fake.workers).toHaveLength(1); // nothing more starts
+    const cards = store.openDecisions(w.db);
+    expect(cards).toMatchObject([{ kind: 'cap', taskId: null }]);
+    expect(cards[0]!.text).toMatch(/\$1\.20 of today's \$1(\.00)? cap/);
+    expect(cards[0]!.text).toMatch(/1 task is waiting/);
+    expect(cards[0]!.options.map((option) => option.effect)).toEqual(['raise_daily_cap', 'wait']);
+  });
+
+  it('starts the waiting work when the cap is raised from the card', async () => {
+    const { w, fake, second } = await spentWorld({ company: { dailyCapUsd: 1 } }, 1.2);
+    await w.sup.tick();
+    const card = store.openDecisions(w.db)[0]!;
+    w.sup.answer(card.id, { optionId: 'raise' });
+    expect(store.getCompany(w.db)!.dailyCapUsd).toBeGreaterThan(1.2);
+    await w.sup.tick();
+    expect(fake.workers).toHaveLength(2);
+    expect(store.liveRuns(w.db).map((live) => live.taskId)).toEqual([second.id]);
+    expect(store.openDecisions(w.db)).toEqual([]);
+  });
+
+  it('asks only once a day when the answer is to wait, and asks again the next day if work is still stopped', async () => {
+    const { w, fake } = await spentWorld({ company: { dailyCapUsd: 1 } }, 1.2);
+    await w.sup.tick();
+    w.sup.answer(store.openDecisions(w.db)[0]!.id, { optionId: 'wait' });
+    await w.sup.tick();
+    await w.sup.tick();
+    expect(store.openDecisions(w.db)).toEqual([]);
+    expect(fake.workers).toHaveLength(1);
+    // The next day the spend starts from nothing, and the work starts by itself.
+    w.clock.advance(24 * 3600);
+    await w.sup.tick();
+    expect(fake.workers).toHaveLength(2);
+    expect(store.openDecisions(w.db)).toEqual([]);
+  });
+
+  it("says which team's cap it is when a team's daily cap stops its work", async () => {
+    const { w, fake } = await spentWorld({ teams: [team({ selfManaged: true, dailyCapUsd: 0.5 })] }, 0.6);
+    await w.sup.tick();
+    expect(fake.workers).toHaveLength(1);
+    const cards = store.openDecisions(w.db);
+    expect(cards).toMatchObject([{ kind: 'cap', taskId: null }]);
+    expect(cards[0]!.text).toContain(store.getTeam(w.db, 'team1')!.name);
+    w.sup.answer(cards[0]!.id, { optionId: 'raise' });
+    expect(store.getTeam(w.db, 'team1')!.dailyCapUsd).toBeGreaterThan(0.6);
+    await w.sup.tick();
+    expect(fake.workers).toHaveLength(2);
+  });
+
+  it('raises no card when a cap is reached but nothing is waiting', async () => {
+    const fake = scripted((worker) => {
+      worker.say(started);
+      worker.say(usage(1.2));
+      worker.say({ t: 'tool', askId: 'done', name: 'report_done', input: { summary: 'Done.' } });
+      worker.say(exit('done'));
+    });
+    const w = (open = world(fake.spawn, { company: { dailyCapUsd: 1 } }));
+    newTask(w);
+    await w.sup.tick();
+    await w.sup.settle();
+    await w.sup.tick();
+    expect(store.openDecisions(w.db)).toEqual([]);
   });
 });

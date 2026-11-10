@@ -132,6 +132,28 @@ describe('sync', () => {
   });
 });
 
+describe('a redraw while someone is walking', () => {
+  it('forgets the walk of an object it has just removed, so the next frame has nothing dead to move', () => {
+    const room = stage();
+    const moving = tweens();
+    const before = sceneAt('nh_running');
+    const after = sceneAt('lease_card');
+    let drawn = sync(room, before.scene, new Map(), { art: stubArt, tweens: moving });
+    drawn = sync(room, after.scene, drawn, { art: stubArt, tweens: moving });
+    expect(moving.size).toBeGreaterThan(0);
+    const walking = drawn.get(`person:${nh(before.store)}`)!.object as Stub;
+
+    // The window is resized: everything is dropped and drawn again at the new size.
+    drawn = sync(room, [], drawn, { art: stubArt, tweens: moving });
+    expect(walking.destroyed).toBe(true);
+    expect(moving.size).toBe(0);
+    drawn = sync(room, after.scene, drawn, { art: stubArt, tweens: moving });
+    moving.step(0);
+    moving.step(1000);
+    expect(room.children).toHaveLength(after.scene.length);
+  });
+});
+
 describe('the artwork', () => {
   it('has a drawing function for every node kind', () => {
     for (const kind of ALL_KINDS) expect(ART[kind], kind).toBeTypeOf('function');

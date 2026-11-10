@@ -166,7 +166,7 @@ export const RunRequest = z.object({
 });
 export type RunRequest = z.infer<typeof RunRequest>;
 
-export const Effect = z.enum(['retry', 'raise_cap', 'allow_once', 'keep_refused', 'merge', 'complete', 'resume_with_answer', 'send_back', 'accept', 'recheck', 'resume_company', 'stop_task']);
+export const Effect = z.enum(['retry', 'raise_cap', 'allow_once', 'keep_refused', 'merge', 'complete', 'resume_with_answer', 'send_back', 'accept', 'recheck', 'resume_company', 'stop_task', 'raise_daily_cap', 'wait']);
 export type Effect = z.infer<typeof Effect>;
 
 export const DecisionKind = z.enum(['lease', 'failed', 'cap', 'tool', 'merge', 'question', 'briefing', 'review', 'ownership', 'staffing', 'invariant', 'health', 'usage_limit']);

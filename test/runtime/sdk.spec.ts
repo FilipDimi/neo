@@ -249,6 +249,23 @@ describe('startSession', () => {
     expect(allowed).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
   });
 
+  it('refuses a tool call when the decision itself fails, and tells the SDK to block if the hook ever does', async () => {
+    const { queryFn, captured } = fakeQuery([hello]);
+    const handle = startSession(
+      input({
+        decideTool: async () => {
+          throw new Error('the supervisor went away');
+        },
+      }),
+      queryFn,
+    );
+    await drain(handle, (e) => e.kind === 'turn_finished' && handle.end());
+    const matcher = captured.options.hooks.PreToolUse[0];
+    expect(matcher.onFailure).toBe('block');
+    const answer = await matcher.hooks[0]({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'toolu-9' }, 'toolu-9', { signal: new AbortController().signal });
+    expect(answer).toMatchObject({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' } });
+  });
+
   it("refuses anything that still reaches the SDK's own permission prompt", async () => {
     const { queryFn, captured } = fakeQuery([hello]);
     const handle = startSession(input(), queryFn);

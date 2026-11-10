@@ -47,8 +47,11 @@ export function guard(app: FastifyInstance, options: { token: string; port: numb
     const writes = request.method !== 'GET' && request.method !== 'HEAD';
     if ((writes || upgrade) && !hosts.map((host) => `http://${host}`).includes(request.headers.origin ?? '')) return refuse(403, 'This request did not come from the app.');
 
+    // The token is asked for by the route that will answer, not by how the address was spelled:
+    // the router decodes an address before it matches, so `/%61pi/…` is the API too.
     // A browser cannot set a header on a WebSocket, so that one proves itself in its first message instead.
-    if (path.startsWith('/api/') && path !== EVENTS_PATH) {
+    const route = request.routeOptions?.url ?? '';
+    if ((route.startsWith('/api/') || path.startsWith('/api/')) && route !== EVENTS_PATH) {
       const given = /^Bearer (.+)$/.exec(request.headers.authorization ?? '')?.[1] ?? '';
       if (!sameToken(given, options.token)) return refuse(401, 'The token is missing or wrong.');
     }

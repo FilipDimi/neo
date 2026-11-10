@@ -48,7 +48,8 @@ export async function mountCanvas(host: HTMLElement, startScale: number): Promis
   const rebuild = (): void => {
     setQuality(density * scale);
     room.scale.set(scale);
-    drawn = sync(room, [], drawn, { art: ART });
+    // Everything is dropped and drawn again. The walks in flight go with it: a frame must never move something that is gone.
+    drawn = sync(room, [], drawn, art);
     drawn = sync(room, last, drawn, { art: ART });
     repaint();
   };

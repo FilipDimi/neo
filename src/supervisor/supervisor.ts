@@ -318,9 +318,42 @@ export class Supervisor {
         spend,
         blockedRepoIds: this.blockedRepoIds(),
       });
-      if (!picked) return;
+      if (!picked) return this.sayWhichCapStoppedWork(spend);
       if ('problem' in picked) this.dropRequest(picked.request, picked.problem);
       else await this.startRun(picked.request);
+    }
+  }
+
+  /**
+   * Work that waits because a daily cap is spent waits behind a card, not in silence. One card a
+   * day for each cap at each amount: answered "wait", it does not come back until the cap or the day changes.
+   */
+  private sayWhichCapStoppedWork(spend: store.Spend): void {
+    const company = store.getCompany(this.db);
+    if (!company || company.paused) return;
+    const waiting = store.openRequests(this.db).map((request) => store.getTask(this.db, request.taskId)).filter((task): task is Task => task !== undefined && task.state !== 'blocked' && task.state !== 'done' && task.state !== 'failed');
+    if (waiting.length === 0) return;
+    const now = this.now();
+    const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    const asked = new Set(store.allDecisions(this.db).map((decision) => decision.subject?.key));
+    const count = (tasks: Task[]) => `${tasks.length} task${tasks.length === 1 ? ' is' : 's are'} waiting`;
+    const more = (capUsd: number) => Math.max(1, Math.ceil(capUsd / 4));
+    const card = (key: string, text: string, capUsd: number, teamId?: string) => {
+      if (asked.has(key)) return;
+      const options = [
+        { id: 'raise', label: `Raise the daily cap by $${more(capUsd)}`, effect: 'raise_daily_cap' as const, params: { usd: more(capUsd), ...(teamId ? { teamId } : {}) } },
+        { id: 'wait', label: 'Wait until tomorrow', effect: 'wait' as const },
+      ];
+      this.change((tx, at) => void decisions.raise(tx, this.db, at, { taskId: null, kind: 'cap', text, options, subject: { key } }));
+    };
+    if (company.dailyCapUsd > 0 && spend.company >= company.dailyCapUsd) {
+      return card(`daily:company:${day}:${company.dailyCapUsd}`, `${company.name} has spent $${spend.company.toFixed(2)} of today's $${company.dailyCapUsd.toFixed(2)} cap, and ${count(waiting)}. Nothing more starts today unless the cap is raised.`, company.dailyCapUsd);
+    }
+    for (const team of store.allTeams(this.db)) {
+      const spent = spend.byTeam.get(team.id) ?? 0;
+      const theirs = waiting.filter((task) => task.teamId === team.id);
+      if (team.dailyCapUsd <= 0 || spent < team.dailyCapUsd || theirs.length === 0) continue;
+      card(`daily:${team.id}:${day}:${team.dailyCapUsd}`, `The team ${team.name} has spent $${spent.toFixed(2)} of today's $${team.dailyCapUsd.toFixed(2)} cap, and ${count(theirs)}. Nothing more of theirs starts today unless the cap is raised.`, team.dailyCapUsd, team.id);
     }
   }
 

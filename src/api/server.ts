@@ -26,6 +26,15 @@ const TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
+/** An address that is the API's under any spelling. The screen never answers one, not even with its own page. */
+function looksLikeApi(pathname: string): boolean {
+  try {
+    return /^\/+api(\/|$)/i.test(decodeURIComponent(pathname).replace(/\/\.(?=\/)/g, ''));
+  } catch {
+    return true;
+  }
+}
+
 /** A file of the built app, or null: only a real file inside the build, whatever the address tries. */
 function builtFile(root: string, address: string): string | null {
   let pathname: string;
@@ -61,7 +70,7 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   const page = (reply: FastifyReply, html: string) => reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').send(withToken(html, token));
   const screen = async (request: FastifyRequest, reply: FastifyReply) => {
     const pathname = request.url.split('?')[0]!;
-    if (pathname.startsWith('/api/')) return reply.code(404).send({ error: 'There is no such address.' });
+    if (looksLikeApi(pathname)) return reply.code(404).send({ error: 'There is no such address.' });
     const index = path.join(webDir, 'index.html');
     const built = fs.existsSync(index);
     if (pathname === '/') return page(reply, fs.readFileSync(built ? index : PLAIN_PAGE, 'utf8'));

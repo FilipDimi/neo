@@ -35,6 +35,19 @@ describe('the local API is closed to everyone but its own page', () => {
     expect((await app.inject({ method: 'GET', url: '/api/snapshot', headers: { ...ok, host: 'localhost:4317' } })).statusCode).toBe(200);
   });
 
+  it('asks for the token however the address is spelled', async () => {
+    const { app, ok } = await server();
+    const { authorization: _token, ...noToken } = ok;
+    for (const url of ['/%61pi/snapshot', '/api%2Fsnapshot', '/API/snapshot', '//api/snapshot', '/api/../api/snapshot', '/./api/snapshot', '/api/snapshot/', '/api/snapshot?x=1']) {
+      const answer = await app.inject({ method: 'GET', url, headers: noToken });
+      expect(answer.statusCode, url).not.toBe(200);
+      expect(answer.body, url).not.toContain('"company"');
+    }
+    const written = await app.inject({ method: 'POST', url: '/%61pi/tasks', headers: { ...noToken, 'content-type': 'application/json' }, payload: { teamId: 'team1', title: 'Smuggled', brief: 'x' } });
+    expect(written.statusCode).not.toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/%61pi/snapshot', headers: ok })).statusCode).toBe(200);
+  });
+
   it('refuses a request with a foreign Host, which is what DNS rebinding looks like', async () => {
     const { app, ok } = await server();
     for (const host of ['evil.example:4317', '127.0.0.1:9999', 'localhost']) expect((await app.inject({ method: 'GET', url: '/api/snapshot', headers: { ...ok, host } })).statusCode, host).toBe(403);

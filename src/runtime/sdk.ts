@@ -211,10 +211,14 @@ export function startSession(input: SessionInput, queryFn: QueryFn = query): Ses
     hooks: {
       PreToolUse: [
         {
+          // A limit never fails open. If this hook throws or answers nonsense the SDK blocks the call, and a
+          // decision that cannot be reached is a refusal. The worker gives up asking well inside the timeout.
+          onFailure: 'block',
+          timeout: 120,
           hooks: [
             async (hookInput, toolUseId) => {
               if (hookInput.hook_event_name !== 'PreToolUse') return {};
-              const decision = await input.decideTool({ id: toolUseId ?? hookInput.tool_use_id, tool: hookInput.tool_name, input: hookInput.tool_input });
+              const decision = await input.decideTool({ id: toolUseId ?? hookInput.tool_use_id, tool: hookInput.tool_name, input: hookInput.tool_input }).catch((): ToolDecision => ({ allow: false, reason: 'No decision could be reached for this call, so it is refused.' }));
               return {
                 hookSpecificOutput: decision.allow
                   ? { hookEventName: 'PreToolUse', permissionDecision: 'allow' }

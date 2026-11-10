@@ -163,6 +163,15 @@ export function failTree(tx: Tx, db: Db, now: Date, task: Task): void {
 }
 
 function applyEffect(tx: Tx, db: Db, now: Date, decision: Decision, option: DecisionOption, text: string | undefined): void {
+  if (option.effect === 'wait') return; // The card is answered; nothing else changes.
+  if (option.effect === 'raise_daily_cap') {
+    const usd = typeof option.params?.usd === 'number' ? option.params.usd : 0;
+    const team = typeof option.params?.teamId === 'string' ? store.getTeam(db, option.params.teamId) : undefined;
+    const company = store.getCompany(db);
+    if (team) tx.emit({ kind: 'team_changed', team: { ...team, dailyCapUsd: team.dailyCapUsd + usd } });
+    else if (company) tx.emit({ kind: 'company_changed', company: { ...company, dailyCapUsd: company.dailyCapUsd + usd } });
+    return;
+  }
   if (option.effect === 'resume_company') {
     const company = store.getCompany(db);
     if (company?.paused) tx.emit({ kind: 'company_changed', company: { ...company, paused: null } });
