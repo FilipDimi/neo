@@ -12,11 +12,10 @@
     },
     {
       "name": "company",
-      "runtimeExecutable": "env",
+      "runtimeExecutable": "bash",
       "runtimeArgs": [
-        "VS_NO_OPEN=1",
-        "npm",
-        "start"
+        "-c",
+        "cd \"$HOME/.virtual-startup-app/current\" && VS_NO_OPEN=1 exec npm start"
       ],
       "port": 4317
     }

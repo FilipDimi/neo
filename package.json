@@ -16,7 +16,9 @@
     "demo": "tsx scripts/demo.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "watch:web": "vite build --watch --config web/vite.config.ts",
-    "story": "tsx scripts/story.ts"
+    "story": "tsx scripts/story.ts",
+    "release": "tsx scripts/release.ts",
+    "live": "cd \"$HOME/.virtual-startup-app/current\" && npm start"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.321",

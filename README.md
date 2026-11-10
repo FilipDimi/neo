@@ -19,7 +19,9 @@ Status: built, except the Receipts dogfood (engine plan task 15), which waits fo
 ## Commands
 
 ```bash
-npm start           # the company in ~/.virtual-startup (or VS_DATA_DIR), at http://127.0.0.1:4317/; builds the screen first when it is missing or out of date
+npm run release     # copies the last commit to ~/.virtual-startup-app, installs, builds and tests it there, and makes it current
+npm run live        # starts the real company from the current release: the code it runs is never this working folder
+npm start           # starts an engine from this working folder, for development; do not point it at a company that is at work
 npm run demo        # a throwaway company on a scripted runtime: no model, nothing spent (see scripts/demo.ts for the words that make an employee hang, ask or be refused)
 npm run build:web   # builds the screen into web/dist, which the engine serves; without it the engine serves a plain page
 npm run watch:web   # rebuilds the screen on every save, for working on it against `npm run demo`; reload the page
@@ -32,6 +34,10 @@ VS_LIVE=1 npx vitest run test/e2e/one-task.spec.ts   # live: one real task, and 
 ```
 
 Node 20.19 or newer. `npm run spike auth` checks the login with no model turn. The other probes are listed at the top of `scripts/spike-login.ts`.
+
+## Where the real company runs
+
+The company in `~/.virtual-startup` runs from a release, a copy of one commit under `~/.virtual-startup-app/releases/<commit>` with its own dependencies and built screen; `~/.virtual-startup-app/current` links to the one in use. Editing code here, running tests here, or breaking something here cannot touch a company at work. A fix reaches it in three steps: commit, `npm run release`, then stop the engine and `npm run live`. An engine that is running stays on the release it started from. The two newest releases are kept, so the one before is there to go back to: point `current` at it and start again.
 
 ## Runtime
 
