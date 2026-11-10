@@ -45,6 +45,8 @@ export type Store = {
   planUsage: PlanUsage | null;
   spend: Spend;
   lastEventId: number;
+  /** The id of the last event about each task, so a view of one task knows when to look again. */
+  taskSeq: Record<string, number>;
 };
 
 const byId = <T extends { id: string }>(rows: T[]): Map<string, T> => new Map(rows.map((row) => [row.id, row]));
@@ -67,6 +69,7 @@ export function fromSnapshot(snapshot: Snapshot): Store {
     planUsage: snapshot.planUsage,
     spend: snapshot.spend,
     lastEventId: snapshot.lastEventId,
+    taskSeq: {},
   };
 }
 
@@ -78,7 +81,7 @@ const KNOWN = new Set(['company_changed', 'repo_changed', 'team_changed', 'emplo
 
 export function reduce(store: Store, row: EventRow): Store {
   if (row.id <= store.lastEventId) return store; // already applied: a replay overlapped the snapshot
-  const next: Store = { ...store, lastEventId: row.id };
+  const next: Store = { ...store, lastEventId: row.id, taskSeq: row.taskId ? { ...store.taskSeq, [row.taskId]: row.id } : store.taskSeq };
   const copied = new Set<MapTable>();
   const put = (table: MapTable, id: string, value: object | null) => {
     if (!copied.has(table)) {
