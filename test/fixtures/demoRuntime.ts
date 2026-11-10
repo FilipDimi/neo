@@ -21,7 +21,6 @@ import { staged, type Scene } from './staged.ts';
 const pace = Number(process.env.VS_DEMO_DELAY_MS ?? 1500);
 const byTheClock = (factor = 1) => new Promise<void>((resolve) => setTimeout(resolve, pace * factor));
 
-const titleOf = (s: Scene): string => /^# Task: (.+)$/m.exec(s.input.prompt)?.[1] ?? 'the task';
 const slug = (text: string): string =>
   text
     .toLowerCase()
@@ -47,6 +46,27 @@ function firstTime(memory: Set<string>, key: string): boolean {
   return true;
 }
 
+/**
+ * Which task a run is on and where it writes. Only a run's first turn names them; a run that is resumed (after an answer,
+ * a send-back) is told only what is new, so they are remembered by folder.
+ */
+const tasks = new Map<string, { title: string; dir: string }>();
+function taskOf(s: Scene): { title: string; dir: string } {
+  const title = /^# Task: (.+)$/m.exec(s.input.prompt)?.[1];
+  if (title) {
+    const owned = /^Files this task owns: (.+)$/m.exec(s.input.prompt)?.[1]?.split(', ')[0];
+    const found = { title, dir: owned && owned !== 'everything in your folder' ? `${owned}/` : '' };
+    tasks.set(s.cwd, found);
+    if (inWorker()) fs.writeFileSync(markerOf(`task ${s.cwd}`), JSON.stringify(found));
+    return found;
+  }
+  try {
+    return tasks.get(s.cwd) ?? (JSON.parse(fs.readFileSync(markerOf(`task ${s.cwd}`), 'utf8')) as { title: string; dir: string });
+  } catch {
+    return { title: 'the task', dir: '' };
+  }
+}
+
 /** The play, with its pauses supplied by the caller: the demo waits by the clock, the recorded story waits to be released. */
 export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock): (s: Scene) => Promise<void> {
   const sentBack = new Set<string>();
@@ -54,7 +74,7 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
   const hung = new Set<string>();
   return async function play(s: Scene): Promise<void> {
   const prompt = s.input.prompt;
-  const title = titleOf(s);
+  const { title, dir } = taskOf(s);
   switch (s.mode) {
     case 'route': {
       await s.engine('set_status', { text: 'reading your message' });
@@ -110,8 +130,6 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
       if (prompt.includes('NEEDTOOL') && !s.resumed) return void (await s.engine('request_tools', { capabilities: ['web_search'], reason: `to look things up for "${title}"` }));
       if (prompt.includes('ASK') && !s.resumed) return void (await s.engine('request_decision', { question: `For "${title}": should this follow the old layout or the new one?`, options: ['The old layout', 'The new layout'] }));
       if (prompt.includes('OUTSIDE') && !s.resumed) await s.tool('Write', { file_path: '/tmp/vs-demo-outside.txt', content: 'outside' });
-      const owned = /^Files this task owns: (.+)$/m.exec(prompt)?.[1]?.split(', ')[0];
-      const dir = owned && owned !== 'everything in your folder' ? `${owned}/` : '';
       s.write(`${dir}${slug(title)}.md`, `# ${title}\n\nWritten by ${s.who}${s.resumed ? ', revised' : ''}.\n`);
       await wait();
       return void (await s.engine('report_done', { summary: `${s.resumed ? 'Revised' : 'Wrote'} ${dir}${slug(title)}.md for "${title}".` }));
