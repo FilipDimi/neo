@@ -4,6 +4,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { apply, readEvents } from '../../src/db/apply.ts';
@@ -69,6 +70,51 @@ describe.skipIf(!process.env.VS_LIVE)('live: one task', () => {
     expect(started.tools).toContain('mcp__engine__report_done');
     expect(started.tools.filter((t) => t.startsWith('mcp__') && !t.startsWith('mcp__engine__'))).toEqual([]); // no account connectors
     expect(groupOf(run!.pid!)).toEqual([]); // nothing the run started is still alive
+  }, 180_000);
+
+  it("keeps a session's commands out of the folder's git directory, off the network and away from a local port", async () => {
+    const w = liveWorld();
+    sup = w.sup;
+    apply(w.db, (tx) => tx.emit({ kind: 'employee_changed', employee: { ...store.getEmployee(w.db, 'emp1')!, capabilities: ['read_files', 'run_commands', 'write_code'] } }));
+    let reached = 0;
+    const server = http.createServer((_request, reply) => {
+      reached += 1;
+      reply.end('LOCAL-SERVER-REACHED');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const task = w.sup.createTask({
+        teamId: 'team1',
+        assigneeId: 'emp1',
+        title: 'Run four commands',
+        brief: [
+          'This task checks what your commands can reach. Run each of these with the Bash tool, one command per call, exactly as written, and carry on when one fails:',
+          '1. echo ok > inside.txt',
+          '2. touch .git/probe-from-command; echo "git exit $?" > git.txt',
+          `3. curl -s -m 5 http://127.0.0.1:${port}/ > local.txt; echo "curl exit $?" >> local.txt`,
+          '4. curl -s -m 5 https://example.com > outside.txt; echo "curl exit $?" >> outside.txt',
+          'Then call mcp__engine__report_done and say which of the four worked.',
+        ].join('\n'),
+        doneCondition: 'All four commands were run.',
+      });
+      const folder = path.join(w.dir, 'folders', task.id);
+      fs.mkdirSync(path.join(folder, '.git'), { recursive: true }); // as a task with a repository has
+      w.sup.start();
+      await until(() => ['done', 'failed', 'blocked'].includes(store.getTask(w.db, task.id)!.state) && store.liveRuns(w.db).length === 0, 170_000);
+      await w.sup.settle();
+
+      const [run] = store.runsOf(w.db, task.id);
+      const read = (name: string) => (fs.existsSync(path.join(folder, name)) ? fs.readFileSync(path.join(folder, name), 'utf8') : null);
+      console.log(JSON.stringify({ outcome: run?.outcome, reason: run?.reason, summary: run?.summary, git: read('git.txt'), local: read('local.txt'), outside: read('outside.txt')?.slice(0, 80), reached, cards: store.openDecisions(w.db).map((d) => [d.kind, d.text]) }));
+      expect(read('inside.txt')).toContain('ok'); // the folder itself is writable, so the commands did run
+      expect(fs.existsSync(path.join(folder, '.git/probe-from-command'))).toBe(false);
+      expect(read('local.txt') ?? '').not.toContain('LOCAL-SERVER-REACHED');
+      expect(reached).toBe(0);
+      expect(read('outside.txt') ?? '').not.toMatch(/Example Domain/i);
+    } finally {
+      server.close();
+    }
   }, 180_000);
 
   it('refuses a write outside the task folder and raises a card', async () => {
