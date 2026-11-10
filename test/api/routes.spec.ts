@@ -9,7 +9,7 @@ import { loadToken } from '../../src/api/security.ts';
 import { buildServer } from '../../src/api/server.ts';
 import { Supervisor } from '../../src/supervisor/supervisor.ts';
 import { exit, scripted } from '../fixtures/scriptedLink.ts';
-import { employee, gitIn, gitRepo, plus, run, T0, team, tempDir, world, type World } from '../helpers.ts';
+import { employee, gitIn, gitRepo, plus, run, T0, task, team, tempDir, world, type World } from '../helpers.ts';
 
 let stop: (() => Promise<void>) | undefined;
 afterEach(async () => {
@@ -72,7 +72,7 @@ describe('tasks and the snapshot', () => {
     expect((await call('GET', '/api/tasks/nope')).status).toBe(404);
   });
 
-  it("returns a task with its children, runs and events, and leaves yesterday's finished tasks out of the snapshot", async () => {
+  it("returns a task with its children, runs and events, and keeps it in the snapshot after its day is over", async () => {
     const fake = scripted((worker) => worker.say(exit('done')));
     const { call, w } = await fresh(fake.spawn);
     const { json } = await call('POST', '/api/tasks', { teamId: 'team1', assigneeId: 'emp1', title: 'Write the note', brief: 'Write it.' });
@@ -84,8 +84,11 @@ describe('tasks and the snapshot', () => {
     expect(detail.events.map((e: any) => e.event.kind)).toEqual(expect.arrayContaining(['task_changed', 'run_started', 'run_ended']));
     expect(detail.children).toEqual([]);
     expect((await call('GET', '/api/snapshot')).json.tasks).toHaveLength(1);
+    // Two days on it is one of the last things that finished, so the board can still open it.
     w.clock.advance(2 * 86400);
-    expect((await call('GET', '/api/snapshot')).json.tasks).toHaveLength(0);
+    const later = (await call('GET', '/api/snapshot')).json;
+    expect(later.tasks).toMatchObject([{ id: json.task.id, state: 'done' }]);
+    expect(later.runs).toMatchObject([{ taskId: json.task.id }]);
   });
 
   it('cancel fails the task and stops its run', async () => {
@@ -107,6 +110,22 @@ describe('tasks and the snapshot', () => {
     await call('PATCH', `/api/tasks/${json.task.id}`, { priority: 1, assigneeId: 'emp2' });
     expect(store.getTask(w.db, json.task.id)).toMatchObject({ priority: 1, assigneeId: 'emp2' });
     expect(store.openRequests(w.db)).toMatchObject([{ employeeId: 'emp2' }]);
+  });
+
+  it('sends the page what is open, what finished today, and the last five things that finished before today with their runs', async () => {
+    const { call, w } = await fresh();
+    const at = (daysAgo: number, minute: number) => new Date(T0.getTime() - daysAgo * 24 * 3600_000 + minute * 60_000).toISOString();
+    apply(w.db, (tx) => {
+      for (let i = 0; i < 7; i++) tx.emit({ kind: 'task_changed', task: task({ id: `old${i}`, state: 'done', updatedAt: at(2, i) }), cause: 'state' });
+      tx.emit({ kind: 'task_changed', task: task({ id: 'today', state: 'done', updatedAt: T0.toISOString() }), cause: 'state' });
+      tx.emit({ kind: 'task_changed', task: task({ id: 'open', state: 'running', updatedAt: at(3, 0) }), cause: 'state' });
+      tx.emit({ kind: 'task_changed', task: task({ id: 'old-chat', kind: 'chat', state: 'done', updatedAt: at(1, 0) }), cause: 'state' });
+      tx.emit({ kind: 'run_ended', run: run({ id: 'r-old', taskId: 'old6', outcome: 'done' }), teamId: 'team1' });
+      tx.emit({ kind: 'run_ended', run: run({ id: 'r-gone', taskId: 'old0', outcome: 'done' }), teamId: 'team1' });
+    });
+    const snapshot = (await call('GET', '/api/snapshot')).json;
+    expect(snapshot.tasks.map((t: { id: string }) => t.id).sort()).toEqual(['old2', 'old3', 'old4', 'old5', 'old6', 'open', 'today']);
+    expect(snapshot.runs.map((r: { id: string }) => r.id)).toEqual(['r-old']);
   });
 
   it('lists what a task without a repository wrote, with the text of small files, and follows no link out of the folder', async () => {

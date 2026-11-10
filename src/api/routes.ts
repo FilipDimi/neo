@@ -14,6 +14,7 @@ import { folderOf } from '../supervisor/jobs.ts';
 import { writtenFiles } from './files.ts';
 import { PRESETS } from '../presets/presets.ts';
 import { EVENT_VERSION } from '../shared/events.ts';
+import { EARLIER_SHOWN } from '../shared/view.ts';
 import { MODEL_LABELS } from '../shared/prices.ts';
 import { Capability, Company, Gate, ModelTier, Repo, Service, Team, TeamRepo, type Task } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.ts';
@@ -95,8 +96,15 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     const at = now();
     const company = store.getCompany(db) ?? null;
     const since = midnight(at);
-    // Everything still open, and what finished today. Older finished work is history, not the board.
-    const tasks = store.listTasks(db).filter((task) => (task.state !== 'done' && task.state !== 'failed') || task.updatedAt >= since);
+    // Everything still open, what finished today, and the last few things that finished before today,
+    // so that what they produced can still be opened. Work older than that is history, not the board.
+    const all = store.listTasks(db);
+    const over = (task: Task) => task.state === 'done' || task.state === 'failed';
+    const earlier = all
+      .filter((task) => task.kind === 'work' && over(task) && task.updatedAt < since)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id))
+      .slice(0, EARLIER_SHOWN);
+    const tasks = [...all.filter((task) => !over(task) || task.updatedAt >= since), ...earlier];
     const shown = new Set(tasks.map((task) => task.id));
     const spend = store.spendToday(db, at);
     return {

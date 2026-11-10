@@ -162,6 +162,14 @@ describe('officeScene', () => {
     expect(ofKind(officeScene(storyAt('start').store, now), 'button')).toEqual([]);
   });
 
+  it("counts only today's failed tasks on the wall board, whatever older ones the page still holds", () => {
+    const { store, now } = storyAt('cards_answered');
+    const nextDay = new Date(now.getTime() + 24 * 3600_000);
+    expect([...store.tasks.values()].some((task) => task.state === 'failed')).toBe(true);
+    expect(String(ofKind(officeScene(store, now), 'wallboard')[0]!.props.sentence)).toMatch(/failed today/);
+    expect(String(ofKind(officeScene(store, nextDay), 'wallboard')[0]!.props.sentence)).not.toMatch(/failed today/);
+  });
+
   it('says in the kitchen why the company is paused', () => {
     const { store, now } = storyAt('paused');
     const kitchen = officeScene(store, now).find((node) => node.kind === 'label' && node.id === 'kitchen-line')!;

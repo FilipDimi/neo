@@ -137,7 +137,8 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
   const counts = columns.map((column) => ({ label: column.key === 'blocked' ? 'stuck' : column.key, count: column.count, color: colour[column.key] ?? '#F4F4F6' }));
   const silence = longestSilence(liveRuns(store), now);
   const spend = spendToday(store, now);
-  const failed = [...store.tasks.values()].filter((task) => task.kind === 'work' && task.state === 'failed').length;
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const failed = [...store.tasks.values()].filter((task) => task.kind === 'work' && task.state === 'failed' && task.updatedAt >= midnight).length;
   const things = decisions.length === 0 ? 'Nothing on your desk.' : `${WORDS[decisions.length] ?? decisions.length} thing${decisions.length === 1 ? '' : 's'} on your desk.`;
   const sentence = [
     silence ? `Longest silence on the floor ${ago(new Date(now.getTime() - silence.seconds * 1000).toISOString(), now)} against a ${silence.leaseMinutes}-minute lease.` : 'Nobody is running right now.',

@@ -4,7 +4,7 @@
  */
 import { reviewerFor } from '../../../src/supervisor/scheduler.ts';
 import type { Decision, Employee, Run, Task, Team } from '../../../src/shared/types.ts';
-import { ago, attention, cardLine, type Attention } from '../../../src/shared/view.ts';
+import { ago, attention, cardLine, EARLIER_SHOWN, type Attention } from '../../../src/shared/view.ts';
 import { clock, initials, money } from '../format.ts';
 import { dayOf, type Store } from '../store/reduce.ts';
 
@@ -79,7 +79,6 @@ export type Column = { key: ColumnKey; title: string; count: number; cards: Boar
 
 const COLUMNS: [ColumnKey, string][] = [['queued', 'Queued'], ['briefing', 'Briefing'], ['running', 'Running'], ['review', 'Review'], ['blocked', 'Blocked'], ['done', 'Done today']];
 const DONE_SHOWN = 8;
-const EARLIER_SHOWN = 5;
 
 function card(store: Store, task: Task, now: Date): BoardCard {
   const runs = runsOf(store, task.id);

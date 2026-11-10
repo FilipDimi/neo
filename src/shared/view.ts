@@ -30,6 +30,9 @@ export function attention(task: Task, liveRun: Run | undefined, decisions: Decis
   return 'none';
 }
 
+/** How many things that finished before today the board keeps within reach. The engine sends that many; the page shows them. */
+export const EARLIER_SHOWN = 5;
+
 /** Why a task is waiting, in a few words, by the kind of card that is open on it. */
 export const WHY: Record<Decision['kind'], string> = {
   lease: 'lease expired',
