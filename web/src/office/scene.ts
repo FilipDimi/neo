@@ -20,8 +20,14 @@ const LEAD_SHIRT = '#F4F4F6';
 const CHIEF_SHIRT = '#2A2A2E';
 
 /** Where a person stands relative to a member's desk, a lead's desk, the meeting table and the couch, at full size. */
-const AT_DESK = { monitor: { x: 34, y: -14 }, chair: { x: 40, y: 64 }, person: { x: 48, y: 36 }, tag: { x: 26, y: 110, w: 68 }, bubble: { x: 104, y: 24 } };
-const AT_LEAD_DESK = { monitor: { x: 8, y: 60 }, chair: { x: 14, y: 146 }, person: { x: 22, y: 118 }, tag: { x: -2, y: 192, w: 76 }, bubble: { x: -50, y: 136 } };
+type Offsets = { monitor: Point; chair: Point; person: Point; tag: Point & { w: number }; bubble: Point; side: 'left' | 'right' };
+type Point = { x: number; y: number };
+const AT_DESK: Offsets = { monitor: { x: 34, y: -14 }, chair: { x: 40, y: 64 }, person: { x: 48, y: 36 }, tag: { x: 26, y: 110, w: 68 }, bubble: { x: 104, y: 24 }, side: 'right' };
+// A lead's desk stands on end at the right of the rug; the bubble opens to the left of it.
+const AT_LEAD_DESK: Offsets = { monitor: { x: 8, y: 60 }, chair: { x: 14, y: 146 }, person: { x: 22, y: 118 }, tag: { x: -2, y: 192, w: 76 }, bubble: { x: 68, y: 136 }, side: 'left' };
+const AT_CHIEF_DESK: Offsets = { monitor: { x: 16, y: -14 }, chair: { x: 26, y: 72 }, person: { x: 34, y: 44 }, tag: { x: 12, y: 118, w: 68 }, bubble: { x: 170, y: 60 }, side: 'right' };
+const CHIEF_DESK: Rect = { x: 470, y: 540, w: 160, h: 64 };
+const STATUS = { stuck: 'stuck, needs you', meeting: 'in a review', lit: 'working', dark: 'idle' };
 const MEETING_SEATS = [{ x: 1056, y: 216 }, { x: 1240, y: 216 }, { x: 1000, y: 296 }, { x: 1300, y: 296 }, { x: 1148, y: 216 }, { x: 1148, y: 372 }];
 const COUCH_SEATS = [{ x: 908, y: 580 }, { x: 952, y: 580 }, { x: 996, y: 580 }, { x: 880, y: 580 }];
 
@@ -57,25 +63,27 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
   // ---------- one seat per person ----------
   const meeting: string[] = [];
   const couch: string[] = [];
-  function seat(employeeId: string, desk: Rect, scale: number, isLead: boolean, shirt: string): void {
+  const people = new Map<string, Record<string, unknown>>();
+  /** A desk with its screen and chair, and the person at it unless they are in the meeting room or on the couch. */
+  function seat(employeeId: string, desk: Rect, scale: number, offsets: Offsets, shirt: string): void {
     const employee = store.employees.get(employeeId)!;
     const at = placed.get(employeeId)!;
-    const offsets = isLead ? AT_LEAD_DESK : AT_DESK;
-    const place = (offset: { x: number; y: number }, w: number, h: number): Rect => ({ x: desk.x + offset.x * scale, y: desk.y + offset.y * scale, w: w * scale, h: h * scale });
-    add(node(`desk:${employeeId}`, 'desk', desk, { lead: isLead, scale }));
-    add(node(`monitor:${employeeId}`, 'monitor', place(offsets.monitor, 52, 34), { lit: at.where === 'desk' && at.screen === 'lit', employeeId, scale }));
+    const lit = at.where === 'desk' && at.screen === 'lit';
+    const place = (offset: Point, w: number, h: number): Rect => ({ x: desk.x + offset.x * scale, y: desk.y + offset.y * scale, w: w * scale, h: h * scale });
+    add(node(`desk:${employeeId}`, 'desk', desk, { lead: offsets === AT_LEAD_DESK, scale }));
+    add(node(`monitor:${employeeId}`, 'monitor', place(offsets.monitor, 52, 34), { lit, employeeId, scale, taskId: lit ? at.taskId : null, name: employee.name }));
     add(node(`chair:${employeeId}`, 'chair', place(offsets.chair, 40, 40), { scale }));
-    const props = { employeeId, name: employee.name, shirt, skin: SKIN[hash(employeeId) % SKIN.length], where: at.where, tone: at.tone, decisionId: at.decisionId, taskId: at.taskId };
+    const status = at.where === 'desk' ? STATUS[at.screen] : STATUS[at.where];
+    const props = { employeeId, name: employee.name, shirt, skin: SKIN[hash(employeeId) % SKIN.length], where: at.where, tone: at.tone, status, saying: at.bubble, decisionId: at.decisionId, taskId: at.taskId };
     if (at.where === 'meeting') return void (meeting.push(employeeId), people.set(employeeId, props));
     if (at.where === 'stuck') return void (couch.push(employeeId), people.set(employeeId, props));
     add(node(`person:${employeeId}`, 'person', place(offsets.person, 24, 46), { ...props, scale }));
-    add(node(`tag:${employeeId}`, 'tag', { ...place(offsets.tag, offsets.tag.w, 18), h: 18 }, { text: tagText(employee.name), tone: at.screen === 'lit' ? 'active' : 'idle' }));
+    add(node(`tag:${employeeId}`, 'tag', { ...place(offsets.tag, offsets.tag.w, 18), h: 18 }, { text: tagText(employee.name), tone: lit ? 'active' : 'idle' }));
     if (at.bubble) {
       const anchor = place(offsets.bubble, 0, 0);
-      add(node(`bubble:${employeeId}`, 'bubble', { x: anchor.x, y: anchor.y, w: 0, h: 22 }, { text: at.bubble, tone: 'plain', side: isLead ? 'left' : 'right', taskId: at.taskId }));
+      add(node(`bubble:${employeeId}`, 'bubble', { x: anchor.x, y: anchor.y, w: 0, h: 22 }, { text: at.bubble, tone: 'plain', side: offsets.side, taskId: at.taskId }));
     }
   }
-  const people = new Map<string, Record<string, unknown>>();
 
   const rects = rugs(teams.length);
   for (const [index, team] of teams.entries()) {
@@ -85,26 +93,13 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
     const members = staff.filter((employee) => employee.teamId === team.id && employee.id !== lead?.id && employee.id !== chief?.id);
     add(node(`rug:${team.id}`, 'rug', rug, { label: team.name, style: 'team', fill: palette.rug, edge: palette.edge, labelColor: palette.label }));
     const seated = seats(rug, members.length, Boolean(lead));
-    for (const [i, member] of members.entries()) seat(member.id, seated.desks[i]!, seated.scale, false, palette.shirt);
-    if (lead && seated.lead) seat(lead.id, seated.lead, seated.scale, true, LEAD_SHIRT);
+    for (const [i, member] of members.entries()) seat(member.id, seated.desks[i]!, seated.scale, AT_DESK, palette.shirt);
+    if (lead && seated.lead) seat(lead.id, seated.lead, seated.scale, AT_LEAD_DESK, LEAD_SHIRT);
   }
 
   // The chief of staff: a wider desk with a tray of envelopes, one per decision waiting for the user.
-  if (chief) {
-    const at = placed.get(chief.id)!;
-    add(node(`desk:${chief.id}`, 'desk', { x: 470, y: 540, w: 160, h: 64 }, { lead: false, scale: 1 }));
-    add(node(`monitor:${chief.id}`, 'monitor', { x: 486, y: 526, w: 52, h: 34 }, { lit: at.where === 'desk' && at.screen === 'lit', employeeId: chief.id, scale: 1 }));
-    add(node(`chair:${chief.id}`, 'chair', { x: 496, y: 612, w: 40, h: 40 }, { scale: 1 }));
-    const props = { employeeId: chief.id, name: chief.name, shirt: CHIEF_SHIRT, skin: SKIN[hash(chief.id) % SKIN.length], where: at.where, tone: at.tone, decisionId: at.decisionId, taskId: at.taskId };
-    if (at.where === 'meeting') (meeting.push(chief.id), people.set(chief.id, props));
-    else if (at.where === 'stuck') (couch.push(chief.id), people.set(chief.id, props));
-    else {
-      add(node(`person:${chief.id}`, 'person', { x: 504, y: 584, w: 24, h: 46 }, { ...props, scale: 1 }));
-      add(node(`tag:${chief.id}`, 'tag', { x: 482, y: 658, w: 68, h: 18 }, { text: tagText(chief.name), tone: at.screen === 'lit' ? 'active' : 'idle' }));
-      if (at.bubble) add(node(`bubble:${chief.id}`, 'bubble', { x: 640, y: 600, w: 0, h: 22 }, { text: at.bubble, tone: 'plain', side: 'right', taskId: at.taskId }));
-    }
-  }
-  add(node('tray', 'tray', { x: 560, y: 534, w: 56, h: 54 }, { count: decisions.length, label: decisions.length === 0 ? 'nothing for you' : `${decisions.length} for you` }));
+  if (chief) seat(chief.id, CHIEF_DESK, 1, AT_CHIEF_DESK, CHIEF_SHIRT);
+  add(node('tray', 'tray', { x: 560, y: 534, w: 56, h: 74 }, { count: decisions.length, label: decisions.length === 0 ? 'nothing for you' : `${decisions.length} for you` }));
 
   // ---------- the meeting room and the stuck corner ----------
   for (const [index, employeeId] of meeting.entries()) {
