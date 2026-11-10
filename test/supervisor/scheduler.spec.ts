@@ -99,6 +99,15 @@ describe('requestFor', () => {
     expect(requestFor(task(), team({ leadId: 'lead' }))).toEqual({ mode: 'brief', employeeId: 'lead' });
   });
 
+  it("briefs a task given straight to the team's lead: the lead looks first, and splits what is more than one small change", () => {
+    const led = team({ leadId: 'lead' });
+    expect(requestFor(task({ assigneeId: 'lead' }), led)).toEqual({ mode: 'brief', employeeId: 'lead' });
+    // A part the lead gave itself when it split a task is worked: a part is never split again.
+    expect(requestFor(task({ assigneeId: 'lead', parentId: 'parent1' }), led)).toEqual({ mode: 'work', employeeId: 'lead' });
+    // On a self-managed team nobody leads, so an assignee just does the work.
+    expect(requestFor(task({ assigneeId: 'emp1' }), team({ selfManaged: true }))).toEqual({ mode: 'work', employeeId: 'emp1' });
+  });
+
   it('works with the assignee, and routes a chat task', () => {
     expect(requestFor(task({ assigneeId: 'emp1' }), team({ leadId: 'lead' }))).toEqual({ mode: 'work', employeeId: 'emp1' });
     expect(requestFor(task({ assigneeId: 'cos', kind: 'chat' }), team())).toEqual({ mode: 'route', employeeId: 'cos' });

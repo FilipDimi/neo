@@ -21,9 +21,16 @@ export type PickInput = {
 
 export type Pick = { request: RunRequest } | { problem: 'fired' | 'stale'; request: RunRequest } | null;
 
-/** Who should run a task that has just been created, and how. */
+/**
+ * Who should run a task that has just been created, and how. A task for a led team starts with
+ * its lead briefing it, whether it was left unassigned or given to the lead by name: the lead
+ * looks at it first and splits what is more than one small change. A part of a split task is
+ * always worked, never split again.
+ */
 export function requestFor(task: Task, team: Team): { mode: RunMode; employeeId: string } | { problem: 'no_lead' | 'no_assignee' } {
-  if (task.assigneeId) return { mode: task.kind === 'chat' ? 'route' : 'work', employeeId: task.assigneeId };
+  if (task.assigneeId && task.kind === 'chat') return { mode: 'route', employeeId: task.assigneeId };
+  if (task.assigneeId && !team.selfManaged && task.assigneeId === team.leadId && !task.parentId) return { mode: 'brief', employeeId: task.assigneeId };
+  if (task.assigneeId) return { mode: 'work', employeeId: task.assigneeId };
   if (team.selfManaged) return { problem: 'no_assignee' };
   if (team.leadId) return { mode: 'brief', employeeId: team.leadId };
   return { problem: 'no_lead' };

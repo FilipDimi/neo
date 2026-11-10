@@ -83,6 +83,15 @@ describe('buildFirstTurn', () => {
     expect(turn).toContain('mcp__engine__report_done');
   });
 
+  it('tells a briefing lead to look first, to split anything bigger than one small change, and that open-ended work is always split', () => {
+    const turn = buildFirstTurn({ ...base, task: task(), mode: 'brief' });
+    expect(turn).toMatch(/First look at what it touches/);
+    expect(turn).toMatch(/bigger than one small change/);
+    expect(turn).toMatch(/open-ended: a review, an audit/);
+    expect(turn).toMatch(/only when it is one small change you can finish and check in this run/);
+    expect(turn).toMatch(/that is an instruction: split/);
+  });
+
   it('the review turn carries the summary, the diff stat and the gate results', () => {
     const turn = buildFirstTurn({
       ...base,

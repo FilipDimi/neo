@@ -113,10 +113,10 @@ End with one or two plain sentences to the user: what you created and for whom, 
       const gateNames = repo?.gates.map((g) => g.name) ?? [];
       return `${header}
 
-You are briefing this task. Choose one:
+You are briefing this task. First look at what it touches: read enough of the code or the documents to know what the work really is. Then choose one:
 
-1. Split it. Call mcp__engine__propose_subtasks with one sub-task per piece of work. Each needs an assignee from the list below, a brief that stands on its own, the files or folders it owns, a done-condition and its gates. No two sub-tasks may own the same file or folder. The caps together may not exceed ${usd(input.remainingUsd)}, which is what this task has left.${gateNames.length > 0 ? ` Gates you can name: ${gateNames.join(', ')}.` : ''}
-2. Do it yourself, but only when the brief does not ask you to split or assign it, and it is small enough that splitting would cost more than doing. Then do the work and call mcp__engine__report_done.
+1. Split it. This is the answer for anything bigger than one small change, and always for work that is open-ended: a review, an audit, "find and fix", "improve". Name the concrete pieces you found and call mcp__engine__propose_subtasks with one sub-task per piece. Each needs an assignee from the list below, a brief that stands on its own (say what you found and exactly what to change), the files or folders it owns, a done-condition someone can check, and its gates. No two sub-tasks may own the same file or folder. The caps together may not exceed ${usd(input.remainingUsd)}, which is what this task has left.${gateNames.length > 0 ? ` Gates you can name: ${gateNames.join(', ')}.` : ''}
+2. Do it yourself, but only when it is one small change you can finish and check in this run, and the brief does not ask you to split or assign it. Then do the work and call mcp__engine__report_done. A teammate reviews it.
 
 If the brief says who should do what, or asks for a split, that is an instruction: split.
 

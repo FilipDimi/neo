@@ -304,10 +304,20 @@ describe('work and review', () => {
     );
     const task = parentTask(setup.w, { assigneeId: 'lead', gates: [] });
     await drain(setup);
-    expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId, run.outcome])).toEqual([['work', 'lead', 'done'], ['review', 'emp1', 'done']]);
+    // Given straight to the lead, the task is briefed: the lead judged it one small change and did it itself.
+    expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId, run.outcome])).toEqual([['brief', 'lead', 'done'], ['review', 'emp1', 'done']]);
     const [card] = store.openDecisions(setup.w.db);
     expect(card).toMatchObject({ kind: 'merge' });
     expect(card!.text).toMatch(/\? reviewed, no gates;/);
+  });
+
+  it('splits a task given straight to the lead when the lead finds more than one piece in it', async () => {
+    const setup = ledWorld(straight);
+    const parent = parentTask(setup.w, { assigneeId: 'lead' });
+    await drain(setup);
+    expect(store.listTasks(setup.w.db, { parentId: parent.id }).map((child) => [child.title, child.assigneeId, child.state])).toEqual([['Greeting', 'emp1', 'done'], ['Farewell', 'emp2', 'done']]);
+    expect(store.runsOf(setup.w.db, parent.id).map((run) => [run.mode, run.employeeId])).toEqual([['brief', 'lead'], ['integrate', 'lead']]);
+    expect(store.getTask(setup.w.db, parent.id)!.state).toBe('done');
   });
 
   it("sends a lead's work back to the lead when the teammate does not pass it", async () => {
@@ -322,7 +332,7 @@ describe('work and review', () => {
     );
     const task = parentTask(setup.w, { assigneeId: 'lead', gates: [] });
     await drain(setup);
-    expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId])).toEqual([['work', 'lead'], ['review', 'emp1'], ['work', 'lead'], ['review', 'emp1']]);
+    expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId])).toEqual([['brief', 'lead'], ['review', 'emp1'], ['work', 'lead'], ['review', 'emp1']]);
     expect(store.openDecisions(setup.w.db)).toMatchObject([{ kind: 'merge' }]);
   });
 
