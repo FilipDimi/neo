@@ -7,6 +7,7 @@
  * scripts/spike-login.ts; docs/spike/2026-11-09-spike-findings.md has the results.
  */
 import { query, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { engineToolServer, type EngineTools } from './tools.ts';
 
 import type { RuntimeEvent, ToolCall, ToolDecision } from '../shared/runtime.ts';
 
@@ -35,7 +36,8 @@ export type SessionInput = {
   plugins?: string[];
   additionalDirectories?: string[];
   sandbox?: Options['sandbox'];
-  mcpServers?: Options['mcpServers'];
+  /** The engine's own tools (report_done and the rest), served to the session in-process as mcp__engine__<name>. */
+  engineTools?: EngineTools;
   /** The engine's decision on every tool call, asked before the SDK's own permission rules. */
   decideTool: (call: ToolCall) => Promise<ToolDecision>;
 };
@@ -192,7 +194,7 @@ export function startSession(input: SessionInput, queryFn: QueryFn = query): Ses
     ...(input.resumeSessionId !== undefined && { resume: input.resumeSessionId }),
     ...(input.skills !== undefined && { skills: input.skills }),
     ...(input.sandbox !== undefined && { sandbox: input.sandbox }),
-    ...(input.mcpServers !== undefined && { mcpServers: input.mcpServers }),
+    ...(input.engineTools !== undefined && { mcpServers: { engine: engineToolServer(input.engineTools) } }),
     plugins: (input.plugins ?? []).map((path) => ({ type: 'local' as const, path })),
     additionalDirectories: input.additionalDirectories ?? [],
     // Cut off from the machine: no user, project or local settings (so no CLAUDE.md, hooks or skills

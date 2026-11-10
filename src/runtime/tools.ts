@@ -1,0 +1,43 @@
+/**
+ * The engine's own tools, as the model sees them: an in-process SDK tool server named "engine".
+ * A brief, a review verdict and a done-report are tool calls with a schema, never parsed prose.
+ */
+import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { TOOL_INPUT, type EngineTool } from '../worker/protocol.ts';
+
+export type ToolReply = { ok: boolean; text: string };
+export type EngineTools = { names: EngineTool[]; call: (name: EngineTool, input: unknown) => Promise<ToolReply> };
+
+export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
+  propose_subtasks:
+    'Split the task you are briefing into sub-tasks, one per teammate. Each needs an assignee from your team, a brief that stands on its own, the files or folders it owns (no overlap between sub-tasks), a done-condition and the gates that must pass. The engine checks the proposal and tells you what to fix if it refuses it. Calling this successfully ends your part: stop afterwards.',
+  report_done:
+    'Report that your work on this task is finished, with a short summary of what you did. The engine then commits your files and runs the gates itself. Call it exactly once, when the work is really done, then stop.',
+  submit_review:
+    'Give your verdict on the work you were asked to review: "approve", "send_back" with notes the author can act on, or "escalate" when a person has to decide. Then stop.',
+  request_decision:
+    'Ask the user to decide something you may not decide yourself, or that you were refused. Give the question and up to four options. Your run stops here; you are resumed with the answer.',
+  set_status: 'Say in a few plain words what you are doing right now (at most 60 characters), for the office view. Call it when you start and when your focus changes.',
+  run_gate: 'Run one of this task\'s named gates in your folder and get its real exit code and output. Use it to check your work before you report.',
+  create_task: 'Put a task on a team\'s board. Leave the assignee out for a led team, so its lead briefs the task; a self-managed team needs an assignee.',
+};
+
+/** One definition per named tool. Exported so tests can call a handler without a model. */
+export function engineToolDefinitions(tools: EngineTools) {
+  return tools.names.map((name) =>
+    tool(
+      name,
+      TOOL_DESCRIPTION[name],
+      TOOL_INPUT[name].shape,
+      async (args: unknown) => {
+        const reply = await tools.call(name, args);
+        return { content: [{ type: 'text' as const, text: reply.text }], isError: !reply.ok };
+      },
+      { alwaysLoad: true },
+    ),
+  );
+}
+
+export function engineToolServer(tools: EngineTools) {
+  return createSdkMcpServer({ name: 'engine', version: '1.0.0', alwaysLoad: true, tools: engineToolDefinitions(tools) });
+}

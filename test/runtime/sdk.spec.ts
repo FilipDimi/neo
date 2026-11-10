@@ -194,7 +194,7 @@ describe('startSession', () => {
         plugins: ['/data/mounts/ada'],
         additionalDirectories: ['/data/memory/ada'],
         sandbox: { enabled: true },
-        mcpServers: { engine: { command: 'node', args: ['tools.js'] } },
+        engineTools: { names: ['report_done'], call: async () => ({ ok: true, text: 'ok' }) },
       }),
       queryFn,
     );
@@ -213,7 +213,7 @@ describe('startSession', () => {
       plugins: [{ type: 'local', path: '/data/mounts/ada' }],
       additionalDirectories: ['/data/memory/ada'],
       sandbox: { enabled: true },
-      mcpServers: { engine: { command: 'node', args: ['tools.js'] } },
+      mcpServers: { engine: { type: 'sdk', name: 'engine' } },
     });
   });
 

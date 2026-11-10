@@ -9,8 +9,11 @@ import * as store from '../db/store.ts';
 import type { RuntimeEvent } from '../shared/runtime.ts';
 import type { Message, Run, RunOutcome, RunRequest, Task } from '../shared/types.ts';
 import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
+import { envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
 import * as decisions from './decisions.ts';
-import { buildJob } from './jobs.ts';
+import type { TeamView } from './definition.ts';
+import { buildJob, folderOf } from './jobs.ts';
+import { remember } from './memory.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
 import { pickNext, requestFor } from './scheduler.ts';
@@ -251,7 +254,25 @@ export class Supervisor {
       const now = this.now();
       const run = store.newRun(request, now, leaseMinutesFor(request, task, team));
       const messages = store.waitingMessages(this.db, employee.id);
-      const job = this.jobFor({ paths: this.paths, run, request, task: prepared, team, employee, company, messages, runtimeModule: this.runtimeModule });
+      const everyone = store.allEmployees(this.db).filter((e) => !e.fired);
+      const teams: TeamView[] = store.allTeams(this.db).map((t) => ({ team: t, lead: everyone.find((e) => e.id === t.leadId) ?? null, members: everyone.filter((e) => e.teamId === t.id) }));
+      const job = this.jobFor({
+        paths: this.paths,
+        run,
+        request,
+        task: prepared,
+        team,
+        employee,
+        company,
+        repo: (prepared.repoId && store.getRepo(this.db, prepared.repoId)) || null,
+        teammates: everyone.filter((e) => e.teamId === team.id),
+        teams,
+        remainingUsd: Math.max(0, task.capUsd - store.spentOn(this.db, task.id)),
+        envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)),
+        messages,
+        nameOf: (id) => this.nameOf(id),
+        ...(this.runtimeModule ? { runtimeModule: this.runtimeModule } : {}),
+      });
       const link = this.spawn(job);
       run.pid = link.pid;
       run.pidStartedAt = link.pid === null ? null : this.processes.startedAt(link.pid);
@@ -347,9 +368,39 @@ export class Supervisor {
   /** Reactions to what a session reported, beyond recording it (budgets, the usage limit). */
   protected afterRuntimeEvent(_run: Run, _event: RuntimeEvent): void {}
 
-  /** May this tool call run? */
-  protected judge(_run: Run, _call: { id: string; tool: string; input: unknown }): { allow: boolean; reason?: string; stop?: boolean } {
-    return { allow: true };
+  /** May this tool call run? Asked for every call of every session. A refusal that needs the user stops the run and raises a card. */
+  protected judge(run: Run, call: { id: string; tool: string; input: unknown }): { allow: boolean; reason?: string; stop?: boolean } {
+    const task = store.getTask(this.db, run.taskId);
+    const employee = store.getEmployee(this.db, run.employeeId);
+    const team = task && store.getTeam(this.db, task.teamId);
+    const company = store.getCompany(this.db);
+    if (!task || !employee || !team || !company) return { allow: false, reason: 'Refused: this run has lost its task.', stop: true };
+    const folder = folderOf(this.paths, task);
+    const verdict = judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: store.grantsOf(this.db, task.id) }, call);
+    const now = this.now();
+    if (verdict.useGrant) {
+      const grant = store.grantsOf(this.db, task.id).find((g) => g.id === verdict.useGrant)!;
+      apply(this.db, (tx) => tx.emit({ kind: 'grant_changed', grant: { ...grant, used: true } }), now);
+    }
+    if (verdict.card) {
+      const card = verdict.card;
+      apply(
+        this.db,
+        (tx) =>
+          decisions.raise(tx, this.db, now, {
+            taskId: task.id,
+            runId: run.id,
+            employeeId: employee.id,
+            kind: 'tool',
+            text: `${employee.name} ${card}, while working on "${task.title}".`,
+            options: decisions.optionsFor('tool'),
+            subject: { tool: call.tool, inputHash: grantKey(call, folder) },
+          }),
+        now,
+      );
+      this.planned.set(run.id, { outcome: 'refused', reason: 'refused' });
+    }
+    return { allow: verdict.allow, ...(verdict.reason !== undefined && { reason: verdict.reason }), ...(verdict.stop && { stop: true }) };
   }
 
   /** The model called one of the engine's tools. */
@@ -437,8 +488,11 @@ export class Supervisor {
     const task = store.getTask(this.db, run.taskId);
     if (!task || task.state === 'done' || task.state === 'failed') return;
     switch (run.outcome) {
-      case 'done':
+      case 'done': {
+        const employee = store.getEmployee(this.db, run.employeeId);
+        if (employee && run.summary && run.mode !== 'route') remember(employee.memoryDir, `${task.title}: ${run.summary}`, this.now());
         return this.onRunDone(run, task);
+      }
       case 'failed':
       case 'expired':
         return this.onRunFailed(run, task);
