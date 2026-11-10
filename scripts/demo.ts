@@ -6,7 +6,7 @@
  *   VS_DEMO_DELAY_MS=400    makes the employees quicker
  *   VS_DEMO_EMPTY=1         starts with no company, to see first setup
  *
- * A word in a task's brief changes what its employee does: HANG, OUTSIDE, ASK, REDO, LIMIT
+ * A word in a task's brief changes what its employee does: HANG, OUTSIDE, ASK, NEEDTOOL, REDO, LIMIT
  * (see test/fixtures/demoRuntime.ts).
  */
 import fs from 'node:fs';

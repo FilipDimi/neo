@@ -199,6 +199,40 @@ describe('PersonPage', () => {
     expect(screen.getByText('Writes code.')).toBeTruthy();
   });
 
+  it("changes a person's role, model, tools and skills from their page", async () => {
+    const lead = store.employees.get('lead')!;
+    const api = fakeApi((method, route) => (method === 'GET' ? (route === '/api/hire-options' ? OPTIONS : detail) : {}));
+    mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: { ...store, employees: new Map([['lead', { ...lead, capabilities: ['read_files'], skills: ['dataviz'], model: 'claude-sonnet-5-5' }]]) }, now: T0, api });
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    // What the person has now is what the form starts from.
+    expect((await screen.findByLabelText('read files') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('web search') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText('dataviz') as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByLabelText('git push')).toBeNull(); // not a tool this team can have
+    await userEvent.click(screen.getByLabelText('web search'));
+    await userEvent.click(screen.getByLabelText('dataviz'));
+    await userEvent.selectOptions(screen.getByLabelText('Add a skill'), 'company:privacy-rules');
+    await userEvent.selectOptions(screen.getByLabelText('Model'), 'claude-opus-5-5');
+    await userEvent.clear(screen.getByLabelText('Role, in one sentence'));
+    await userEvent.type(screen.getByLabelText('Role, in one sentence'), 'Researches the market.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(api.calls).toContainEqual(['PATCH', '/api/employees/lead', { role: 'Researches the market.', model: 'claude-opus-5-5', skills: ['company:privacy-rules'], capabilities: ['read_files', 'web_search'] }]);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).toBeNull());
+  });
+
+  it('will not save a person with every tool unticked, and can be cancelled', async () => {
+    const lead = store.employees.get('lead')!;
+    const api = fakeApi((method, route) => (method === 'GET' ? (route === '/api/hire-options' ? OPTIONS : detail) : {}));
+    mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: { ...store, employees: new Map([['lead', { ...lead, capabilities: ['read_files'] }]]) }, now: T0, api });
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.click(await screen.findByLabelText('read files'));
+    expect(screen.getByText(/With no tools this employee can read nothing/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(api.calls.some(([method]) => method === 'PATCH')).toBe(false);
+  });
+
   it('sends a message, and asks before firing', async () => {
     const api = fakeApi((method) => (method === 'GET' ? detail : { message: { state: 'delivered', taskId: 't1' } }));
     const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);

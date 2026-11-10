@@ -3,12 +3,14 @@
   "configurations": [
     {
       "name": "demo",
-      "runtimeExecutable": "npm",
+      "runtimeExecutable": "env",
       "runtimeArgs": [
+        "VS_PORT=4318",
+        "npm",
         "run",
         "demo"
       ],
-      "port": 4317
+      "port": 4318
     },
     {
       "name": "company",

@@ -1,12 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { Employee, Message, Run } from '../../../src/shared/types.ts';
+import type { Capability, Employee, Message, Run } from '../../../src/shared/types.ts';
 import { useApi } from '../app/context.ts';
 import { money } from '../format.ts';
 import { personStatus } from '../model/select.ts';
 import { useStore } from '../store/store.ts';
+import type { HireOptions } from './HireForm.tsx';
 
 type Detail = { employee: Employee; memoryIndex: string; runs: Run[]; spentToday: number };
+type Draft = { role: string; model: string; capabilities: Capability[]; skills: string[] };
 const CAPABILITY_LABEL: Record<string, string> = { read_files: 'read files', run_commands: 'run commands', write_code: 'write code', web_search: 'web search', git_push: 'git push', send_messages: 'send messages' };
+const toggle = <T,>(list: T[], item: T, on: boolean): T[] => (on ? [...list.filter((other) => other !== item), item] : list.filter((other) => other !== item));
 
 /** One employee: who they are, what they remember, what they have done, and a line to them. */
 export function PersonPage({ employeeId, onClose }: { employeeId: string; onClose(): void }) {
@@ -18,7 +21,8 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
   const [detail, setDetail] = useState<Detail | null>(null);
   const [text, setText] = useState('');
   const [note, setNote] = useState<string | null>(null);
-  const [role, setRole] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [options, setOptions] = useState<HireOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fail = (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure));
 
@@ -36,6 +40,24 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
   }, [onClose]);
 
   if (!employee) return null;
+
+  function edit(): void {
+    setError(null);
+    setDraft({ role: employee!.role, model: employee!.model, capabilities: employee!.capabilities, skills: employee!.skills });
+    // What can be chosen: the models, the tools this team may have, the skills installed on this machine.
+    api.get<HireOptions>('/api/hire-options').then(setOptions, fail);
+  }
+
+  async function save(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    if (!draft) return;
+    try {
+      await api.patch(`/api/employees/${employeeId}`, { role: draft.role.trim(), model: draft.model, skills: draft.skills, capabilities: draft.capabilities });
+      setDraft(null);
+    } catch (failure) {
+      fail(failure);
+    }
+  }
 
   async function send(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -59,6 +81,11 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
     }
   }
 
+  const allowed = options?.availableByTeam[employee.teamId] ?? [];
+  const tools = (options?.capabilities ?? []).filter((capability) => allowed.includes(capability.id));
+  const addable = (options?.skills ?? []).filter((skill) => !draft?.skills.includes(skill.id));
+  const noTools = draft !== null && draft.capabilities.filter((capability) => !options || allowed.includes(capability)).length === 0;
+
   return (
     <aside className="drawer" role="dialog" aria-label={employee.name}>
       <header>
@@ -73,38 +100,84 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
           ✕
         </button>
       </header>
-      <section>
-        {role === null ? (
+      {draft === null ? (
+        <section>
           <p>
             {employee.role}{' '}
-            <button type="button" className="quiet" onClick={() => setRole(employee.role)}>
+            <button type="button" className="quiet" onClick={edit}>
               Edit
             </button>
           </p>
-        ) : (
-          <form
-            className="drawer-message"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void api.patch(`/api/employees/${employeeId}`, { role }).then(() => setRole(null), fail);
-            }}
-          >
-            <label htmlFor="edit-role" className="sr-only">
-              Role, in one sentence
-            </label>
-            <input id="edit-role" className="field" value={role} onChange={(event) => setRole(event.target.value)} />
-            <button type="submit" className="pill small on">
+          <p className="muted">
+            {employee.model} · {money(detail?.spentToday ?? 0)} today
+          </p>
+          <p className="muted">Tools: {employee.capabilities.map((capability) => CAPABILITY_LABEL[capability] ?? capability).join(', ') || 'none'}</p>
+          <p className="muted">Skills: {employee.skills.join(', ') || 'none'}</p>
+        </section>
+      ) : (
+        <form className="person-edit" onSubmit={(event) => void save(event)}>
+          <label htmlFor="edit-role" className="label">
+            Role, in one sentence
+          </label>
+          <input id="edit-role" className="field" value={draft.role} onChange={(event) => setDraft({ ...draft, role: event.target.value })} />
+
+          <label htmlFor="edit-model" className="label">
+            Model
+          </label>
+          <select id="edit-model" className="field" value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })}>
+            {/* The model in use is always offered, whatever the list says. */}
+            {[...new Set([draft.model, ...(options?.models.map((model) => model.id) ?? [])])].map((id) => (
+              <option key={id} value={id}>
+                {options?.models.find((model) => model.id === id)?.label ?? id}
+              </option>
+            ))}
+          </select>
+
+          <div className="label">Tools</div>
+          <div className="chips">
+            {!options && <span className="muted small">Loading…</span>}
+            {tools.map((capability) => (
+              <label key={capability.id} className={`chip check${draft.capabilities.includes(capability.id) ? ' on' : ''}`}>
+                <input type="checkbox" checked={draft.capabilities.includes(capability.id)} onChange={(event) => setDraft({ ...draft, capabilities: toggle(draft.capabilities, capability.id, event.target.checked) })} />
+                {capability.label}
+              </label>
+            ))}
+          </div>
+          {noTools && <p className="muted small">With no tools this employee can read nothing and do nothing but ask you questions. Tick at least one.</p>}
+
+          <div className="label">Skills · loaded first on every run</div>
+          <div className="chips">
+            {draft.skills.length === 0 && <span className="muted small">none</span>}
+            {draft.skills.map((skill) => (
+              <label key={skill} className="chip check on">
+                <input type="checkbox" checked onChange={() => setDraft({ ...draft, skills: draft.skills.filter((other) => other !== skill) })} />
+                {skill}
+              </label>
+            ))}
+          </div>
+          <label htmlFor="edit-skill" className="sr-only">
+            Add a skill
+          </label>
+          <select id="edit-skill" className="field" value="" onChange={(event) => event.target.value && setDraft({ ...draft, skills: [...draft.skills, event.target.value] })}>
+            <option value="">Add a skill…</option>
+            {addable.map((skill) => (
+              <option key={skill.id} value={skill.id}>
+                {skill.id}
+              </option>
+            ))}
+          </select>
+
+          <div className="chips">
+            <button type="submit" className="pill small on" disabled={noTools || !draft.role.trim()}>
               Save
             </button>
-          </form>
-        )}
-        <p className="muted">
-          {employee.model} · {money(detail?.spentToday ?? 0)} today
-        </p>
-        <p className="muted">Tools: {employee.capabilities.map((capability) => CAPABILITY_LABEL[capability] ?? capability).join(', ') || 'none'}</p>
-        <p className="muted">Skills: {employee.skills.join(', ') || 'none'}</p>
-        <p className="muted small">Edits take effect at this person's next run.</p>
-      </section>
+            <button type="button" className="pill small" onClick={() => setDraft(null)}>
+              Cancel
+            </button>
+            <span className="muted small">Changes take effect at this person's next run.</span>
+          </div>
+        </form>
+      )}
       <section>
         <div className="label">What they remember</div>
         <pre className="memory">{detail ? detail.memoryIndex || 'Nothing yet.' : 'Loading…'}</pre>

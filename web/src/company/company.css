@@ -39,3 +39,6 @@
 .repo-row { display: flex; flex-direction: column; gap: 8px; }
 .memory { margin: 0; font: 12px/18px ui-monospace, Menlo, monospace; white-space: pre-wrap; background: var(--ground); border: 1px solid var(--line); border-radius: var(--card); padding: 12px; max-height: 220px; overflow-y: auto; }
 .setup { flex-grow: 1; display: flex; align-items: flex-start; justify-content: center; padding: 60px 16px; overflow-y: auto; }
+.person-edit { display: flex; flex-direction: column; gap: 8px; }
+.person-edit .field { font-size: 13px; padding: 8px 10px; }
+.person-edit .label { margin-top: 4px; }

@@ -7,6 +7,7 @@
  *   HANG     never finishes (the lease expires)
  *   OUTSIDE  tries to write a file outside its folder (refused, with a card)
  *   ASK      asks the user a question
+ *   NEEDTOOL asks for a tool it was not hired with (web search)
  *   REDO     the reviewer sends the work back once
  *   LIMIT    the plan's usage limit is reached while it works
  */
@@ -106,6 +107,7 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
       }
       await s.engine('set_status', { text: `${s.resumed ? 'fixing' : 'working on'} ${title.slice(0, 36)}` });
       await wait(2);
+      if (prompt.includes('NEEDTOOL') && !s.resumed) return void (await s.engine('request_tools', { capabilities: ['web_search'], reason: `to look things up for "${title}"` }));
       if (prompt.includes('ASK') && !s.resumed) return void (await s.engine('request_decision', { question: `For "${title}": should this follow the old layout or the new one?`, options: ['The old layout', 'The new layout'] }));
       if (prompt.includes('OUTSIDE') && !s.resumed) await s.tool('Write', { file_path: '/tmp/vs-demo-outside.txt', content: 'outside' });
       const owned = /^Files this task owns: (.+)$/m.exec(prompt)?.[1]?.split(', ')[0];
