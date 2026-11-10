@@ -17,7 +17,7 @@ import type { Identity } from '../git/git.ts';
 import { isMerged, landOn, mergeInto } from '../git/merge.ts';
 import { outside } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
-import type { GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
+import type { Employee, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import * as decisions from './decisions.ts';
@@ -52,6 +52,8 @@ export class Flow {
   private readonly refusedProposals = new Map<string, number>();
   /** Verdicts given by review runs that have not ended yet. An ended run carries its verdict as its reason. */
   private readonly verdicts = new Map<string, string>();
+  /** Questions that are with a lead, by task: the words and the offered answers, for the card if the lead passes it on. */
+  private readonly questions = new Map<string, { question: string; choices: string[] }>();
 
   constructor(private readonly host: FlowHost) {}
 
@@ -174,9 +176,58 @@ export class Flow {
     return { ok: true, text: `Accepted: ${subtasks.length} sub-task${subtasks.length === 1 ? '' : 's'} created and queued. End your turn now.` };
   }
 
+  /**
+   * A member of a led team stopped with a question. Its lead is asked first: most questions are about what a brief
+   * means, and the lead wrote it. The user is asked only what the lead says it cannot settle.
+   */
+  askLead(run: Run, task: Task, lead: Employee, question: string, choices: string[]): void {
+    const team = store.getTeam(this.db, task.teamId)!;
+    const from = store.getEmployee(this.db, run.employeeId)?.name ?? 'An employee';
+    this.questions.set(task.id, { question, choices });
+    const firstTurn = buildFirstTurn({ task, mode: 'review', team, repo: this.site(task)?.repo ?? null, teammates: [], remainingUsd: 0, material: { question: { from, text: question, choices } } });
+    this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'review', employeeId: lead.id, reason: 'review', firstTurn }, now) }));
+  }
+
+  /** The run that stopped with a question, when that is the last piece of work on the task: a review run after it is the lead's answer. */
+  private asked(taskId: string): Run | undefined {
+    const last = store.runsOf(this.db, taskId).filter(authored).at(-1);
+    return last?.outcome === 'stopped' && last.reason === 'question' ? last : undefined;
+  }
+
+  /** The lead's word on a member's question: an answer, which goes to the member, or that the user must decide. */
+  private onAnswer(run: Run, task: Task, asker: Run, verdict: 'approve' | 'send_back' | 'escalate', notes: string): ToolReply {
+    if (verdict === 'approve') return { ok: false, text: 'Nothing is finished yet: this run is about a question. Answer it with "send_back" and your answer in the notes, or use "escalate" if only the user can decide.' };
+    if (!notes.trim()) return { ok: false, text: verdict === 'send_back' ? 'The notes are your answer, and they are empty. Write the answer there.' : 'The notes are empty. Say there what the user must decide.' };
+    const lead = store.getEmployee(this.db, run.employeeId)?.name ?? 'The lead';
+    const from = store.getEmployee(this.db, asker.employeeId)?.name ?? 'An employee';
+    const kept = this.questions.get(task.id);
+    this.questions.delete(task.id);
+    this.host.planRunEnd(run.id, 'done', verdict === 'send_back' ? 'answered' : VERDICT.escalate);
+    this.change((tx, now) => {
+      if (verdict === 'send_back') {
+        // The member picks up where it stopped, in the same session, with the lead's words. Not a round of review: no work was judged.
+        const firstTurn = `Your lead, ${lead}, answers your question:\n\n${notes.trim()}\n\nCarry on with the task from there.`;
+        return void tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: asker.mode, employeeId: asker.employeeId, reason: 'resume', resumeSessionId: asker.sessionId, firstTurn }, now) });
+      }
+      // The card is the member's question, with what the lead said about it. Its answer goes back to the member.
+      decisions.raise(tx, this.db, now, {
+        taskId: task.id,
+        runId: asker.id,
+        employeeId: asker.employeeId,
+        kind: 'question',
+        text: `${from} asks about "${task.title}"${kept ? `: ${kept.question}` : '.'}\n${lead}, who leads the team, could not settle it: ${notes.trim()}`,
+        freeText: true,
+        options: decisions.optionsFor('question', { choices: kept?.choices ?? [] }),
+      });
+    });
+    return { ok: true, text: verdict === 'send_back' ? `Recorded: ${from} carries on with your answer. End your turn now.` : 'Recorded: the user has been asked. End your turn now.' };
+  }
+
   onReview(run: Run, input: unknown): ToolReply {
     const { verdict, notes } = TOOL_INPUT.submit_review.parse(input);
     const task = store.getTask(this.db, run.taskId)!;
+    const asker = this.asked(task.id);
+    if (asker) return this.onAnswer(run, task, asker, verdict, notes);
     const reviewer = store.getEmployee(this.db, run.employeeId)?.name ?? 'The reviewer';
     // The verdict stays with the run: what a merge card says about the work is read from it, never from the fact that a review happened.
     this.verdicts.set(run.id, VERDICT[verdict]);

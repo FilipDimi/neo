@@ -131,6 +131,22 @@ describe('buildFirstTurn', () => {
     for (const part of ['Added the person page.', '412 insertions', 'diff --git', 'tests', 'passed (exit 0)', '737 passed', 'mcp__engine__submit_review']) expect(turn, part).toContain(part);
   });
 
+  it('a question turn gives the lead the question and the offered answers, and says that the lead decides', () => {
+    const turn = buildFirstTurn({ task: task({ title: 'Write the greeting' }), mode: 'review', team: led, repo: null, teammates: [], remainingUsd: 0, material: { question: { from: 'Ada', text: 'Who is it for?', choices: ['The reader', 'The team'] } } });
+    expect(turn).toContain('# Task: Write the greeting');
+    expect(turn).toContain('Ada is working on this task and has stopped with a question');
+    expect(turn).toContain('Who is it for?');
+    expect(turn).toContain('- The reader\n- The team');
+    expect(turn).toMatch(/"send_back" and your answer in the notes/);
+    expect(turn).toMatch(/"escalate"/);
+    expect(turn).not.toContain('What the author reported');
+    // The brief of a task the user wrote is the user's: the lead settles what it leaves open, and does not overrule what it says.
+    expect(turn).toMatch(/This brief is the user's, not yours/);
+    const sub = buildFirstTurn({ task: task({ title: 'Write the greeting', parentId: 'parent1' }), mode: 'review', team: led, repo: null, teammates: [], remainingUsd: 0, material: { question: { from: 'Ada', text: 'Who is it for?', choices: [] } } });
+    expect(sub).toMatch(/You wrote this brief when you split the task/);
+    expect(sub).not.toMatch(/This brief is the user's/);
+  });
+
   it('the integrate turn says what merged and what conflicts', () => {
     const turn = buildFirstTurn({ ...base, task: task(), mode: 'integrate', material: { mergeState: 'Merged: task/a. Conflicts in task/b: src/x.ts' } });
     expect(turn).toContain('Conflicts in task/b: src/x.ts');

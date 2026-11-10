@@ -10,3 +10,6 @@ data/
 .DS_Store
 # Raw SDK recordings hold account and machine details. Only sanitised fixtures are committed.
 *.raw.json
+
+# Working copies made for reviewers
+.claude/worktrees/

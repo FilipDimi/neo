@@ -514,6 +514,114 @@ describe('work and review', () => {
   });
 });
 
+describe('a question on a led team', () => {
+  const QUESTION = { question: 'Who is the greeting for?', options: ['The reader', 'The team'] };
+  /** Ada asks before she writes anything; once she has an answer she writes the greeting. The lead does what the test says with the question. */
+  function asking(lead: (s: Scene) => Promise<unknown>, seen: { lead: string[]; ada: string[] }) {
+    return async (s: Scene) => {
+      if (s.mode === 'review' && s.input.prompt.includes('has stopped with a question')) {
+        seen.lead.push(s.input.prompt);
+        return void (await lead(s));
+      }
+      if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+      if (s.mode !== 'work') return;
+      seen.ada.push(s.input.prompt);
+      if (!s.resumed) return void (await s.engine('request_decision', QUESTION));
+      s.write('GREETING.md', 'hello, reader\n');
+      await s.engine('report_done', { summary: 'Wrote it for the reader.' });
+    };
+  }
+
+  it('goes to the lead, who answers it: the member carries on with the answer and the user is never asked', async () => {
+    const seen = { lead: [] as string[], ada: [] as string[] };
+    const setup = ledWorld(asking((s) => s.engine('submit_review', { verdict: 'send_back', notes: 'For the reader. One friendly line.' }), seen));
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: ['greeting'] });
+    await setup.w.sup.tick();
+    await setup.fixture.idle();
+    await setup.w.sup.settle();
+    // The question is with the lead: no card, the task is not blocked, and the member is told where it went.
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    expect(store.getTask(setup.w.db, task.id)!.state).toBe('running');
+    expect(store.openRequests(setup.w.db)).toMatchObject([{ mode: 'review', employeeId: 'lead' }]);
+    await drain(setup);
+    expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId, run.outcome, run.reason])).toEqual([
+      ['work', 'emp1', 'stopped', 'question'],
+      ['review', 'lead', 'done', 'answered'],
+      ['work', 'emp1', 'done', null],
+      ['review', 'lead', 'done', 'approved'],
+    ]);
+    expect(seen.lead[0]).toContain('Ada is working on this task and has stopped with a question');
+    expect(seen.lead[0]).toContain('Who is the greeting for?');
+    expect(seen.lead[0]).toContain('- The reader\n- The team');
+    expect(seen.ada[1]).toContain('Your lead, Priya, answers your question:\n\nFor the reader. One friendly line.');
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    // An answered question is not a round of review.
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team', reviewRounds: 0 });
+  });
+
+  it('reaches the user only when the lead says the user must decide, with what both of them said; the answer goes to the one who asked', async () => {
+    const seen = { lead: [] as string[], ada: [] as string[] };
+    const setup = ledWorld(asking((s) => s.engine('submit_review', { verdict: 'escalate', notes: 'It depends on who the product is sold to, which only you know.' }), seen));
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: ['greeting'] });
+    await drain(setup);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'question', taskId: task.id, employeeId: 'emp1' });
+    expect(card!.text).toContain('Ada asks about "Add a greeting and a farewell": Who is the greeting for?');
+    expect(card!.text).toContain('Priya, who leads the team, could not settle it: It depends on who the product is sold to, which only you know.');
+    expect(card!.options.map((option) => option.label)).toEqual(['The reader', 'The team', 'Answer', 'Stop it']);
+    setup.w.sup.answer(card!.id, { optionId: 'choice1' });
+    await drain(setup);
+    expect(seen.ada[1]).toContain('The answer to your question: The reader');
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+  });
+
+  it('does not take "approve" or an empty note for an answer', async () => {
+    const said: string[] = [];
+    const seen = { lead: [] as string[], ada: [] as string[] };
+    const setup = ledWorld(
+      asking(async (s) => {
+        said.push((await s.engine('submit_review', { verdict: 'approve', notes: '' })).text);
+        said.push((await s.engine('submit_review', { verdict: 'send_back', notes: '  ' })).text);
+        await s.engine('submit_review', { verdict: 'send_back', notes: 'For the reader.' });
+      }, seen),
+    );
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: ['greeting'] });
+    await drain(setup);
+    expect(said[0]).toMatch(/Nothing is finished yet/);
+    expect(said[1]).toMatch(/notes are your answer/);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done' });
+    expect(store.getTask(setup.w.db, task.id)!.reviewRounds).toBe(0);
+  });
+
+  it('asks the user straight away when it is the lead who asks, or when the team has no lead', async () => {
+    const byLead = ledWorld(async (s) => void (await s.engine('request_decision', QUESTION)), { mergeTarget: null });
+    const task = parentTask(byLead.w, { assigneeId: 'lead' });
+    await drain(byLead);
+    expect(store.openDecisions(byLead.w.db)).toMatchObject([{ kind: 'question', taskId: task.id, employeeId: 'lead' }]);
+    await byLead.w.sup.stop();
+
+    const alone = ledWorld(async (s) => void (await s.engine('request_decision', QUESTION)), { selfManaged: true });
+    const own = parentTask(alone.w, { assigneeId: 'emp1' });
+    await drain(alone);
+    expect(store.openDecisions(alone.w.db)).toMatchObject([{ kind: 'question', taskId: own.id, employeeId: 'emp1' }]);
+    expect(store.runsOf(alone.w.db, own.id).map((run) => run.mode)).toEqual(['work']);
+  });
+
+  it('tells the user when a member keeps asking, even though its lead has answered each time', async () => {
+    let questions = 0;
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'send_back', notes: 'For the reader.' }));
+      if (s.mode === 'work') await s.engine('request_decision', { question: `Question ${++questions}?`, options: [] });
+    });
+    const task = parentTask(setup.w, { assigneeId: 'emp1', gates: ['greeting'] });
+    await drain(setup);
+    expect(store.runsOf(setup.w.db, task.id).map((run) => run.mode)).toEqual(['work', 'review', 'work', 'review', 'work']);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'question', taskId: task.id });
+    expect(card!.text).toMatch(/Ada has asked 3 times in a row/);
+  });
+});
+
 describe('integration and landing', () => {
   it('briefs, works, reviews, integrates and lands on the team branch; main never moves', async () => {
     const setup = ledWorld(straight);
@@ -645,6 +753,7 @@ describe('integration and landing', () => {
         await s.engine('report_done', { summary: 'Wrote the greeting.' });
       }
       if (s.mode === 'work' && s.who === 'Grace') await s.engine('request_decision', { question: 'Is a farewell really wanted?', options: [] });
+      if (s.mode === 'review' && s.input.prompt.includes('has stopped with a question')) return void (await s.engine('submit_review', { verdict: 'escalate', notes: 'Only the user knows whether a farewell is wanted.' }));
       if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '' });
       if (s.mode === 'integrate') await s.engine('report_done', { summary: 'Integrated the greeting only.' });
     });

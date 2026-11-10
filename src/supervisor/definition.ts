@@ -72,7 +72,9 @@ function toolLines(employee: Employee, team: Team, mode: RunMode): string {
 
 /** A finished sub-task of a task that has no repository: where its files are. */
 export type Part = { title: string; by: string; folder: string; summary: string | null; files: string[]; more: number };
-export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; notes?: string; mergeState?: string; parts?: Part[] };
+/** A question a member stopped with, on its way to the lead. */
+export type Question = { from: string; text: string; choices: string[] };
+export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; notes?: string; mergeState?: string; parts?: Part[]; question?: Question };
 export type TeamView = { team: Team; lead: Employee | null; members: Employee[] };
 
 export function gateLines(results: GateResult[]): string {
@@ -142,6 +144,17 @@ ${assignable.map((mate) => `- ${mate.name} (assigneeId: ${mate.id}): ${mate.role
 
 Do this task in your folder. When the work is finished, call mcp__engine__report_done with a short summary of what you did. The engine then commits your files and runs the gates itself; you can run one first with mcp__engine__run_gate.${material.notes ? `\n\nNotes for this run:\n${material.notes}` : ''}`;
     case 'review':
+      // Not a review of finished work: a member stopped with a question, and on a led team the lead is asked first.
+      if (material.question)
+        return `${header}
+
+${material.question.from} is working on this task and has stopped with a question. You lead the team, so it comes to you before anyone else. The files as they are now are in your folder: read what you need to answer well.
+
+The question:
+${material.question.text.trim()}
+${material.question.choices.length > 0 ? `\nThe answers ${material.question.from} offers:\n${material.question.choices.map((choice) => `- ${choice}`).join('\n')}\n` : ''}
+Settle it if you can. What a brief means, what is in scope, which of two things should win when they disagree: those are yours to decide, so decide them the way that serves the task and do not pass them on. ${task.parentId ? 'You wrote this brief when you split the task, so what it means is yours to say.' : 'This brief is the user\'s, not yours: settle whatever it leaves open, but if your answer would go against something it says outright, that is the user\'s to decide.'} Call mcp__engine__submit_review with "send_back" and your answer in the notes. ${material.question.from} carries on with exactly those words, so say plainly what to do.
+Only if the answer needs something only the user has (a decision about the product or the business, money, access, anything outside this team's limits), call it with "escalate" and say in the notes what the user must decide and why you cannot. "approve" does not apply: nothing is finished yet.`;
       return `${header}
 
 You are reviewing this work, not doing it. The changed files are in your folder; read them.

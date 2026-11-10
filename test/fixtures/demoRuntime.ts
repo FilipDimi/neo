@@ -117,6 +117,12 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
       return void (await s.engine('report_done', { summary: `${s.resumed ? 'Revised' : 'Wrote'} ${dir}${slug(title)}.md for "${title}".` }));
     }
     case 'review': {
+      // A member's question comes to the lead first. In the demo the lead passes it on, so that the user's card can be shown.
+      if (prompt.includes('has stopped with a question')) {
+        await s.engine('set_status', { text: `reading a question on ${title.slice(0, 30)}` });
+        await wait(1.5);
+        return void (await s.engine('submit_review', { verdict: 'escalate', notes: 'The brief does not say, and it changes what the user sees: this one is yours.' }));
+      }
       await s.engine('set_status', { text: `reviewing ${title.slice(0, 40)}` });
       await wait(1.5);
       if (prompt.includes('REDO') && firstTime(sentBack, `redo ${title}`)) {

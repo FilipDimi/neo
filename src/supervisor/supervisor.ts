@@ -765,13 +765,22 @@ export class Supervisor {
         const task = store.getTask(this.db, run.taskId);
         // An employee that keeps asking is missing something an answer cannot give it. The third question in a row says so,
         // and the buttons it wrote itself go: they have been pressed twice and changed nothing.
-        const earlier = store.runsOf(this.db, run.taskId).filter((other) => other.id !== run.id && other.endedAt !== null);
+        // A lead's answer in between does not break the row: it is the asking that repeats.
+        const earlier = store.runsOf(this.db, run.taskId).filter((other) => other.id !== run.id && other.endedAt !== null && other.mode !== 'review');
         let inARow = 1;
         for (const other of earlier.reverse()) {
           if (other.reason !== 'question') break;
           inARow += 1;
         }
         const looping = inARow >= 3;
+        // On a led team a member's question goes to its lead first: most are about what a brief means, and the lead wrote it.
+        const team = task && store.getTeam(this.db, task.teamId);
+        const lead = team && !team.selfManaged && team.leadId && team.leadId !== run.employeeId ? store.getEmployee(this.db, team.leadId) : undefined;
+        if (task && lead && !lead.fired && lead.capabilities.includes('read_files') && run.mode === 'work' && !looping) {
+          this.flow.askLead(run, task, lead, question, options);
+          this.planned.set(run.id, { outcome: 'stopped', reason: 'question' });
+          return { ok: true, text: `Your question has gone to your lead, ${lead.name}. End your turn now: you will be resumed with the answer.` };
+        }
         apply(
           this.db,
           (tx) =>
