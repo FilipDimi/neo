@@ -9,6 +9,16 @@
         "demo"
       ],
       "port": 4317
+    },
+    {
+      "name": "company",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "VS_NO_OPEN=1",
+        "npm",
+        "start"
+      ],
+      "port": 4317
     }
   ]
 }
