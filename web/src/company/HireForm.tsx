@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { skillSets, type SkillSet } from '../../../src/shared/skills.ts';
 import type { Capability, ModelTier } from '../../../src/shared/types.ts';
 import { useApi } from '../app/context.ts';
 import { useStore } from '../store/store.ts';
 
 export type SkillOption = { id: string; label: string; description: string; source: 'bundled' | 'user' | 'plugin' | 'company'; path: string | null };
 export type PresetOption = { id: string; label: string; role: string; capabilities: Capability[]; skills: string[]; tier: ModelTier; lead: boolean; model: string };
-export type HireOptions = { presets: PresetOption[]; skills: SkillOption[]; models: { id: string; label: string; tier: ModelTier | null }[]; capabilities: { id: Capability; label: string }[]; availableByTeam: Record<string, Capability[]> };
+export type HireOptions = { presets: PresetOption[]; skills: SkillOption[]; models: { id: string; label: string; tier: ModelTier | null }[]; efforts?: { id: string; label: string }[]; capabilities: { id: Capability; label: string }[]; availableByTeam: Record<string, Capability[]> };
 
 const TIER_FOR: Record<ModelTier, string> = { member: 'engineers, analysts', lead: 'leads, reviewers', routine: 'routine' };
 const SKILLS_SHOWN = 7;
@@ -21,6 +22,7 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
   const [teamId, setTeamId] = useState('');
   const [role, setRole] = useState('');
   const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('');
   const [lead, setLead] = useState(false);
   const [skills, setSkills] = useState<string[]>([]);
   // Ticked to begin with: what most work needs. An employee with no tools can read nothing and do nothing but ask.
@@ -49,10 +51,17 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
   if (!options) return <div className="hire muted">{error ?? 'Loading…'}</div>;
   const noTools = capabilities.filter((capability) => available.includes(capability)).length === 0;
 
-  const chosenFirst = [...options.skills.filter((s) => skills.includes(s.id)), ...options.skills.filter((s) => !skills.includes(s.id))];
-  const matching = find.trim() ? chosenFirst.filter((s) => `${s.id} ${s.description}`.toLowerCase().includes(find.trim().toLowerCase())) : chosenFirst;
-  const shownSkills = allSkills ? matching : chosenFirst.slice(0, Math.max(SKILLS_SHOWN, skills.length));
-  const selected = options.skills.filter((s) => skills.includes(s.id));
+  // A family of skills is one tick. Its members are laid out only when one is looked for by name.
+  const { sets } = skillSets(options.skills.map((s) => s.id));
+  const inSet = new Set(sets.flatMap((set) => set.ids));
+  const chosenOf = (set: SkillSet) => set.ids.filter((id) => skills.includes(id)).length;
+  const chosenFirst = (list: SkillOption[]) => [...list.filter((s) => skills.includes(s.id)), ...list.filter((s) => !skills.includes(s.id))];
+  const loose = chosenFirst(options.skills.filter((s) => !inSet.has(s.id)));
+  const matching = find.trim() ? chosenFirst(options.skills).filter((s) => `${s.id} ${s.description}`.toLowerCase().includes(find.trim().toLowerCase())) : loose;
+  const shownSkills = allSkills ? matching : loose.slice(0, Math.max(SKILLS_SHOWN, loose.filter((s) => skills.includes(s.id)).length));
+  const whole = sets.filter((set) => chosenOf(set) === set.ids.length);
+  const inWhole = new Set(whole.flatMap((set) => set.ids));
+  const selected = [...whole.map((set) => `${set.name} (all ${set.ids.length})`), ...options.skills.filter((s) => skills.includes(s.id) && !inWhole.has(s.id)).map((s) => `${s.id} ${s.description}`)];
   const toggle = <T,>(list: T[], item: T, on: boolean): T[] => (on ? [...list, item] : list.filter((entry) => entry !== item));
 
   function usePreset(preset: PresetOption): void {
@@ -70,7 +79,7 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
     setError(null);
     setHired(null);
     try {
-      await api.post('/api/employees', { name: name.trim(), teamId: team.id, role: role.trim(), model, lead: lead && !leadTaken, skills, capabilities: capabilities.filter((capability) => available.includes(capability)) });
+      await api.post('/api/employees', { name: name.trim(), teamId: team.id, role: role.trim(), model, effort: effort || null, lead: lead && !leadTaken, skills, capabilities: capabilities.filter((capability) => available.includes(capability)) });
       setHired(name.trim());
       setName('');
     } catch (failure) {
@@ -116,6 +125,17 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
             ))}
           </select>
         </label>
+        <label title="How hard the model works on each piece of work. Higher thinks longer and costs more.">
+          Effort
+          <select className="field" value={effort} onChange={(event) => setEffort(event.target.value)}>
+            <option value="">The model's own</option>
+            {(options.efforts ?? []).map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <fieldset className="kind">
           <legend>Kind</legend>
           <label className={`choice${!lead ? ' on' : ''}`}>
@@ -140,19 +160,33 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
           </>
         )}
         <div className="chips">
+          {sets.map((set) => {
+            const have = chosenOf(set);
+            return (
+              <label key={`set:${set.name}`} className={`chip check${have === set.ids.length ? ' on' : ''}`} title={set.ids.join(', ')}>
+                <input
+                  type="checkbox"
+                  name={`set:${set.name}`}
+                  checked={have === set.ids.length}
+                  onChange={(event) => setSkills((current) => (event.target.checked ? [...new Set([...current, ...set.ids])] : current.filter((id) => !set.ids.includes(id))))}
+                />
+                {have === set.ids.length ? `${set.name} · all ${have}` : have > 0 ? `${set.name} · ${have} of ${set.ids.length}` : `${set.name} · ${set.ids.length} skills`}
+              </label>
+            );
+          })}
           {shownSkills.map((skill) => (
             <label key={skill.id} className={`chip check${skills.includes(skill.id) ? ' on' : ''}`} title={skill.description}>
               <input type="checkbox" name={skill.id} checked={skills.includes(skill.id)} onChange={(event) => setSkills((current) => toggle(current, skill.id, event.target.checked))} />
               {skill.id}
             </label>
           ))}
-          {!allSkills && options.skills.length > shownSkills.length && (
+          {!allSkills && loose.length > shownSkills.length && (
             <button type="button" className="chip dashed" onClick={() => setAllSkills(true)}>
-              + {options.skills.length - shownSkills.length} more installed
+              + {loose.length - shownSkills.length} more installed
             </button>
           )}
         </div>
-        {selected.length > 0 && <div className="muted small">{`Selected: ${selected.map((skill) => `${skill.id} ${skill.description}`).join(' · ')}.`}</div>}
+        {selected.length > 0 && <div className="muted small">{`Selected: ${selected.join(' · ')}.`}</div>}
       </div>
 
       <div className="hire-group" role="group" aria-label="Tools · what the runtime mounts">

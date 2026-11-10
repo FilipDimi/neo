@@ -19,6 +19,8 @@ export type SessionInput = {
   prompt: string;
   systemPrompt: string;
   model: string;
+  /** How hard the model works on each turn. Left out, the model uses its own. */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** The session's whole environment. Nothing is inherited from this process. */
   env: Record<string, string>;
   /** The built-in tools that exist in this session. */
@@ -187,6 +189,7 @@ export function startSession(input: SessionInput, queryFn: QueryFn = query): Ses
   const options: Options = {
     cwd: input.cwd,
     model: input.model,
+    ...(input.effort && { effort: input.effort }),
     systemPrompt: input.systemPrompt,
     tools: input.tools,
     allowedTools: input.allowedTools ?? [],

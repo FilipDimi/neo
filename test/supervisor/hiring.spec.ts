@@ -88,6 +88,12 @@ describe('fire and edit', () => {
     const { db, ctx } = setup();
     const ada = hire(ctx, { preset: 'engineer', name: 'Ada', teamId: 'ios' });
     edit(ctx, ada.id, { role: 'Now owns the roster client.', model: 'claude-opus-5-5', skills: ['dataviz'], capabilities: ['read_files'] });
+    // Effort is chosen per person and can be changed, or handed back to the model.
+    expect(store.getEmployee(ctx.db, ada.id)!.effort ?? null).toBeNull();
+    expect(edit(ctx, ada.id, { effort: 'max' }).effort).toBe('max');
+    expect(store.getEmployee(ctx.db, ada.id)).toMatchObject({ effort: 'max', model: 'claude-opus-5-5' });
+    expect(edit(ctx, ada.id, { effort: null }).effort).toBeNull();
+    expect(hire(ctx, { name: 'Lin', teamId: 'ios', role: 'Thinks hard.', model: 'claude-fable-5-2', effort: 'high', lead: false, skills: [], capabilities: ['read_files'] })).toMatchObject({ model: 'claude-fable-5-2', effort: 'high' });
     expect(store.getEmployee(db, ada.id)).toMatchObject({ role: 'Now owns the roster client.', model: 'claude-opus-5-5', skills: ['dataviz'], capabilities: ['read_files'], name: 'Ada' });
     expect(() => edit(ctx, ada.id, { skills: ['user:nope'] })).toThrow(/user:nope/);
     expect(() => edit(ctx, 'nobody', { role: 'x' })).toThrow(/employee/);

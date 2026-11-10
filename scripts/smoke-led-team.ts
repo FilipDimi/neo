@@ -74,6 +74,8 @@ const person = (id: string, name: string, role: string): Employee => ({
   skills: [],
   capabilities: ['read_files', 'run_commands', 'write_code'],
   model: MODEL,
+  // VS_LIVE_EFFORT runs everyone at that effort; left out, each model uses its own.
+  ...(process.env.VS_LIVE_EFFORT ? { effort: process.env.VS_LIVE_EFFORT as Employee['effort'] } : {}),
   memoryDir: path.join(dataDir, 'memory', id),
   chatSessionId: null,
   fired: false,

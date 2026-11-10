@@ -83,6 +83,8 @@ export function buildJob(input: JobInput): WorkerJob {
     systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode }),
     firstTurn: [first, messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
     model: employee.model,
+    // A conversation is answered at the model's own effort, so that it stays quick. Work runs at the effort the employee was hired with.
+    ...(employee.effort && run.mode !== 'route' ? { effort: employee.effort } : {}),
     env: { ...withToolchains(sessionEnv(company)), BASH_DEFAULT_TIMEOUT_MS: bashTimeout, BASH_MAX_TIMEOUT_MS: bashTimeout },
     tools: shape.tools,
     engineTools: ENGINE_TOOLS_FOR[run.mode],

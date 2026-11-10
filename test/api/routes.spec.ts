@@ -212,6 +212,8 @@ describe('company, teams and people', () => {
   it('hire-options lists presets, skills, models and what each team may be given', async () => {
     const { call } = await fresh(scripted().spawn, { teams: [team({ selfManaged: true }), team({ id: 'pushers', name: 'Release', mayPush: true })], options: { skillDirs: { userSkills: '/nowhere', pluginCache: '/nowhere', companySkills: '/nowhere' } } });
     const options = (await call('GET', '/api/hire-options')).json;
+    expect(options.efforts.map((effort: { id: string }) => effort.id)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(options.models.map((model: { id: string }) => model.id)).toEqual(expect.arrayContaining(['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']));
     expect(options.presets.map((p: any) => p.id)).toEqual(['chief_of_staff', 'engineering_lead', 'engineer', 'reviewer', 'marketing_writer', 'analyst']);
     expect(options.presets[2]).toMatchObject({ label: 'Engineer', model: 'claude-sonnet-5-5', lead: false });
     expect(options.skills.some((s: any) => s.id === 'dataviz')).toBe(true);

@@ -17,8 +17,9 @@ const OPTIONS: HireOptions = {
     { id: 'engineering_lead', label: 'Engineering lead', role: 'Splits work, reviews it and integrates it.', capabilities: ['read_files', 'run_commands', 'write_code'], skills: [], tier: 'lead', lead: true, model: 'claude-opus-5-5' },
     { id: 'analyst', label: 'Analyst', role: 'Reads logs and data and writes a short note with what to change.', capabilities: ['read_files', 'run_commands', 'web_search'], skills: ['dataviz'], tier: 'member', lead: false, model: 'claude-sonnet-5-5' },
   ],
-  skills: [skill('dataviz', 'makes charts', 'bundled'), ...Array.from({ length: 10 }, (_, i) => skill(`user:skill-${i}`, `does thing ${i}`)), skill('apple-skills:performance', 'loads Instruments and hang analysis', 'plugin'), skill('company:privacy-rules', 'keeps the seven answers off every log line', 'company')],
+  skills: [skill('dataviz', 'makes charts', 'bundled'), ...Array.from({ length: 10 }, (_, i) => skill(`user:s${i}-skill`, `does thing ${i}`)), skill('apple-skills:performance', 'loads Instruments and hang analysis', 'plugin'), skill('company:privacy-rules', 'keeps the seven answers off every log line', 'company')],
   models: [{ id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', tier: 'member' }, { id: 'claude-opus-5-5', label: 'Opus 5.5', tier: 'lead' }, { id: 'claude-haiku-5-5', label: 'Haiku 5.5', tier: 'routine' }],
+  efforts: [{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }, { id: 'xhigh', label: 'Extra high' }, { id: 'max', label: 'Max' }],
   capabilities: [{ id: 'read_files', label: 'read files' }, { id: 'run_commands', label: 'run commands' }, { id: 'write_code', label: 'write code' }, { id: 'web_search', label: 'web search' }, { id: 'git_push', label: 'git push' }, { id: 'send_messages', label: 'send messages' }],
   availableByTeam: { ios: ['read_files', 'run_commands', 'write_code', 'web_search'], marketing: ['read_files', 'run_commands', 'write_code', 'web_search'] },
 };
@@ -56,6 +57,30 @@ describe('HireForm', () => {
     expect(within(skills).getAllByRole('checkbox')).toHaveLength(13);
     await userEvent.type(within(skills).getByLabelText('Find a skill'), 'privacy');
     expect(within(skills).getAllByRole('checkbox').map((box) => (box as HTMLInputElement).name)).toEqual(['company:privacy-rules']);
+  });
+
+  it('offers a family of skills as one tick, and says it in one word when it is chosen', async () => {
+    const gsd = ['add-backlog', 'add-phase', 'plan-phase', 'verify-work'].map((name) => skill(`user:gsd-${name}`, `gsd ${name}`));
+    const api = fakeApi((method) => (method === 'GET' ? { ...OPTIONS, skills: [...OPTIONS.skills, ...gsd] } : { employee: { name: 'Ada' } }));
+    await form(api);
+    const skills = screen.getByRole('group', { name: /Skills/ });
+    // One tick for the family; its members are not laid out one by one.
+    const family = within(skills).getByLabelText('gsd · 4 skills') as HTMLInputElement;
+    expect(within(skills).queryByLabelText('user:gsd-add-phase')).toBeNull();
+    await userEvent.click(family);
+    expect((within(skills).getByLabelText('gsd · all 4') as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText('Selected: gsd (all 4).')).toBeTruthy();
+    await userEvent.type(screen.getByLabelText('Name'), 'Ada');
+    await userEvent.type(screen.getByLabelText('Role, in one sentence'), 'Plans the work.');
+    await userEvent.selectOptions(screen.getByLabelText('Effort'), 'xhigh');
+    await userEvent.click(screen.getByRole('button', { name: 'Hire Ada' }));
+    expect(api.calls.at(-1)![2]).toMatchObject({ effort: 'xhigh', skills: gsd.map((entry) => entry.id) });
+    // One of a family can still be found and taken by itself.
+    await userEvent.click(within(skills).getByLabelText('gsd · all 4'));
+    await userEvent.click(within(skills).getByRole('button', { name: /more installed/ }));
+    await userEvent.type(within(skills).getByLabelText('Find a skill'), 'plan-phase');
+    await userEvent.click(within(skills).getByLabelText('user:gsd-plan-phase'));
+    expect((within(skills).getByLabelText('gsd · 1 of 4') as HTMLInputElement).checked).toBe(false);
   });
 
   it("puts chosen skills first and builds the Selected line from their descriptions", async () => {
@@ -106,7 +131,7 @@ describe('HireForm', () => {
     expect((screen.getByLabelText('web search') as HTMLInputElement).checked).toBe(false);
     await userEvent.click(screen.getByLabelText('write code'));
     await userEvent.click(screen.getByRole('button', { name: 'Hire Ada' }));
-    expect(api.calls.at(-1)).toEqual(['POST', '/api/employees', { name: 'Ada', teamId: 'ios', role: 'Reads the usage logs and writes a weekly note.', model: 'claude-opus-5-5', lead: false, skills: ['dataviz'], capabilities: ['read_files', 'run_commands'] }]);
+    expect(api.calls.at(-1)).toEqual(['POST', '/api/employees', { name: 'Ada', teamId: 'ios', role: 'Reads the usage logs and writes a weekly note.', model: 'claude-opus-5-5', effort: null, lead: false, skills: ['dataviz'], capabilities: ['read_files', 'run_commands'] }]);
     expect(await screen.findByText('Ada was hired.')).toBeTruthy();
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('');
   });
@@ -216,7 +241,7 @@ describe('PersonPage', () => {
     await userEvent.clear(screen.getByLabelText('Role, in one sentence'));
     await userEvent.type(screen.getByLabelText('Role, in one sentence'), 'Researches the market.');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(api.calls).toContainEqual(['PATCH', '/api/employees/lead', { role: 'Researches the market.', model: 'claude-opus-5-5', skills: ['company:privacy-rules'], capabilities: ['read_files', 'web_search'] }]);
+    expect(api.calls).toContainEqual(['PATCH', '/api/employees/lead', { role: 'Researches the market.', model: 'claude-opus-5-5', effort: null, skills: ['company:privacy-rules'], capabilities: ['read_files', 'web_search'] }]);
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).toBeNull());
   });
 
@@ -231,6 +256,21 @@ describe('PersonPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
     expect(api.calls.some(([method]) => method === 'PATCH')).toBe(false);
+  });
+
+  it('shows the effort and a family of skills in a few words, and lets both be changed', async () => {
+    const gsd = ['add-backlog', 'add-phase', 'plan-phase', 'verify-work'].map((name) => `user:gsd-${name}`);
+    const lead = store.employees.get('lead')!;
+    const api = fakeApi((method, path) => (path === '/api/hire-options' ? { ...OPTIONS, skills: [...OPTIONS.skills, ...gsd.map((id) => skill(id, id))] } : method === 'GET' ? detail : { employee: lead }));
+    mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: { ...store, employees: new Map([['lead', { ...lead, effort: 'high' as const, capabilities: ['read_files' as const], skills: ['dataviz', ...gsd] }]]) }, now: T0, api });
+    expect(await screen.findByText(/high effort/)).toBeTruthy();
+    expect(screen.getByText('Skills: gsd (4), dataviz')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Effort'), 'max');
+    // The family is one tick here too: taking it away takes all four.
+    await userEvent.click(screen.getByLabelText('gsd · all 4'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(api.calls.find((call) => call[0] === 'PATCH')![2]).toMatchObject({ effort: 'max', skills: ['dataviz'] });
   });
 
   it('shows what was said between the user and this person, and nothing said to anyone else', () => {

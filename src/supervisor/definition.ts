@@ -3,6 +3,7 @@
  * skills, memory. The first user turn is the work: brief, done-condition, gates, and what this
  * run is for. Both are generated from rows; nobody hand-edits them.
  */
+import { skillSets } from '../shared/skills.ts';
 import { availableCapabilities, CAPABILITIES } from './blastRadius.ts';
 import type { Capability, Company, Employee, GateResult, Repo, RunMode, Task, Team } from '../shared/types.ts';
 
@@ -44,12 +45,28 @@ ${may(team.mayDelete, 'delete anything outside your task folder')}
 ${toolLines(employee, team, input.mode ?? 'work')}`,
 
     // Skills are for doing work. A conversation is answered from what the employee is told and remembers: loading them first would only make it slow.
-    employee.skills.length > 0 && input.mode !== 'route' ? `## Skills\nBefore anything else, load these with the Skill tool: ${employee.skills.join(', ')}. If one cannot be loaded, carry on without it and say so in your report: a skill is a help, not a condition.` : '',
+    employee.skills.length > 0 && input.mode !== 'route' ? skillLines(employee.skills) : '',
 
     `## What you remember\n${input.memoryIndex.trim() || 'Nothing yet. This is your first run.'}`,
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+/**
+ * Skills that stand alone are loaded before anything else. A set of them (a plugin's dozen, a family of sixty) is not:
+ * loading it whole would fill the session before the work began, so the employee takes from it what the task calls for.
+ */
+function skillLines(skills: string[]): string {
+  const { sets, singles } = skillSets(skills);
+  return [
+    '## Skills',
+    singles.length > 0 ? `Before anything else, load these with the Skill tool: ${singles.join(', ')}.` : '',
+    sets.length > 0 ? `You ${singles.length > 0 ? 'also ' : ''}have these sets of skills. Do not load a whole set: before you start, load from each the ones this task calls for, and no others.\n${sets.map((set) => `- ${set.name} (${set.ids.length}): ${set.ids.join(', ')}`).join('\n')}` : '',
+    'If a skill cannot be loaded, carry on without it and say so in your report: a skill is a help, not a condition.',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /** What this employee can and cannot do, said outright, so it never has to find out by being refused. */

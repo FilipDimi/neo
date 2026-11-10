@@ -2,12 +2,13 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { Capability, Employee, Message, Run } from '../../../src/shared/types.ts';
 import { useApi } from '../app/context.ts';
 import { money } from '../format.ts';
+import { skillSets, skillsInBrief } from '../../../src/shared/skills.ts';
 import { personStatus } from '../model/select.ts';
 import { useStore } from '../store/store.ts';
 import type { HireOptions } from './HireForm.tsx';
 
 type Detail = { employee: Employee; memoryIndex: string; runs: Run[]; spentToday: number };
-type Draft = { role: string; model: string; capabilities: Capability[]; skills: string[] };
+type Draft = { role: string; model: string; effort: string; capabilities: Capability[]; skills: string[] };
 const CAPABILITY_LABEL: Record<string, string> = { read_files: 'read files', run_commands: 'run commands', write_code: 'write code', web_search: 'web search', git_push: 'git push', send_messages: 'send messages' };
 const toggle = <T,>(list: T[], item: T, on: boolean): T[] => (on ? [...list.filter((other) => other !== item), item] : list.filter((other) => other !== item));
 
@@ -52,7 +53,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
 
   function edit(): void {
     setError(null);
-    setDraft({ role: employee!.role, model: employee!.model, capabilities: employee!.capabilities, skills: employee!.skills });
+    setDraft({ role: employee!.role, model: employee!.model, effort: employee!.effort ?? '', capabilities: employee!.capabilities, skills: employee!.skills });
     // What can be chosen: the models, the tools this team may have, the skills installed on this machine.
     api.get<HireOptions>('/api/hire-options').then(setOptions, fail);
   }
@@ -61,7 +62,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
     event.preventDefault();
     if (!draft) return;
     try {
-      await api.patch(`/api/employees/${employeeId}`, { role: draft.role.trim(), model: draft.model, skills: draft.skills, capabilities: draft.capabilities });
+      await api.patch(`/api/employees/${employeeId}`, { role: draft.role.trim(), model: draft.model, effort: draft.effort || null, skills: draft.skills, capabilities: draft.capabilities });
       setDraft(null);
     } catch (failure) {
       fail(failure);
@@ -93,6 +94,10 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
   const allowed = options?.availableByTeam[employee.teamId] ?? [];
   const tools = (options?.capabilities ?? []).filter((capability) => allowed.includes(capability.id));
   const addable = (options?.skills ?? []).filter((skill) => !draft?.skills.includes(skill.id));
+  // Families among what is installed, and the ones this person has every member of.
+  const installedSets = skillSets((options?.skills ?? []).map((skill) => skill.id)).sets;
+  const wholeSets = installedSets.filter((set) => set.ids.every((id) => draft?.skills.includes(id)));
+  const inWholeSet = new Set(wholeSets.flatMap((set) => set.ids));
   const noTools = draft !== null && draft.capabilities.filter((capability) => !options || allowed.includes(capability)).length === 0;
 
   return (
@@ -118,10 +123,10 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
             </button>
           </p>
           <p className="muted">
-            {employee.model} · {money(detail?.spentToday ?? 0)} today
+            {employee.model} · {employee.effort ? `${employee.effort} effort` : "the model's own effort"} · {money(detail?.spentToday ?? 0)} today
           </p>
           <p className="muted">Tools: {employee.capabilities.map((capability) => CAPABILITY_LABEL[capability] ?? capability).join(', ') || 'none'}</p>
-          <p className="muted">Skills: {employee.skills.join(', ') || 'none'}</p>
+          <p className="muted">Skills: {skillsInBrief(employee.skills) || 'none'}</p>
         </section>
       ) : (
         <form className="person-edit" onSubmit={(event) => void save(event)}>
@@ -142,6 +147,19 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
             ))}
           </select>
 
+          <label htmlFor="edit-effort" className="label">
+            Effort
+          </label>
+          <select id="edit-effort" className="field" value={draft.effort} onChange={(event) => setDraft({ ...draft, effort: event.target.value })} title="How hard the model works on each piece of work. Higher thinks longer and costs more.">
+            <option value="">The model's own</option>
+            {/* The level in use is always offered, whatever the list says. */}
+            {[...new Set([...(draft.effort ? [draft.effort] : []), ...(options?.efforts ?? []).map((effort) => effort.id)])].map((id) => (
+              <option key={id} value={id}>
+                {options?.efforts?.find((effort) => effort.id === id)?.label ?? id}
+              </option>
+            ))}
+          </select>
+
           <div className="label">Tools</div>
           <div className="chips">
             {!options && <span className="muted small">Loading…</span>}
@@ -157,7 +175,14 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
           <div className="label">Skills · loaded first on every run</div>
           <div className="chips">
             {draft.skills.length === 0 && <span className="muted small">none</span>}
-            {draft.skills.map((skill) => (
+            {/* A family this person has whole is one tick: taking it away takes all of it. */}
+            {wholeSets.map((set) => (
+              <label key={`set:${set.name}`} className="chip check on" title={set.ids.join(', ')}>
+                <input type="checkbox" checked onChange={() => setDraft({ ...draft, skills: draft.skills.filter((other) => !set.ids.includes(other)) })} />
+                {`${set.name} · all ${set.ids.length}`}
+              </label>
+            ))}
+            {draft.skills.filter((skill) => !inWholeSet.has(skill)).map((skill) => (
               <label key={skill} className="chip check on">
                 <input type="checkbox" checked onChange={() => setDraft({ ...draft, skills: draft.skills.filter((other) => other !== skill) })} />
                 {skill}
@@ -167,8 +192,24 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
           <label htmlFor="edit-skill" className="sr-only">
             Add a skill
           </label>
-          <select id="edit-skill" className="field" value="" onChange={(event) => event.target.value && setDraft({ ...draft, skills: [...draft.skills, event.target.value] })}>
+          <select
+            id="edit-skill"
+            className="field"
+            value=""
+            onChange={(event) => {
+              const family = installedSets.find((set) => `set:${set.name}` === event.target.value);
+              if (family) setDraft({ ...draft, skills: [...new Set([...draft.skills, ...family.ids])] });
+              else if (event.target.value) setDraft({ ...draft, skills: [...draft.skills, event.target.value] });
+            }}
+          >
             <option value="">Add a skill…</option>
+            {installedSets
+              .filter((set) => !wholeSets.includes(set))
+              .map((set) => (
+                <option key={`set:${set.name}`} value={`set:${set.name}`}>
+                  {`${set.name} · all ${set.ids.length} skills`}
+                </option>
+              ))}
             {addable.map((skill) => (
               <option key={skill.id} value={skill.id}>
                 {skill.id}

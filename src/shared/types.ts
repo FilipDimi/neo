@@ -73,6 +73,10 @@ export const Team = z.object({
 });
 export type Team = z.infer<typeof Team>;
 
+/** How hard a model works on a turn. Not chosen means the model's own. */
+export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+export type Effort = z.infer<typeof Effort>;
+
 export const Employee = z.object({
   id,
   teamId: id,
@@ -81,6 +85,8 @@ export const Employee = z.object({
   skills: z.array(z.string()),
   capabilities: z.array(Capability),
   model: z.string(),
+  /** Absent in rows written before effort could be chosen: the same as null. */
+  effort: Effort.nullable().optional(),
   memoryDir: z.string(),
   chatSessionId: z.string().nullable(),
   fired: z.boolean(),

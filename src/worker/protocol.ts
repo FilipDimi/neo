@@ -3,7 +3,7 @@
  */
 import { z } from 'zod';
 import type { RuntimeEvent, ToolCall } from '../shared/runtime.ts';
-import { Capability, RunMode } from '../shared/types.ts';
+import { Capability, Effort, RunMode } from '../shared/types.ts';
 
 export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task'] as const;
 export const EngineTool = z.enum(ENGINE_TOOLS);
@@ -19,6 +19,7 @@ export const WorkerJob = z.object({
   systemPrompt: z.string(),
   firstTurn: z.string(),
   model: z.string(),
+  effort: Effort.optional(),
   env: z.record(z.string(), z.string()),
   tools: z.array(z.string()),
   engineTools: z.array(EngineTool),

@@ -25,6 +25,14 @@ async function runToRest(w: World, fixture: { idle(): Promise<void> }, ticks = 3
 }
 
 describe('a run, through the real worker logic', () => {
+  it('runs an employee at the effort it was hired with', async () => {
+    const fixture = inProcess(fakeRuntime((turn) => turn.engine('report_done', { summary: 'Wrote it.' }).then(() => {})));
+    const w = (open = world(fixture.spawn, { employees: [{ ...coder, effort: 'xhigh' }] }));
+    newTask(w);
+    await runToRest(w, fixture, 1);
+    expect(fixture.jobs[0]).toMatchObject({ mode: 'work', effort: 'xhigh' });
+  });
+
   it('gives the session its identity, its first turn and its limits', async () => {
     const fixture = inProcess(fakeRuntime((turn) => turn.engine('report_done', { summary: 'Wrote it.' }).then(() => {})));
     const w = (open = world(fixture.spawn, { employees: [coder] }));
@@ -39,6 +47,8 @@ describe('a run, through the real worker logic', () => {
     expect(job.systemPrompt).not.toContain('Write NOTE.md');
     expect(job.tools).toEqual(['Read', 'Glob', 'Grep', 'Bash', 'Write', 'Edit']);
     expect(job.engineTools).toEqual(['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate']);
+    // No effort was chosen for this employee, so none is sent: the model uses its own.
+    expect(job).not.toHaveProperty('effort');
     expect(job.cwd).toBe(path.join(w.dir, 'folders', task.id));
     expect(fs.existsSync(job.cwd)).toBe(true);
     expect(job.additionalDirectories).toEqual([path.join(w.dir, 'memory', 'emp1')]);

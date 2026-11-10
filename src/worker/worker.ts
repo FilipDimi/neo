@@ -47,6 +47,7 @@ export async function runWorker(job: WorkerJob, channel: Channel, runtime: Runti
     prompt: job.firstTurn,
     systemPrompt: job.systemPrompt,
     model: job.model,
+    ...(job.effort && { effort: job.effort }),
     env: job.env,
     tools: job.tools,
     maxTurns: job.maxTurns,

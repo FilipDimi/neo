@@ -16,8 +16,8 @@ import { writtenFiles } from './files.ts';
 import { PRESETS } from '../presets/presets.ts';
 import { EVENT_VERSION } from '../shared/events.ts';
 import { EARLIER_SHOWN } from '../shared/view.ts';
-import { MODEL_LABELS } from '../shared/prices.ts';
-import { Capability, Company, Gate, ModelTier, Repo, Service, Team, TeamRepo, type Task } from '../shared/types.ts';
+import { EFFORT_LABELS, MODEL_LABELS } from '../shared/prices.ts';
+import { Capability, Company, Effort, Gate, ModelTier, Repo, Service, type Task, Team, TeamRepo } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.ts';
 import { chat, messageEmployee } from '../supervisor/chat.ts';
 import { repoProblem } from '../supervisor/health.ts';
@@ -47,9 +47,9 @@ const TeamBody = z.object({ name: text, purpose: z.string().default(''), ...Team
 const TeamPatch = TeamBody.partial();
 const HireBody = z.union([
   z.object({ preset: z.enum(Object.keys(PRESETS) as [keyof typeof PRESETS, ...(keyof typeof PRESETS)[]]), name: text, teamId: text }),
-  z.object({ name: text, teamId: text, role: text, model: text, lead: z.boolean().default(false), skills: z.array(z.string()).default([]), capabilities: z.array(Capability).default([]) }),
+  z.object({ name: text, teamId: text, role: text, model: text, effort: Effort.nullable().optional(), lead: z.boolean().default(false), skills: z.array(z.string()).default([]), capabilities: z.array(Capability).default([]) }),
 ]);
-const EmployeePatch = z.object({ name: text, role: text, model: text, skills: z.array(z.string()), capabilities: z.array(Capability) }).partial();
+const EmployeePatch = z.object({ name: text, role: text, model: text, effort: Effort.nullable(), skills: z.array(z.string()), capabilities: z.array(Capability) }).partial();
 const TaskBody = z.object({
   teamId: text,
   title: text,
@@ -191,6 +191,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
       presets: Object.entries(PRESETS).map(([presetId, preset]) => ({ id: presetId, ...preset, model: company.models[preset.tier] })),
       skills: supervisor.skills(),
       models,
+      efforts: Effort.options.map((effort) => ({ id: effort, label: EFFORT_LABELS[effort] ?? effort })),
       capabilities: Capability.options.map((capability) => ({ id: capability, label: CAPABILITIES[capability].label })),
       availableByTeam: Object.fromEntries(store.allTeams(db).map((team) => [team.id, availableCapabilities(team)])),
     };

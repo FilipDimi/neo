@@ -11,11 +11,11 @@ import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { PRESETS, type PresetId } from '../presets/presets.ts';
 import type { SkillRef } from '../runtime/skills.ts';
-import type { Capability, Employee, Team } from '../shared/types.ts';
+import type { Capability, Effort, Employee, Team } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from './blastRadius.ts';
 
 export type HireCtx = { db: Db; now: Date; paths: Paths; skills: SkillRef[] };
-export type HireForm = { name: string; teamId: string; role: string; model: string; lead: boolean; skills: string[]; capabilities: Capability[] };
+export type HireForm = { name: string; teamId: string; role: string; model: string; effort?: Effort | null | undefined; lead: boolean; skills: string[]; capabilities: Capability[] };
 export type HireInput = HireForm | { preset: PresetId; name: string; teamId: string };
 
 function checkKit(ctx: HireCtx, team: Team, skills: string[], capabilities: Capability[]): void {
@@ -45,7 +45,7 @@ export function hire(ctx: HireCtx, input: HireInput): Employee {
     if (current && !current.fired) throw new Error(`the team ${team.name} already has a lead, ${current.name}`);
   }
   const id = store.newId();
-  const employee: Employee = { id, teamId: team.id, name: form.name.trim(), role: form.role.trim(), skills: form.skills, capabilities: form.capabilities, model: form.model, memoryDir: path.join(ctx.paths.memory, id), chatSessionId: null, fired: false };
+  const employee: Employee = { id, teamId: team.id, name: form.name.trim(), role: form.role.trim(), skills: form.skills, capabilities: form.capabilities, model: form.model, effort: form.effort ?? null, memoryDir: path.join(ctx.paths.memory, id), chatSessionId: null, fired: false };
   apply(
     ctx.db,
     (tx) => {
@@ -80,7 +80,7 @@ export function fire(ctx: HireCtx, employeeId: string): void {
 }
 
 /** Takes effect at the employee's next run. */
-export function edit(ctx: HireCtx, employeeId: string, patch: Partial<Pick<Employee, 'name' | 'role' | 'model' | 'skills' | 'capabilities'>>): Employee {
+export function edit(ctx: HireCtx, employeeId: string, patch: Partial<Pick<Employee, 'name' | 'role' | 'model' | 'effort' | 'skills' | 'capabilities'>>): Employee {
   const employee = store.getEmployee(ctx.db, employeeId);
   const team = employee && store.getTeam(ctx.db, employee.teamId);
   if (!employee || !team) throw new Error(`there is no employee ${employeeId}`);

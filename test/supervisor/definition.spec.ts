@@ -72,7 +72,17 @@ describe('buildSystemPrompt', () => {
   });
 
   it('says to carry on when a skill cannot be loaded', () => {
-    expect(prompt()).toMatch(/If one cannot be loaded, carry on without it/);
+    expect(prompt()).toMatch(/If a skill cannot be loaded, carry on without it/);
+  });
+
+  it('has a set of skills drawn on as the task needs, and only the ones that stand alone loaded first', () => {
+    const gsd = ['user:gsd-add-backlog', 'user:gsd-add-phase', 'user:gsd-plan-phase', 'user:gsd-verify-work'];
+    const p = prompt({ employee: employee({ skills: ['user:rust-skills', ...gsd] }) });
+    expect(p).toMatch(/Before anything else, load these with the Skill tool: user:rust-skills\./);
+    expect(p).toMatch(/Do not load a whole set/);
+    expect(p).toContain('- gsd (4): user:gsd-add-backlog, user:gsd-add-phase, user:gsd-plan-phase, user:gsd-verify-work');
+    // With nothing but a set, nothing is loaded up front.
+    expect(prompt({ employee: employee({ skills: gsd }) })).not.toContain('Before anything else, load these');
   });
 
   it('lists the skills to load first, and says nothing about skills when there are none', () => {
