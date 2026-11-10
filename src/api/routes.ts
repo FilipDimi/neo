@@ -20,6 +20,7 @@ import { EFFORT_LABELS, MODEL_LABELS } from '../shared/prices.ts';
 import { Capability, Company, Effort, Gate, ModelTier, Repo, Service, type Task, Team, TeamRepo } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.ts';
 import { chat, messageEmployee } from '../supervisor/chat.ts';
+import { companyNow } from '../supervisor/companyNow.ts';
 import { repoProblem } from '../supervisor/health.ts';
 import { edit, fire, hire, type HireCtx } from '../supervisor/hiring.ts';
 import { readIndex } from '../supervisor/memory.ts';
@@ -127,6 +128,9 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
       now: at.toISOString(),
     };
   });
+
+  /** The same in words: every board, who is running, the cards waiting, today's spend. What the chief of staff is told, and what the tools for a Claude session read. */
+  app.get('/api/now', async () => ({ text: companyNow(db, now()) }));
 
   // ---------- the company ----------
 
