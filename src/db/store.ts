@@ -85,6 +85,11 @@ export function spendToday(db: Db, now: Date): Spend {
 
 // ---------- builders ----------
 
+/** Drops keys whose value is undefined, so that "not given" never overrides a default. */
+function given<T extends object>(input: T): T {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
+}
+
 export type NewTask = Pick<Task, 'teamId' | 'title' | 'brief' | 'createdBy'> & Partial<Task>;
 
 export function newTask(input: NewTask, now: Date): Task {
@@ -112,14 +117,14 @@ export function newTask(input: NewTask, now: Date): Task {
     createdAt: at,
     updatedAt: at,
     blockedAt: null,
-    ...input,
+    ...given(input),
   };
 }
 
 export type NewRequest = Pick<RunRequest, 'taskId' | 'mode' | 'employeeId' | 'reason'> & Partial<RunRequest>;
 
 export function newRequest(input: NewRequest, now: Date): RunRequest {
-  return { id: newId(), resumeSessionId: null, firstTurn: null, attempt: 1, leaseMinutes: null, createdAt: now.toISOString(), ...input };
+  return { id: newId(), resumeSessionId: null, firstTurn: null, attempt: 1, leaseMinutes: null, createdAt: now.toISOString(), ...given(input) };
 }
 
 export function newRun(request: RunRequest, now: Date, leaseMinutes: number): Run {

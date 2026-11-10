@@ -1,0 +1,510 @@
+/**
+ * The supervisor: one loop that owns the database, starts one worker per run, enforces leases
+ * and limits, and turns everything it may not decide into a card. It never runs a model session.
+ */
+import { apply, type Tx } from '../db/apply.ts';
+import { paths as pathsOf, type Paths } from '../db/dataDir.ts';
+import type { Db } from '../db/open.ts';
+import * as store from '../db/store.ts';
+import type { RuntimeEvent } from '../shared/runtime.ts';
+import type { Message, Run, RunOutcome, RunRequest, Task } from '../shared/types.ts';
+import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
+import * as decisions from './decisions.ts';
+import { buildJob } from './jobs.ts';
+import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
+import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
+import { pickNext, requestFor } from './scheduler.ts';
+import { canTransition } from './taskState.ts';
+
+export type SupervisorOptions = {
+  db: Db;
+  dataDir: string;
+  now?: () => Date;
+  tickMs?: number;
+  /** How a worker is started. Defaults to a child process per run. */
+  spawn?: Spawn;
+  workerEntry?: string;
+  /** A module exporting `startSession`, for running the engine without a model. */
+  runtimeModule?: string;
+  processes?: Processes;
+};
+
+export type NewTaskInput = Pick<Task, 'teamId' | 'title' | 'brief'> &
+  Partial<Pick<Task, 'createdBy' | 'assigneeId' | 'reviewerId' | 'parentId' | 'kind' | 'priority' | 'doneCondition' | 'repoId' | 'gates' | 'ownership' | 'capUsd' | 'retryAllowed' | 'leaseMinutes'>>;
+
+type ToolReply = { ok: boolean; text: string };
+const DEFAULT_WORKER = new URL('../worker/worker.ts', import.meta.url).pathname;
+const TOOL_INPUT_LIMIT = 2048;
+
+export class Supervisor {
+  readonly db: Db;
+  readonly paths: Paths;
+  protected readonly now: () => Date;
+  private readonly tickMs: number;
+  private readonly spawn: Spawn;
+  private readonly runtimeModule: string | undefined;
+  protected readonly processes: Processes;
+  /** Workers of live runs, by run id. A run with no entry here is over as far as this process knows. */
+  private readonly links = new Map<string, WorkerLink>();
+  /** How a run will be recorded when its worker exits, when the supervisor already knows (a question, a refusal). */
+  private readonly planned = new Map<string, { outcome: RunOutcome; reason: string }>();
+  private readonly reports = new Map<string, string>();
+  /** Engine work in flight per task (commits, gates, merges): such a task is not idle. */
+  private readonly busy = new Map<string, number>();
+  private readonly work = new Set<Promise<void>>();
+  private timer: NodeJS.Timeout | undefined;
+  private ticking = false;
+
+  constructor(options: SupervisorOptions) {
+    this.db = options.db;
+    this.paths = pathsOf(options.dataDir);
+    this.now = options.now ?? (() => new Date());
+    this.tickMs = options.tickMs ?? 2000;
+    this.runtimeModule = options.runtimeModule;
+    this.processes = options.processes ?? processes;
+    this.spawn = options.spawn ?? forkSpawn(options.workerEntry ?? DEFAULT_WORKER, { logDir: this.paths.logs });
+  }
+
+  start(): void {
+    this.timer ??= setInterval(() => void this.tick().catch((error) => console.error('tick failed:', error)), this.tickMs);
+  }
+
+  /** Stops the loop and every worker. Runs left in flight are picked up by recovery at the next start. */
+  async stop(): Promise<void> {
+    clearInterval(this.timer);
+    this.timer = undefined;
+    for (const link of this.links.values()) link.kill();
+    this.links.clear();
+    await this.settle();
+  }
+
+  /** Waits for engine work in flight (commits, gates, merges) to finish. */
+  async settle(): Promise<void> {
+    while (this.work.size > 0) await Promise.allSettled([...this.work]);
+  }
+
+  /** The loop body: end silent runs, check that nothing is idle, start what can start. */
+  async tick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      this.expireLeases();
+      this.checkInvariant();
+      await this.startRuns();
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  // ---------- tasks, messages, answers: what the outside may ask for ----------
+
+  createTask(input: NewTaskInput): Task {
+    const team = store.getTeam(this.db, input.teamId);
+    if (!team) throw new Error(`no team ${input.teamId}`);
+    if (input.assigneeId) {
+      const assignee = store.getEmployee(this.db, input.assigneeId);
+      if (!assignee || assignee.fired) throw new Error(`no employee ${input.assigneeId}`);
+      if (assignee.teamId !== team.id) throw new Error(`${assignee.name} is not on the team ${team.name}`);
+    }
+    const repoId = input.repoId === undefined ? (team.repos[0]?.repoId ?? null) : input.repoId;
+    const repo = repoId ? store.getRepo(this.db, repoId) : undefined;
+    if (repoId && (!repo || !team.repos.some((r) => r.repoId === repoId))) throw new Error(`the team ${team.name} does not work in repository ${repoId}`);
+    const unknownGate = (input.gates ?? []).find((name) => !repo?.gates.some((gate) => gate.name === name));
+    if (unknownGate) throw new Error(`no gate named "${unknownGate}" in this task's repository`);
+
+    const now = this.now();
+    const task = store.newTask({ createdBy: 'user', ...input, repoId }, now);
+    const who = requestFor(task, team);
+    if ('problem' in who && who.problem === 'no_assignee') throw new Error(`a task on the self-managed team ${team.name} needs an assignee`);
+    apply(
+      this.db,
+      (tx) => {
+        tx.emit({ kind: 'task_changed', task, cause: 'created' });
+        if ('problem' in who) decisions.raise(tx, this.db, now, { taskId: task.id, kind: 'staffing', text: decisions.staffingText(task, who.problem), options: decisions.optionsFor('staffing') });
+        else tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, ...who, reason: 'new' }, now) });
+      },
+      now,
+    );
+    return store.getTask(this.db, task.id)!;
+  }
+
+  /**
+   * A message to an employee. It reaches a running session as its next turn; otherwise it waits
+   * and opens that employee's next run. The sender sees which, never silence.
+   */
+  send(to: { employeeId: string } | { taskId: string }, text: string, fromId: string): Message {
+    const task = 'taskId' in to ? store.getTask(this.db, to.taskId) : undefined;
+    const toId = 'employeeId' in to ? to.employeeId : (task?.assigneeId ?? (task && store.getTeam(this.db, task.teamId)?.leadId));
+    if (!toId || !store.getEmployee(this.db, toId)) throw new Error('there is nobody to deliver this message to');
+    const now = this.now();
+    const message: Message = { id: store.newId(), fromId, toId, taskId: task?.id ?? null, text, state: 'waiting', at: now.toISOString(), deliveredAt: null };
+    apply(this.db, (tx) => tx.emit({ kind: 'message_sent', message }), now);
+    const live = store.liveRuns(this.db).find((run) => run.employeeId === toId);
+    this.links.get(live?.id ?? '')?.send({ t: 'message', id: message.id, text: `Message from ${this.nameOf(fromId)}: ${text}` });
+    return message;
+  }
+
+  stopRun(runId: string): void {
+    const run = store.getRun(this.db, runId);
+    if (run?.outcome === 'running') this.endRunNow(run, 'stopped', 'stopped_by_user');
+  }
+
+  answer(decisionId: string, given: decisions.Answer): 'applied' | 'ignored' {
+    const answered = decisions.answer(this.db, this.now(), decisionId, given);
+    if (answered.result === 'applied') this.afterAnswer(answered);
+    return answered.result;
+  }
+
+  protected afterAnswer(answered: decisions.Answered): void {
+    // A stopped task takes its live runs with it.
+    if (answered.effect === 'stop_task') {
+      for (const run of store.liveRuns(this.db)) {
+        const state = store.getTask(this.db, run.taskId)?.state;
+        if (state === 'failed') this.endRunNow(run, 'stopped', 'task_stopped');
+      }
+    }
+  }
+
+  // ---------- the loop ----------
+
+  private expireLeases(): void {
+    const now = this.now();
+    for (const run of store.liveRuns(this.db)) {
+      if (!isExpired(run.leaseUntil, now)) continue;
+      const link = this.links.get(run.id);
+      this.links.delete(run.id);
+      link?.kill();
+      this.finishRun(run.id, 'expired', 'silent');
+    }
+  }
+
+  /** Every task that is under way has something working on it. One that does not is exactly the silent idle this product exists to prevent. */
+  private checkInvariant(): void {
+    const working = new Set([...store.liveRuns(this.db).map((run) => run.taskId), ...store.openRequests(this.db).map((request) => request.taskId), ...this.busy.keys()]);
+    const now = this.now();
+    for (const state of ['briefing', 'running', 'review'] as const) {
+      for (const task of store.listTasks(this.db, { state })) {
+        if (working.has(task.id)) continue;
+        if (state === 'running' && store.listTasks(this.db, { parentId: task.id }).some((child) => child.state !== 'done' && child.state !== 'failed')) continue;
+        apply(
+          this.db,
+          (tx) => decisions.raise(tx, this.db, now, { taskId: task.id, kind: 'invariant', text: `"${task.title}" is marked ${state}, but nobody is working on it and nothing is queued for it.`, options: decisions.optionsFor('invariant') }),
+          now,
+        );
+      }
+    }
+  }
+
+  private async startRuns(): Promise<void> {
+    for (;;) {
+      const company = store.getCompany(this.db);
+      if (!company) return;
+      const live = store.liveRuns(this.db);
+      const spend = store.spendToday(this.db, this.now());
+      const picked = pickNext({
+        requests: store.openRequests(this.db),
+        tasks: new Map(store.listTasks(this.db).map((task) => [task.id, task])),
+        teams: new Map(store.allTeams(this.db).map((team) => [team.id, team])),
+        employees: new Map(store.allEmployees(this.db).map((employee) => [employee.id, employee])),
+        company,
+        runningEmployeeIds: new Set(live.map((run) => run.employeeId)),
+        runningCount: live.length,
+        spend,
+        blockedRepoIds: this.blockedRepoIds(),
+      });
+      if (!picked) return;
+      if ('problem' in picked) this.dropRequest(picked.request, picked.problem);
+      else await this.startRun(picked.request);
+    }
+  }
+
+  /** Repositories that machine health has blocked. */
+  protected blockedRepoIds(): Set<string> {
+    return new Set();
+  }
+
+  private dropRequest(request: RunRequest, problem: 'fired' | 'stale'): void {
+    const now = this.now();
+    apply(
+      this.db,
+      (tx) => {
+        tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: request.taskId });
+        const task = store.getTask(this.db, request.taskId);
+        if (problem === 'fired' && task) decisions.raise(tx, this.db, now, { taskId: task.id, employeeId: request.employeeId, kind: 'staffing', text: decisions.staffingText(task, 'fired'), options: decisions.optionsFor('staffing') });
+      },
+      now,
+    );
+  }
+
+  /** Anything the engine must do before a run starts on a task (its folder). Returns what to record on the task. */
+  protected async prepare(_task: Task, _request: RunRequest): Promise<Partial<Task>> {
+    return {};
+  }
+
+  private async startRun(request: RunRequest): Promise<void> {
+    const task = store.getTask(this.db, request.taskId)!;
+    const team = store.getTeam(this.db, task.teamId)!;
+    const employee = store.getEmployee(this.db, request.employeeId)!;
+    const company = store.getCompany(this.db)!;
+    try {
+      const prepared = { ...task, ...(await this.prepare(task, request)) };
+      const now = this.now();
+      const run = store.newRun(request, now, leaseMinutesFor(request, task, team));
+      const messages = store.waitingMessages(this.db, employee.id);
+      const job = this.jobFor({ paths: this.paths, run, request, task: prepared, team, employee, company, messages, runtimeModule: this.runtimeModule });
+      const link = this.spawn(job);
+      run.pid = link.pid;
+      run.pidStartedAt = link.pid === null ? null : this.processes.startedAt(link.pid);
+      this.links.set(run.id, link);
+      apply(
+        this.db,
+        (tx) => {
+          if (prepared.state === 'queued') decisions.move(tx, prepared, request.mode === 'brief' ? 'start_brief' : 'start_work', now);
+          else if (prepared !== task) tx.emit({ kind: 'task_changed', task: { ...prepared, updatedAt: now.toISOString() }, cause: 'edited' });
+          tx.emit({ kind: 'run_started', run, requestId: request.id, teamId: team.id });
+          for (const message of messages) tx.emit({ kind: 'message_delivered', message: { ...message, state: 'delivered', deliveredAt: now.toISOString() } });
+        },
+        now,
+      );
+      link.onMessage((raw) => this.onWorkerMessage(run.id, raw));
+      link.onExit(() => this.onWorkerGone(run.id));
+    } catch (error) {
+      const now = this.now();
+      const reason = error instanceof Error ? error.message : String(error);
+      apply(
+        this.db,
+        (tx) => {
+          tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: task.id });
+          decisions.raise(tx, this.db, now, { taskId: task.id, employeeId: employee.id, kind: 'failed', text: `${employee.name}'s run on "${task.title}" could not start: ${reason}`, options: decisions.optionsFor('failed') });
+        },
+        now,
+      );
+    }
+  }
+
+  protected jobFor(input: Parameters<typeof buildJob>[0]) {
+    return buildJob(input);
+  }
+
+  // ---------- what a worker says ----------
+
+  private onWorkerMessage(runId: string, raw: unknown): void {
+    const parsed = ToSupervisor.safeParse(raw);
+    const link = this.links.get(runId);
+    const run = store.getRun(this.db, runId);
+    if (!parsed.success || !link || !run || run.outcome !== 'running') return;
+    const message = parsed.data;
+    switch (message.t) {
+      case 'event':
+        return this.onRuntimeEvent(run, message.event);
+      case 'decide':
+        return link.send({ t: 'decision', askId: message.askId, ...this.judge(run, message.call) });
+      case 'tool':
+        return void this.onTool(run, message.name, message.input)
+          .catch((error): ToolReply => ({ ok: false, text: error instanceof Error ? error.message : String(error) }))
+          .then((reply) => link.send({ t: 'tool_result', askId: message.askId, ...reply }));
+      case 'message_result': {
+        const waiting = store.waitingMessages(this.db, run.employeeId).find((m) => m.id === message.id);
+        const now = this.now();
+        if (waiting && message.delivered) apply(this.db, (tx) => tx.emit({ kind: 'message_delivered', message: { ...waiting, state: 'delivered', deliveredAt: now.toISOString() } }), now);
+        return;
+      }
+      case 'exit': {
+        this.links.delete(runId);
+        link.kill(); // Nothing the session started may outlive the run.
+        const planned = this.planned.get(runId);
+        return this.finishRun(runId, planned?.outcome ?? message.outcome, planned?.reason ?? message.reason, { sessionId: message.sessionId ?? run.sessionId, summary: this.reports.get(runId) ?? message.summary });
+      }
+    }
+  }
+
+  /** The worker process is gone. If it never said goodbye, it crashed. */
+  private onWorkerGone(runId: string): void {
+    if (!this.links.delete(runId)) return;
+    this.finishRun(runId, 'failed', 'crashed');
+  }
+
+  private onRuntimeEvent(run: Run, event: RuntimeEvent): void {
+    const now = this.now();
+    const teamId = store.getEmployee(this.db, run.employeeId)?.teamId ?? '';
+    const recorded = event.kind === 'tool_call' ? { ...event, input: trimmed(event.input) } : event;
+    apply(
+      this.db,
+      (tx) => {
+        tx.emit({ kind: 'run_event', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, teamId, event: this.priced(run, recorded) });
+        if (event.kind === 'plan_usage') tx.emit({ kind: 'plan_usage', status: event.status, window: event.window, utilization: event.utilization, resetsAt: event.resetsAt });
+      },
+      now,
+    );
+    this.afterRuntimeEvent(run, event);
+  }
+
+  /** A turn's usage with its cost filled in when the SDK reported none. */
+  protected priced(_run: Run, event: RuntimeEvent): RuntimeEvent {
+    return event;
+  }
+
+  /** Reactions to what a session reported, beyond recording it (budgets, the usage limit). */
+  protected afterRuntimeEvent(_run: Run, _event: RuntimeEvent): void {}
+
+  /** May this tool call run? */
+  protected judge(_run: Run, _call: { id: string; tool: string; input: unknown }): { allow: boolean; reason?: string; stop?: boolean } {
+    return { allow: true };
+  }
+
+  /** The model called one of the engine's tools. */
+  protected async onTool(run: Run, name: EngineTool, input: unknown): Promise<ToolReply> {
+    const now = this.now();
+    switch (name) {
+      case 'set_status': {
+        const { text } = TOOL_INPUT.set_status.parse(input);
+        apply(this.db, (tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, text }), now);
+        return { ok: true, text: 'Noted.' };
+      }
+      case 'report_done': {
+        this.reports.set(run.id, TOOL_INPUT.report_done.parse(input).summary);
+        return { ok: true, text: 'Recorded. End your turn now: the engine takes it from here.' };
+      }
+      case 'request_decision': {
+        const { question, options } = TOOL_INPUT.request_decision.parse(input);
+        const employee = store.getEmployee(this.db, run.employeeId);
+        const task = store.getTask(this.db, run.taskId);
+        apply(
+          this.db,
+          (tx) =>
+            decisions.raise(tx, this.db, now, {
+              taskId: run.taskId,
+              runId: run.id,
+              employeeId: run.employeeId,
+              kind: 'question',
+              text: `${employee?.name ?? 'An employee'} asks about "${task?.title ?? 'a task'}": ${question}`,
+              freeText: true,
+              options: decisions.optionsFor('question', { choices: options }),
+            }),
+          now,
+        );
+        this.planned.set(run.id, { outcome: 'stopped', reason: 'question' });
+        return { ok: true, text: 'Your question is on the user\'s desk. End your turn now: you will be resumed with the answer.' };
+      }
+      default:
+        return { ok: false, text: `The tool ${name} is not available in this run.` };
+    }
+  }
+
+  // ---------- how a run ends ----------
+
+  /** Ends a live run at once, with the outcome the supervisor has decided. */
+  protected endRunNow(run: Run, outcome: RunOutcome, reason: string): void {
+    const link = this.links.get(run.id);
+    this.links.delete(run.id);
+    link?.send({ t: 'stop' });
+    link?.kill();
+    this.finishRun(run.id, outcome, reason);
+  }
+
+  private finishRun(runId: string, outcome: RunOutcome, reason: string | null, patch: Partial<Run> = {}): void {
+    const run = store.getRun(this.db, runId);
+    if (!run || run.outcome !== 'running') return;
+    const now = this.now();
+    const ended: Run = { ...run, ...patch, outcome, reason, endedAt: now.toISOString() };
+    const teamId = store.getEmployee(this.db, run.employeeId)?.teamId ?? '';
+    apply(this.db, (tx) => tx.emit({ kind: 'run_ended', run: ended, teamId }), now);
+    this.planned.delete(runId);
+    this.reports.delete(runId);
+    this.engineWork(ended.taskId, () => this.afterRun(ended));
+  }
+
+  /** Runs a piece of engine work for a task. While it runs the task is not idle; if it throws, a card says so. */
+  protected engineWork(taskId: string, work: () => Promise<void>): void {
+    this.busy.set(taskId, (this.busy.get(taskId) ?? 0) + 1);
+    const promise: Promise<void> = work()
+      .catch((error) => {
+        const now = this.now();
+        const task = store.getTask(this.db, taskId);
+        const reason = error instanceof Error ? error.message : String(error);
+        if (task) apply(this.db, (tx) => decisions.raise(tx, this.db, now, { taskId, kind: 'failed', text: `The engine could not finish its own step on "${task.title}": ${reason}`, options: decisions.optionsFor('failed') }), now);
+      })
+      .finally(() => {
+        const left = (this.busy.get(taskId) ?? 1) - 1;
+        if (left > 0) this.busy.set(taskId, left);
+        else this.busy.delete(taskId);
+        this.work.delete(promise);
+      });
+    this.work.add(promise);
+  }
+
+  private async afterRun(run: Run): Promise<void> {
+    const task = store.getTask(this.db, run.taskId);
+    if (!task || task.state === 'done' || task.state === 'failed') return;
+    switch (run.outcome) {
+      case 'done':
+        return this.onRunDone(run, task);
+      case 'failed':
+      case 'expired':
+        return this.onRunFailed(run, task);
+      case 'stopped':
+        if (run.reason === 'stopped_by_user') this.raiseForRun(run, task, 'failed', (name) => `You stopped ${name}'s run on "${task.title}". Run it again, or stop the task?`);
+        return;
+      default:
+        return; // refused, over budget, usage limit: the card was raised when it happened.
+    }
+  }
+
+  /** A run finished its work. Without a team flow, that completes the task. */
+  protected async onRunDone(_run: Run, task: Task): Promise<void> {
+    const now = this.now();
+    if (canTransition(task, 'complete')) apply(this.db, (tx) => void decisions.move(tx, task, 'complete', now), now);
+  }
+
+  private onRunFailed(run: Run, task: Task): void {
+    const now = this.now();
+    if (onFailure(run, task) === 'retry') {
+      const firstTurn = run.sessionId ? 'Your last run was cut short. The files in your folder are as you left them. Carry on with the task.' : null;
+      const request = store.newRequest({ taskId: task.id, mode: run.mode, employeeId: run.employeeId, reason: 'retry', attempt: run.attempt + 1, resumeSessionId: run.sessionId, firstTurn }, now);
+      return void apply(this.db, (tx) => tx.emit({ kind: 'run_requested', request }), now);
+    }
+    if (run.outcome === 'expired') {
+      const times = store.runsOf(this.db, task.id).filter((r) => r.outcome === 'expired').length;
+      const count = times === 1 ? 'once' : times === 2 ? 'twice' : `${times} times`;
+      const longer = run.leaseMinutes * 2;
+      return this.raiseForRun(run, task, 'lease', (name) => `${name}'s run on "${task.title}" went silent past its ${run.leaseMinutes}-minute lease ${count}. Retry with a ${longer}-minute lease, or stop the task?`, { leaseMinutes: run.leaseMinutes });
+    }
+    this.raiseForRun(run, task, 'failed', (name) => `${name}'s run on "${task.title}" failed: ${explain(run.reason)}. Retry, or stop the task?`);
+  }
+
+  protected raiseForRun(run: Run, task: Task, kind: 'lease' | 'failed', text: (employeeName: string) => string, context: { leaseMinutes?: number } = {}): void {
+    const now = this.now();
+    const name = store.getEmployee(this.db, run.employeeId)?.name ?? 'An employee';
+    apply(this.db, (tx) => decisions.raise(tx, this.db, now, { taskId: task.id, runId: run.id, employeeId: run.employeeId, kind, text: text(name), options: decisions.optionsFor(kind, context) }), now);
+  }
+
+  protected nameOf(id: string): string {
+    return id === 'user' ? 'the user' : (store.getEmployee(this.db, id)?.name ?? id);
+  }
+
+  /** For subclasses and helpers that write several events as one change. */
+  protected change(write: (tx: Tx, now: Date) => void): void {
+    const now = this.now();
+    apply(this.db, (tx) => write(tx, now), now);
+  }
+}
+
+function trimmed(input: unknown): unknown {
+  const json = JSON.stringify(input) ?? '';
+  return json.length <= TOOL_INPUT_LIMIT ? input : { trimmed: `${json.slice(0, TOOL_INPUT_LIMIT)}…` };
+}
+
+function explain(reason: string | null): string {
+  switch (reason) {
+    case 'crashed':
+      return 'its process died';
+    case 'error_max_turns':
+      return 'it reached its turn limit without finishing';
+    case 'no_report':
+      return 'it stopped without reporting what it did';
+    case 'error_during_execution':
+      return 'the session ended with an error';
+    default:
+      return reason ?? 'no reason was given';
+  }
+}

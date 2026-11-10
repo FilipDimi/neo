@@ -77,6 +77,7 @@ describe('store', () => {
     const made = store.newTask({ teamId: 'team1', title: 'T', brief: 'B', createdBy: 'user' }, T0);
     expect(made).toMatchObject({ state: 'queued', priority: 2, kind: 'work', capUsd: 2, retryAllowed: true, reviewRounds: 0, gates: [], ownership: [], createdAt: T0.toISOString() });
     expect(made.id).toMatch(/^[0-9a-f]{12}$/);
+    expect(store.newTask({ teamId: 'team1', title: 'T', brief: 'B', createdBy: 'user', assigneeId: undefined }, T0).assigneeId).toBeNull();
   });
 
   it('builds a run from a request, with its lease', () => {
