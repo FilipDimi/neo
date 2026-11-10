@@ -9,14 +9,33 @@ import path from 'node:path';
 
 const MARKER = 'RELEASE.json';
 const RUNNING = '.running';
+/** How far the two readings of one process's start may be apart: `ps` counts in whole seconds. */
+const SLACK_MS = 5000;
 
-/** When a process was started, as `ps` prints it; null when there is none with that number. */
-function startedAt(pid: number): string | null {
+/**
+ * How long a process has been running, in seconds; null when there is none with that number.
+ * Asked as a length of time, never as a date: a date is printed in the language and the time zone
+ * of whoever asks, and the engine and the release are not always started from the same place.
+ */
+function runningFor(pid: number): number | null {
+  let text: string;
   try {
-    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+    text = execFileSync('ps', ['-o', 'etime=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
     return null;
   }
+  // [[days-]hours:]minutes:seconds
+  const match = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(text);
+  if (!match) return null;
+  const [days, hours, minutes, seconds] = match.slice(1).map((part) => Number(part ?? 0));
+  return ((days! * 24 + hours!) * 60 + minutes!) * 60 + seconds!;
+}
+
+/** The moment a process started, in milliseconds since 1970; null when there is no such process. */
+function startedAt(pid: number): number | null {
+  if (pid === process.pid) return Math.round(Date.now() - process.uptime() * 1000);
+  const seconds = runningFor(pid);
+  return seconds === null ? null : Date.now() - seconds * 1000;
 }
 
 /**
@@ -32,7 +51,10 @@ function alive(release: string, pid: number): boolean {
   } catch {
     return false;
   }
-  return recorded === '' || recorded === started;
+  // No start time to compare (an older engine wrote none, or wrote a date as text): a live process with that number
+  // counts. That errs on the side of keeping a release, never of removing one that is in use.
+  if (!/^\d+$/.test(recorded)) return true;
+  return Math.abs(started - Number(recorded)) <= SLACK_MS;
 }
 
 function engines(release: string): number[] {
@@ -52,7 +74,8 @@ export function markRunning(root: string, pid: number = process.pid): void {
   const dir = path.join(root, RUNNING);
   fs.mkdirSync(dir, { recursive: true });
   for (const other of engines(root)) if (!alive(root, other)) fs.rmSync(path.join(dir, String(other)), { force: true });
-  fs.writeFileSync(path.join(dir, String(pid)), startedAt(pid) ?? '');
+  const started = startedAt(pid);
+  fs.writeFileSync(path.join(dir, String(pid)), started === null ? '' : String(started));
 }
 
 /** True while an engine that was started from this release is still running. */

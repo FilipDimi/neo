@@ -60,6 +60,20 @@ It checked and found correct: the split and ownership rules, the second look at 
 
 `npm test` after these: 598 passed, 3 skipped.
 
+## The same evening: the first hour of real use
+
+Filip wrote "yo, what are we working on?" on the Rust lead's page. The engine treated a message to anyone but the chief of staff as work: it became a Rust task, the lead read the documents to answer it ($0.68), a teammate reviewed the answer ($0.23), and the engine then asked to merge a branch with nothing on it. Fixed, each with a test that failed first:
+
+- A message to any employee is a conversation. It is answered in words, from the engine's own record of the boards, with no repository, no review and nothing to merge; the answer shows on that person's page and in the chat line under the sender's name. If the message asks for work, the one who was asked puts it on its own team's board (and on no other).
+- A conversation does not load the employee's skills first.
+- A task that changed no file is done when it is finished: nobody is asked to merge nothing. A merge card over an empty branch that an older engine raised is taken away at the next start.
+- Starting the company a second time says that it is already running and opens it, instead of failing on the port.
+- Whether a release is in use is no longer decided by comparing dates as text, which depends on the language and time zone of whoever asks: the engine writes when it started as a number, and the check asks how long the process has run.
+
+Run live on Haiku in a throwaway company: the same question to a lead was answered in 3 seconds for $0.0013, from the board, with no task, no review and no card.
+
+The company was found stopped once more that evening: the desktop app had restarted and taken the server it runs under with it. It lives only as long as the app keeps it; see the end of `docs/dogfood-receipts.md`.
+
 ## What is not covered
 
 - The part of the third review that was to try to get past the sandbox and the path rules was stopped by the model's own safety filter before it reported anything. It was not done. The second review did test those, and its findings are items 1, 2, 6, 7 and 8 above.

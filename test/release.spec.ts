@@ -35,11 +35,30 @@ describe('a release an engine runs from', () => {
     const { at } = releases(['a']);
     // This process is alive, but it did not start when the file says its engine did.
     fs.mkdirSync(path.join(at('a'), '.running'));
-    fs.writeFileSync(path.join(at('a'), '.running', String(process.pid)), 'Mon Jan  1 00:00:00 2001');
+    fs.writeFileSync(path.join(at('a'), '.running', String(process.pid)), String(Date.now() - 24 * 3600_000));
     expect(inUse(at('a'))).toBe(false);
-    // A file from before start times were written has nothing to compare: a live process with that number counts.
-    fs.writeFileSync(path.join(at('a'), '.running', String(process.pid)), '');
-    expect(inUse(at('a'))).toBe(true);
+    // A file with no start time in it (an engine from before they were written, or one that wrote a date as text)
+    // has nothing to compare: a live process with that number counts, which errs on the side of keeping the release.
+    for (const older of ['', 'Tue Nov 10 15:57:21 2026', 'Di 10 Nov 15:57:21 2026']) {
+      fs.writeFileSync(path.join(at('a'), '.running', String(process.pid)), older);
+      expect(inUse(at('a')), JSON.stringify(older)).toBe(true);
+    }
+  });
+
+  it('gives the same answer whatever language and time zone the asking terminal is set to', () => {
+    // The engine is started in one place (an app, a login item) and the release is made in another (a terminal).
+    const { at } = releases(['a']);
+    markRunning(at('a'));
+    expect(fs.readFileSync(path.join(at('a'), '.running', String(process.pid)), 'utf8')).toMatch(/^\d{13}$/);
+    const before = { LANG: process.env.LANG, LC_ALL: process.env.LC_ALL, TZ: process.env.TZ };
+    try {
+      for (const [LANG, TZ] of [['de_DE.UTF-8', 'Asia/Tokyo'], ['en_GB.UTF-8', 'America/Los_Angeles'], ['C', 'UTC']] as const) {
+        Object.assign(process.env, { LANG, LC_ALL: LANG, TZ });
+        expect(inUse(at('a')), `${LANG} ${TZ}`).toBe(true);
+      }
+    } finally {
+      for (const [name, value] of Object.entries(before)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
   });
 
   it('is not marked when the engine runs from a folder that is not a release', () => {
