@@ -21,7 +21,7 @@ export type Ctx = {
 export type Tool = { name: string; description: string; input: z.ZodRawShape; run(args: Record<string, unknown>, ctx: Ctx): Promise<string> };
 
 /** What is said to every session that has these tools, before it uses one. */
-export const INSTRUCTIONS = `These tools reach a company of AI employees that runs on this Mac: teams with boards of tasks, a chief of staff who answers questions and turns requests into tasks, and cards for the decisions that are the user's alone. The same company is on screen at http://127.0.0.1:4317.
+export const INSTRUCTIONS = `This is the user's line to their chief of staff (Neo, unless they renamed it) and the company it runs. When the user says "ask Neo", "tell Neo" or names the company, use chat: Neo knows every board and turns a request into tasks on the right team. These tools reach a company of AI employees that runs on this Mac: teams with boards of tasks, a chief of staff who answers questions and turns requests into tasks, and cards for the decisions that are the user's alone. The same company is on screen at http://127.0.0.1:4317.
 
 Read: now (every board, who is running, cards waiting, spend today), tasks, task (one task with its runs), cards, replies (what employees last said to the user).
 Talk: chat (the chief of staff: questions about the company, and requests it turns into tasks on the right team), message (one employee by name: answered as a conversation; work that is asked for goes on that employee's own team's board).

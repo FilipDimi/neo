@@ -35,7 +35,7 @@ const call: Call = (method, route, body) => {
   return caller(port, token)(method, route, body);
 };
 
-const server = new McpServer({ name: 'company', version: '0.1.0' }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: 'neo', version: '0.1.0' }, { instructions: INSTRUCTIONS });
 for (const tool of TOOLS) {
   server.registerTool(tool.name, { description: tool.description, inputSchema: tool.input }, async (args: Record<string, unknown>) => {
     const result = await runTool(tool.name, args, { call, start });

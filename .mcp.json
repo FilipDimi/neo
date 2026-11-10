@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "company": {
+    "neo": {
       "command": "bash",
       "args": ["-c", "cd \"$HOME/.virtual-startup-app/current\" && exec node_modules/.bin/tsx src/mcp/server.ts"]
     }

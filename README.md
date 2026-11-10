@@ -45,10 +45,10 @@ The company in `~/.virtual-startup` runs from a release, a copy of one commit un
 
 The company can be worked from any Claude session on this Mac, and so from a phone through one: `src/mcp/` is a small server with ten tools. `now`, `tasks`, `task`, `cards` and `replies` read and cost nothing. `chat` talks to the chief of staff and `message` to one employee by name; both wait for the reply. `answer_card` presses a button on a card and `new_task` puts work on a team; a session is told to ask first for both. `start` starts the company when it is not running, as a process of its own that outlives the session.
 
-The tools hold nothing and decide nothing: each is a call to the engine's own API on this machine, with the same token the screen uses. A session opened in this folder is offered them through `.mcp.json`. To have them in every session, as jarvis is:
+The tools hold nothing and decide nothing: each is a call to the engine's own API on this machine, with the same token the screen uses. A session opened in this folder is offered them through `.mcp.json`. To have them in every session, as jarvis is, registered under the chief of staff's name so that "ask Neo" finds them:
 
 ```bash
-claude mcp add --scope user company -- bash -c 'cd "$HOME/.virtual-startup-app/current" && exec node_modules/.bin/tsx src/mcp/server.ts'
+claude mcp add --scope user neo -- bash -c 'cd "$HOME/.virtual-startup-app/current" && exec node_modules/.bin/tsx src/mcp/server.ts'
 ```
 
 They run from the current release, like the company itself.
