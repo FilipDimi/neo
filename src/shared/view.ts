@@ -30,7 +30,8 @@ export function attention(task: Task, liveRun: Run | undefined, decisions: Decis
   return 'none';
 }
 
-const WHY: Record<Decision['kind'], string> = {
+/** Why a task is waiting, in a few words, by the kind of card that is open on it. */
+export const WHY: Record<Decision['kind'], string> = {
   lease: 'lease expired',
   failed: 'the run failed',
   cap: 'over its cap',
