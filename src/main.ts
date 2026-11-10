@@ -12,14 +12,29 @@ import path from 'node:path';
 import open from 'open';
 import { buildServer, DEFAULT_PORT } from './api/server.ts';
 import { ensureWebBuilt } from './api/webBuild.ts';
+import { whoAnswers } from './api/whoAnswers.ts';
 import { dataDir, paths } from './db/dataDir.ts';
 import { openDb } from './db/open.ts';
 import { markRunning } from './release.ts';
 import { Supervisor } from './supervisor/supervisor.ts';
 
+const port = Number(process.env.VS_PORT ?? DEFAULT_PORT);
+const url = `http://127.0.0.1:${port}/`;
+
+// One engine per port. A second start says so and touches nothing: not the database, not the runs of the first.
+const there = await whoAnswers(port);
+if (there === 'engine') {
+  console.log(`The company is already running at ${url}\nNothing was started. Use that one${process.env.VS_NO_OPEN ? '' : '; opening it now'}. To start it afresh, stop the one that is running first.`);
+  if (!process.env.VS_NO_OPEN) await open(url);
+  process.exit(0);
+}
+if (there === 'other') {
+  console.error(`Port ${port} on this machine is taken by another program, so the company cannot start there.\nStop that program, or start on another port: VS_PORT=4320 npm start`);
+  process.exit(1);
+}
+
 ensureWebBuilt();
 const dir = dataDir();
-const port = Number(process.env.VS_PORT ?? DEFAULT_PORT);
 const db = openDb(paths(dir).db);
 const supervisor = new Supervisor({ db, dataDir: dir, apiPort: port, ...(process.env.VS_RUNTIME_MODULE ? { runtimeModule: process.env.VS_RUNTIME_MODULE } : {}) });
 const app = await buildServer({ db, dataDir: dir, supervisor, port });
@@ -28,7 +43,6 @@ supervisor.start();
 // When this is a release, say that an engine runs from it, so that making a newer release leaves it in place.
 markRunning(path.resolve(import.meta.dirname, '..'));
 
-const url = `http://127.0.0.1:${port}/`;
 console.log(`The company in ${dir} is running at ${url}`);
 if (!process.env.VS_NO_OPEN) await open(url);
 
