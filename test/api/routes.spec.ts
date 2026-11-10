@@ -238,6 +238,21 @@ describe('company, teams and people', () => {
     expect(store.getTeam(w.db, 'team1')?.leadId).toBeNull();
   });
 
+  it('removes a team: it leaves the snapshot with its work, takes no new task, and cannot be edited', async () => {
+    const { call, w } = await fresh();
+    const made = (await call('POST', '/api/teams', { name: 'qa', purpose: 'Tests things.', selfManaged: true, repos: [] })).json.team;
+    const hired = (await call('POST', '/api/employees', { name: 'shaheer', teamId: made.id, role: 'Tests.', model: 'claude-opus-5-5', capabilities: ['read_files'] })).json.employee;
+    const removed = await call('POST', `/api/teams/${made.id}/remove`);
+    expect(removed.status).toBe(200);
+    expect(removed.json.team).toMatchObject({ id: made.id, removed: true });
+    expect(store.getEmployee(w.db, hired.id)!.fired).toBe(true);
+    const snapshot = (await call('GET', '/api/snapshot')).json;
+    expect(snapshot.teams.map((team: { id: string }) => team.id)).not.toContain(made.id);
+    expect((await call('POST', '/api/tasks', { teamId: made.id, assigneeId: hired.id, title: 'More', brief: 'x' })).json.error).toMatch(/qa was removed/);
+    expect((await call('PATCH', `/api/teams/${made.id}`, { dailyCapUsd: 5 })).json.error).toMatch(/qa was removed/);
+    expect((await call('POST', '/api/teams/nope/remove')).status).toBe(404);
+  });
+
   it('creates and edits a team, registers a repository, and edits the company', async () => {
     const repoPath = gitRepo();
     const { call, w } = await fresh();

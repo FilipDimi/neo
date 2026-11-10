@@ -26,7 +26,8 @@ export const getRequest = (db: Db, id: string) => getRow<RunRequest>(db, 'run_re
 export const getHealth = (db: Db) => getRow<HealthReport & { id: string }>(db, 'meta', 'health');
 export const getPlanUsage = (db: Db) => getRow<PlanUsage & { id: string; at: string }>(db, 'meta', 'planUsage');
 
-export const allTeams = (db: Db) => rows<Team>(db, 'teams');
+/** The teams at work. A removed team is still a row (getTeam finds it, for its old work) but in no list. */
+export const allTeams = (db: Db) => rows<Team>(db, 'teams').filter((team) => !team.removed);
 export const allEmployees = (db: Db) => rows<Employee>(db, 'employees');
 export const allRepos = (db: Db) => rows<Repo>(db, 'repos');
 export const allRuns = (db: Db) => rows<Run>(db, 'runs', 'ORDER BY rowid');

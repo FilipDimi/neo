@@ -70,6 +70,8 @@ export const Team = z.object({
   maxReviewRounds: z.number().int().positive(),
   /** Folders outside the task folder that this team's commands may write: the build profile. */
   sandboxWrite: z.array(z.string()),
+  /** The team was removed: its people were fired and it is in no list. The record stays, so its old work can still be named. */
+  removed: z.boolean().optional(),
 });
 export type Team = z.infer<typeof Team>;
 

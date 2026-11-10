@@ -31,6 +31,7 @@ export function hire(ctx: HireCtx, input: HireInput): Employee {
   const team = store.getTeam(ctx.db, input.teamId);
   const company = store.getCompany(ctx.db);
   if (!team || !company) throw new Error(`there is no team ${input.teamId}`);
+  if (team.removed) throw new Error(`the team ${team.name} was removed`);
   if (!input.name.trim()) throw new Error('an employee needs a name');
   const form: HireForm =
     'preset' in input
@@ -58,6 +59,26 @@ export function hire(ctx: HireCtx, input: HireInput): Employee {
 }
 
 /** Firing stops nothing in flight. The memory is archived, not deleted. */
+/**
+ * Removes a team: everyone on it is fired (their memory archived, as for any firing) and the team leaves every list.
+ * Its record stays, so the work it finished can still be named. Refused while any of its work is not finished,
+ * and for the chief of staff's own team.
+ */
+export function removeTeam(ctx: HireCtx, teamId: string): Team {
+  const team = store.getTeam(ctx.db, teamId);
+  if (!team) throw new Error(`there is no team ${teamId}`);
+  if (team.removed) throw new Error(`the team ${team.name} was already removed`);
+  const chief = store.getCompany(ctx.db)?.chiefOfStaffId;
+  const people = store.allEmployees(ctx.db).filter((employee) => employee.teamId === team.id && !employee.fired);
+  if (chief && people.some((employee) => employee.id === chief)) throw new Error(`the team ${team.name} is the chief of staff's own team; it cannot be removed`);
+  const open = store.listTasks(ctx.db, { teamId: team.id }).filter((task) => task.state !== 'done' && task.state !== 'failed');
+  if (open.length > 0) throw new Error(`the team ${team.name} still has work that is not finished: ${open.map((task) => `"${task.title}"`).join(', ')}. Finish or stop it first`);
+  for (const employee of people) fire(ctx, employee.id);
+  const removed: Team = { ...store.getTeam(ctx.db, team.id)!, leadId: null, removed: true };
+  apply(ctx.db, (tx) => tx.emit({ kind: 'team_changed', team: removed }), ctx.now);
+  return removed;
+}
+
 export function fire(ctx: HireCtx, employeeId: string): void {
   const employee = store.getEmployee(ctx.db, employeeId);
   if (!employee) throw new Error(`there is no employee ${employeeId}`);

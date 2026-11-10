@@ -6,7 +6,8 @@ import { paths } from '../../src/db/dataDir.ts';
 import { openDb } from '../../src/db/open.ts';
 import * as store from '../../src/db/store.ts';
 import type { SkillRef } from '../../src/runtime/skills.ts';
-import { edit, fire, hire } from '../../src/supervisor/hiring.ts';
+import { edit, fire, hire, removeTeam } from '../../src/supervisor/hiring.ts';
+import { newTask } from '../../src/db/store.ts';
 import { company, employee, T0, team, tempDir } from '../helpers.ts';
 
 const SKILLS: SkillRef[] = [
@@ -64,6 +65,42 @@ describe('hire', () => {
     hire(ctx, { preset: 'engineering_lead', name: 'Priya', teamId: 'ios' });
     expect(() => hire(ctx, { preset: 'engineering_lead', name: 'Second', teamId: 'ios' })).toThrow(/already has a lead/);
     expect(() => hire(ctx, { preset: 'engineering_lead', name: 'Lead', teamId: 'marketing' })).toThrow(/self-managed/);
+  });
+});
+
+describe('removing a team', () => {
+  it('fires everyone on it, keeps its record, and takes it out of every list', () => {
+    const { db, ctx, dir } = setup();
+    const lead = hire(ctx, { preset: 'engineering_lead', name: 'Priya', teamId: 'ios' });
+    const ada = hire(ctx, { preset: 'engineer', name: 'Ada', teamId: 'ios' });
+    fs.mkdirSync(ada.memoryDir, { recursive: true });
+    // Finished work does not stand in the way: it stays where it is.
+    apply(db, (tx) => tx.emit({ kind: 'task_changed', task: { ...newTask({ teamId: 'ios', title: 'Old work', brief: 'Done long ago.', createdBy: 'user' }, T0), state: 'done' }, cause: 'created' }));
+    const removed = removeTeam(ctx, 'ios');
+    expect(removed).toMatchObject({ id: 'ios', removed: true, leadId: null });
+    expect([lead, ada].map((person) => store.getEmployee(db, person.id)!.fired)).toEqual([true, true]);
+    expect(fs.readdirSync(path.join(dir, 'memory', 'archive'))).toHaveLength(1);
+    expect(store.allTeams(db).map((team) => team.id)).toEqual(['marketing']);
+    // Its record is kept, so the work it did can still be named.
+    expect(store.getTeam(db, 'ios')).toMatchObject({ name: 'Engineering iOS', removed: true });
+    expect(store.listTasks(db).map((task) => task.title)).toEqual(['Old work']);
+    // Nobody can be hired onto it, and it cannot be removed twice.
+    expect(() => hire(ctx, { preset: 'engineer', name: 'Next', teamId: 'ios' })).toThrow(/Engineering iOS was removed/);
+    expect(() => removeTeam(ctx, 'ios')).toThrow(/already removed/);
+  });
+
+  it('refuses while the team has work that is not finished, naming it', () => {
+    const { db, ctx } = setup();
+    apply(db, (tx) => tx.emit({ kind: 'task_changed', task: newTask({ teamId: 'ios', title: 'Fix the roster', brief: 'x', createdBy: 'user' }, T0), cause: 'created' }));
+    expect(() => removeTeam(ctx, 'ios')).toThrow(/Fix the roster/);
+    expect(store.allTeams(db).map((team) => team.id)).toContain('ios');
+  });
+
+  it("refuses the chief of staff's own team", () => {
+    const { db, ctx } = setup();
+    const neo = hire(ctx, { name: 'Neo', teamId: 'marketing', role: 'Chief of staff.', model: 'claude-opus-5-5', lead: false, skills: [], capabilities: ['read_files'] });
+    apply(db, (tx) => tx.emit({ kind: 'company_changed', company: { ...store.getCompany(db)!, chiefOfStaffId: neo.id } }));
+    expect(() => removeTeam(ctx, 'marketing')).toThrow(/chief of staff/);
   });
 });
 

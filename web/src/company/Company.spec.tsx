@@ -201,6 +201,24 @@ describe('TeamForm', () => {
     expect(XCODE_BUILD_FOLDERS).toContain('~/Library/Developer/Xcode');
   });
 
+  it('removes a team after asking, and does nothing when the answer is no', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    let done = 0;
+    const { api } = mount(<TeamForm teamId="ios" onDone={() => done++} />, { store, now: T0, api: fakeApi(() => ({ team: {} })) });
+    await userEvent.click(screen.getByRole('button', { name: 'Remove the team' }));
+    expect(api.calls).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'Remove the team' }));
+    await waitFor(() => expect(api.calls).toEqual([['POST', '/api/teams/ios/remove']]));
+    expect(confirm.mock.calls[0]![0]).toMatch(/Remove Engineering iOS\? Everyone on it is fired/);
+    await waitFor(() => expect(done).toBe(1));
+    confirm.mockRestore();
+  });
+
+  it('offers no Remove on a team that is being made', () => {
+    mount(<TeamForm onDone={() => {}} />, { store, now: T0, api: fakeApi(() => ({ team: {} })) });
+    expect(screen.queryByRole('button', { name: 'Remove the team' })).toBeNull();
+  });
+
   it('edits an existing team with PATCH', async () => {
     const { api } = mount(<TeamForm teamId="ios" onDone={() => {}} />, { store, now: T0, api: fakeApi(() => ({ team: {} })) });
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Engineering iOS');

@@ -53,6 +53,18 @@ export function TeamForm({ teamId, onDone }: { teamId?: string | undefined; onDo
     }
   }
 
+  async function remove(): Promise<void> {
+    if (!existing) return;
+    if (!window.confirm(`Remove ${existing.name}? Everyone on it is fired, and it leaves the board, the office and the org chart. What it already finished stays on disk.`)) return;
+    setError(null);
+    try {
+      await api.post(`/api/teams/${existing.id}/remove`);
+      onDone();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    }
+  }
+
   return (
     <form className="panel" aria-label={existing ? `Edit ${existing.name}` : 'New team'} onSubmit={(event) => void submit(event)}>
       <h2>{existing ? `Edit ${existing.name}` : 'New team'}</h2>
@@ -150,6 +162,11 @@ export function TeamForm({ teamId, onDone }: { teamId?: string | undefined; onDo
         <button type="button" className="pill" onClick={onDone}>
           Cancel
         </button>
+        {existing && (
+          <button type="button" className="pill danger" onClick={() => void remove()}>
+            Remove the team
+          </button>
+        )}
       </div>
     </form>
   );

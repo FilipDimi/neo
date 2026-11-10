@@ -27,6 +27,13 @@ let nextId = 11;
 const row = (event: EngineEvent, at = T0): EventRow => ({ id: nextId++, at: at.toISOString(), ...subjectsOf(event), event });
 
 describe('the store', () => {
+  it('drops a team that was removed, and its tasks with it', () => {
+    const store = fromSnapshot(snapshot({ teams: [team(), team({ id: 'team2', name: 'qa' })], tasks: [task(), task({ id: 'qa-task', teamId: 'team2' })] }));
+    const next = reduce(store, row({ kind: 'team_changed', team: team({ id: 'team2', name: 'qa', removed: true }) }));
+    expect([...next.teams.keys()]).toEqual(['team1']);
+    expect([...next.tasks.keys()]).toEqual(['task1']);
+  });
+
   it('builds maps from a snapshot', () => {
     const store = fromSnapshot(snapshot());
     expect(store.tasks.get('task1')?.title).toBe('Do the thing');

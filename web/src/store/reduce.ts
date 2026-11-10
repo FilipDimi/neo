@@ -118,6 +118,12 @@ export function reduce(store: Store, row: EventRow): Store {
     else if (change.table === 'meta' && change.id === 'health') next.health = change.row as HealthReport;
     else if (change.table === 'meta' && change.id === 'planUsage') next.planUsage = change.row as PlanUsage;
   }
+  // A removed team leaves the screen, and its work with it.
+  if (row.event.kind === 'team_changed' && row.event.team.removed) {
+    const gone = row.event.team.id;
+    put('teams', gone, null);
+    for (const [taskId, task] of next.tasks) if (task.teamId === gone) put('tasks', taskId, null);
+  }
   if (row.event.kind === 'run_event' && row.event.event.kind === 'usage') {
     const { costUsd } = row.event.event;
     const { teamId, employeeId } = row.event;

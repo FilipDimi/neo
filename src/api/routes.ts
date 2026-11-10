@@ -22,7 +22,7 @@ import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.t
 import { chat, messageEmployee } from '../supervisor/chat.ts';
 import { companyNow } from '../supervisor/companyNow.ts';
 import { repoProblem } from '../supervisor/health.ts';
-import { edit, fire, hire, type HireCtx } from '../supervisor/hiring.ts';
+import { edit, fire, hire, type HireCtx, removeTeam } from '../supervisor/hiring.ts';
 import { readIndex } from '../supervisor/memory.ts';
 import { AlreadySetUp, setupCompany, TEAM_DEFAULTS } from '../supervisor/setup.ts';
 import type { Supervisor } from '../supervisor/supervisor.ts';
@@ -101,12 +101,14 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     // Everything still open, what finished today, and the last few things that finished before today,
     // so that what they produced can still be opened. Work older than that is history, not the board.
     const all = store.listTasks(db);
+    // A removed team is gone from the screen, and its work with it.
+    const atWork = new Set(store.allTeams(db).map((team) => team.id));
     const over = (task: Task) => task.state === 'done' || task.state === 'failed';
     const earlier = all
       .filter((task) => task.kind === 'work' && over(task) && task.updatedAt < since)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id))
       .slice(0, EARLIER_SHOWN);
-    const tasks = [...all.filter((task) => !over(task) || task.updatedAt >= since), ...earlier];
+    const tasks = [...all.filter((task) => !over(task) || task.updatedAt >= since), ...earlier].filter((task) => atWork.has(task.teamId));
     const shown = new Set(tasks.map((task) => task.id));
     const spend = store.spendToday(db, at);
     return {
@@ -163,6 +165,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
 
   /** A team may only name repositories that are registered and branches that exist in them. */
   async function checkedTeam(team: Team): Promise<Team> {
+    if (team.removed) throw new HttpError(400, `The team ${team.name} was removed.`);
     for (const entry of z.array(TeamRepo).parse(team.repos)) {
       const repo = store.getRepo(db, entry.repoId);
       if (!repo) throw new HttpError(400, `There is no repository ${entry.repoId}.`);
@@ -178,6 +181,8 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     apply(db, (tx) => tx.emit({ kind: 'team_changed', team }), now());
     return { team };
   });
+
+  app.post('/api/teams/:id/remove', async (request) => ({ team: removeTeam(hireCtx(), found(store.getTeam(db, id(request)), 'such team').id) }));
 
   app.patch('/api/teams/:id', async (request) => {
     const team = await checkedTeam({ ...found(store.getTeam(db, id(request)), 'such team'), ...TeamPatch.parse(request.body) });

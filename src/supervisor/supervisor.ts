@@ -183,6 +183,7 @@ export class Supervisor {
   createTask(input: NewTaskInput): Task {
     const team = store.getTeam(this.db, input.teamId);
     if (!team) throw new Error(`no team ${input.teamId}`);
+    if (team.removed) throw new Error(`the team ${team.name} was removed`);
     if (input.assigneeId) {
       const assignee = store.getEmployee(this.db, input.assigneeId);
       if (!assignee || assignee.fired) throw new Error(`no employee ${input.assigneeId}`);

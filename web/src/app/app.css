@@ -13,3 +13,9 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* A button that removes something for good. */
+.pill.danger {
+  color: var(--danger, #c0392b);
+  margin-left: auto;
+}
