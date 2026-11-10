@@ -2,10 +2,13 @@
  * The supervisor: one loop that owns the database, starts one worker per run, enforces leases
  * and limits, and turns everything it may not decide into a card. It never runs a model session.
  */
+import os from 'node:os';
+import path from 'node:path';
 import { apply, type Tx } from '../db/apply.ts';
 import { paths as pathsOf, type Paths } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
+import { listSkills, mountSkills, type SkillDirs, type SkillRef } from '../runtime/skills.ts';
 import type { RuntimeEvent } from '../shared/runtime.ts';
 import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task } from '../shared/types.ts';
 import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
@@ -36,6 +39,8 @@ export type SupervisorOptions = {
   processes?: Processes;
   /** How machine health is measured. Tests substitute these. */
   probes?: Probes;
+  /** Where installed skills are looked for. Defaults to Claude Code's folders and the company's own. */
+  skillDirs?: SkillDirs;
 };
 
 export type NewTaskInput = Pick<Task, 'teamId' | 'title' | 'brief'> &
@@ -48,7 +53,7 @@ const TOOL_INPUT_LIMIT = 2048;
 export class Supervisor {
   readonly db: Db;
   readonly paths: Paths;
-  protected readonly now: () => Date;
+  readonly now: () => Date;
   private readonly tickMs: number;
   private readonly spawn: Spawn;
   private readonly runtimeModule: string | undefined;
@@ -68,6 +73,10 @@ export class Supervisor {
   private readonly dataDir: string;
   private healthTimer: NodeJS.Timeout | undefined;
   private blockedRepos = new Set<string>();
+  private readonly skillDirs: SkillDirs;
+  private skillCache: { at: number; refs: SkillRef[] } | undefined;
+  /** Tasks a route run has created so far, for its status line. */
+  private readonly routed = new Map<string, number>();
 
   constructor(options: SupervisorOptions) {
     this.db = options.db;
@@ -77,6 +86,7 @@ export class Supervisor {
     this.runtimeModule = options.runtimeModule;
     this.processes = options.processes ?? processes;
     this.dataDir = options.dataDir;
+    this.skillDirs = options.skillDirs ?? { userSkills: path.join(os.homedir(), '.claude', 'skills'), pluginCache: path.join(os.homedir(), '.claude', 'plugins', 'cache'), companySkills: pathsOf(options.dataDir).skills };
     this.probes = options.probes ?? realProbes(() => sessionEnv(store.getCompany(this.db) ?? { auth: 'subscription' }));
     this.spawn = options.spawn ?? forkSpawn(options.workerEntry ?? DEFAULT_WORKER, { logDir: this.paths.logs });
     this.flow = new Flow({
@@ -174,6 +184,12 @@ export class Supervisor {
     const live = store.liveRuns(this.db).find((run) => run.employeeId === toId);
     this.links.get(live?.id ?? '')?.send({ t: 'message', id: message.id, text: `Message from ${this.nameOf(fromId)}: ${text}` });
     return message;
+  }
+
+  /** Every skill installed on this machine that an employee could be given. Scanned at most every half minute. */
+  skills(): SkillRef[] {
+    if (!this.skillCache || Date.now() - this.skillCache.at > 30_000) this.skillCache = { at: Date.now(), refs: listSkills(this.skillDirs) };
+    return this.skillCache.refs;
   }
 
   stopRun(runId: string): void {
@@ -288,6 +304,12 @@ export class Supervisor {
       const ready = await this.flow.prepare(task, request);
       const prepared: Task = Object.keys(ready.task).length > 0 ? { ...task, ...ready.task } : task;
       if (ready.firstTurn) request = { ...request, firstTurn: ready.firstTurn };
+      // The chief of staff keeps one conversation going, as long as it is recent.
+      if (request.mode === 'route' && !request.resumeSessionId && employee.chatSessionId) {
+        const last = store.allRuns(this.db).filter((r) => r.employeeId === employee.id && r.mode === 'route' && r.endedAt).at(-1);
+        if (last?.endedAt && this.now().getTime() - new Date(last.endedAt).getTime() < 2 * 3600_000) request = { ...request, resumeSessionId: employee.chatSessionId };
+      }
+      const mounted = employee.skills.length > 0 ? mountSkills(this.skills().filter((skill) => employee.skills.includes(skill.id)), path.join(this.paths.mounts, employee.id)) : { skills: [], plugins: [] };
       const now = this.now();
       const run = store.newRun(request, now, leaseMinutesFor(request, task, team));
       const messages = store.waitingMessages(this.db, employee.id);
@@ -307,6 +329,7 @@ export class Supervisor {
         remainingUsd: Math.max(0, task.capUsd - store.spentOn(this.db, task.id)),
         envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)),
         maxBudgetUsd: budget,
+        mounted,
         messages,
         nameOf: (id) => this.nameOf(id),
         ...(this.runtimeModule ? { runtimeModule: this.runtimeModule } : {}),
@@ -544,6 +567,15 @@ export class Supervisor {
         this.planned.set(run.id, { outcome: 'stopped', reason: 'question' });
         return { ok: true, text: 'Your question is on the user\'s desk. End your turn now: you will be resumed with the answer.' };
       }
+      case 'create_task': {
+        const wanted = TOOL_INPUT.create_task.parse(input);
+        const created = this.createTask({ ...wanted, createdBy: run.employeeId });
+        const count = (this.routed.get(run.id) ?? 0) + 1;
+        this.routed.set(run.id, count);
+        apply(this.db, (tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, text: `writing ${count} task${count === 1 ? '' : 's'} from your chat` }), now);
+        const team = store.getTeam(this.db, created.teamId);
+        return { ok: true, text: `Created "${created.title}" on ${team?.name ?? created.teamId}${created.assigneeId ? ` for ${this.nameOf(created.assigneeId)}` : '; its lead will brief it'}.` };
+      }
       case 'propose_subtasks':
         return this.flow.onProposal(run, input);
       case 'submit_review':
@@ -575,6 +607,7 @@ export class Supervisor {
     apply(this.db, (tx) => tx.emit({ kind: 'run_ended', run: ended, teamId }), now);
     this.planned.delete(runId);
     this.reports.delete(runId);
+    this.routed.delete(runId);
     this.engineWork(ended.taskId, () => this.afterRun(ended));
   }
 
@@ -604,6 +637,14 @@ export class Supervisor {
       case 'done': {
         const employee = store.getEmployee(this.db, run.employeeId);
         if (employee && run.summary && run.mode !== 'route') remember(employee.memoryDir, `${task.title}: ${run.summary}`, this.now());
+        // The chief of staff's last words are its reply in the chat, and its conversation carries on from here.
+        if (employee && run.mode === 'route') {
+          this.change((tx, now) => {
+            const at = now.toISOString();
+            tx.emit({ kind: 'message_sent', message: { id: store.newId(), fromId: employee.id, toId: 'user', taskId: task.id, text: run.summary ?? 'Done.', state: 'delivered', at, deliveredAt: at } });
+            tx.emit({ kind: 'employee_changed', employee: { ...store.getEmployee(this.db, employee.id)!, chatSessionId: run.sessionId } });
+          });
+        }
         return this.onRunDone(run, task);
       }
       case 'failed':
@@ -626,6 +667,9 @@ export class Supervisor {
 
   private onRunFailed(run: Run, task: Task): void {
     const now = this.now();
+    // A chat that could not be resumed starts fresh next time.
+    const chief = run.mode === 'route' ? store.getEmployee(this.db, run.employeeId) : undefined;
+    if (chief?.chatSessionId) apply(this.db, (tx) => tx.emit({ kind: 'employee_changed', employee: { ...chief, chatSessionId: null } }), now);
     if (onFailure(run, task) === 'retry') {
       const firstTurn = run.sessionId ? 'Your last run was cut short. The files in your folder are as you left them. Carry on with the task.' : null;
       const request = store.newRequest({ taskId: task.id, mode: run.mode, employeeId: run.employeeId, reason: 'retry', attempt: run.attempt + 1, resumeSessionId: run.sessionId, firstTurn }, now);

@@ -49,6 +49,8 @@ export type JobInput = {
   maxBudgetUsd?: number;
   /** .env files of the registered repositories: hidden from commands as well as from the Read tool. */
   envFiles: string[];
+  /** The chosen skills as the session names them, and the plugin folders that carry them. */
+  mounted: { skills: string[]; plugins: string[] };
   messages: Message[];
   nameOf: (id: string) => string;
   runtimeModule?: string;
@@ -77,8 +79,8 @@ export function buildJob(input: JobInput): WorkerJob {
     env: { ...sessionEnv(company), BASH_DEFAULT_TIMEOUT_MS: bashTimeout, BASH_MAX_TIMEOUT_MS: bashTimeout },
     tools: shape.tools,
     engineTools: ENGINE_TOOLS_FOR[run.mode],
-    skills: [],
-    plugins: [],
+    skills: input.mounted.skills,
+    plugins: input.mounted.plugins,
     additionalDirectories: shape.additionalDirectories,
     sandbox: shape.sandbox,
     maxTurns: MAX_TURNS[run.mode],

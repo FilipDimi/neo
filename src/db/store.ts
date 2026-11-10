@@ -55,8 +55,8 @@ export function openDecisions(db: Db, taskId?: string): Decision[] {
   return found.sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 }
 
-export const waitingMessages = (db: Db, toId: string) => rows<Message>(db, 'messages', "WHERE to_id = ? AND state = 'waiting' ORDER BY at", toId);
-export const recentMessages = (db: Db, limit: number) => rows<Message>(db, 'messages', 'ORDER BY at DESC LIMIT ?', limit).reverse();
+export const waitingMessages = (db: Db, toId: string) => rows<Message>(db, 'messages', "WHERE to_id = ? AND state = 'waiting' ORDER BY at, rowid", toId);
+export const recentMessages = (db: Db, limit: number) => rows<Message>(db, 'messages', 'ORDER BY at DESC, rowid DESC LIMIT ?', limit).reverse();
 
 /** What a task has cost so far, over every run it has had. */
 export function spentOn(db: Db, taskId: string): number {
