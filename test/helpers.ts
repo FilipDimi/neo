@@ -74,6 +74,7 @@ export const task = (over: Partial<Task> = {}): Task => ({
   assigneeId: null,
   reviewerId: null,
   parentId: null,
+  kind: 'work',
   createdBy: 'user',
   title: 'Do the thing',
   brief: 'Do the thing well.',

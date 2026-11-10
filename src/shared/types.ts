@@ -93,6 +93,8 @@ export const Task = z.object({
   assigneeId: id.nullable(),
   reviewerId: id.nullable(),
   parentId: id.nullable(),
+  /** A chat task is a message to the chief of staff; the board leaves it out. */
+  kind: z.enum(['work', 'chat']),
   /** 'user' or an employee id. */
   createdBy: z.string(),
   title: z.string().min(1),
