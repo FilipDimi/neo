@@ -30,7 +30,8 @@ export function validateProposal(input: { parent: Task; team: Team; employees: E
 
   for (let i = 0; i < subtasks.length; i++)
     for (let j = i + 1; j < subtasks.length; j++)
-      if (overlaps(subtasks[i]!.ownership, subtasks[j]!.ownership)) add('overlap', `"${subtasks[i]!.title}" and "${subtasks[j]!.title}" own some of the same files. Give each its own files or folders; an empty list owns everything.`);
+      // Files are owned only where there is a repository: a team without one has none to step on.
+      if (input.repo && overlaps(subtasks[i]!.ownership, subtasks[j]!.ownership)) add('overlap', `"${subtasks[i]!.title}" and "${subtasks[j]!.title}" own some of the same files. Give each its own files or folders; an empty list owns everything.`);
 
   const caps = subtasks.reduce((sum, sub) => sum + sub.capUsd, 0);
   if (caps > input.remainingUsd + 1e-9) add('caps_exceed_parent', `The caps add up to $${caps.toFixed(2)}, but this task has $${Math.max(0, input.remainingUsd).toFixed(2)} left.`);

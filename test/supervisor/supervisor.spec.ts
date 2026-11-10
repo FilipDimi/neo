@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apply, readEvents } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
+import { costOf } from '../../src/supervisor/budget.ts';
 import { forkSpawn } from '../../src/supervisor/link.ts';
 import type { ToSupervisor } from '../../src/worker/protocol.ts';
 import { exit, scripted, text } from '../fixtures/scriptedLink.ts';
@@ -217,6 +218,167 @@ describe('Supervisor', () => {
     apply(w.db, (tx) => tx.emit({ kind: 'company_changed', company: { ...store.getCompany(w.db)!, paused: { reason: 'user', until: null } } }));
     await w.sup.tick();
     expect(store.openDecisions(w.db)).toHaveLength(0);
+  });
+
+  it('charges a run that is ended mid-turn for what the model had already used', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn, { employees: [employee({ model: 'claude-haiku-5-5' }), employee({ id: 'emp2', name: 'Grace' })] }));
+    const task = newTask(w);
+    await w.sup.tick();
+    const soFar = (messageId: string, inputTokens: number, outputTokens: number): ToSupervisor => ({ t: 'event', event: { kind: 'usage_so_far', messageId, inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 } });
+    fake.workers[0]!.say(started);
+    fake.workers[0]!.say(soFar('msg-1', 100_000, 1_000));
+    fake.workers[0]!.say(soFar('msg-1', 100_000, 4_000)); // the same answer, reported again as it grows
+    fake.workers[0]!.say(soFar('msg-2', 200_000, 6_000));
+    w.sup.stopRun(store.liveRuns(w.db)[0]!.id);
+    await w.sup.settle();
+
+    const [run] = store.runsOf(w.db, task.id);
+    expect(run).toMatchObject({ outcome: 'stopped', inputTokens: 300_000, outputTokens: 10_000 });
+    expect(run!.costUsd).toBeCloseTo(costOf({ inputTokens: 300_000, outputTokens: 10_000, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 }, 'claude-haiku-5-5'), 6);
+    expect(run!.costUsd).toBeGreaterThan(0);
+    expect(store.spentOn(w.db, task.id)).toBeCloseTo(run!.costUsd, 6);
+    // What was only an estimate is not written down as events of its own.
+    expect(readEvents(w.db, 0, 1000).some((row) => row.event.kind === 'run_event' && row.event.event.kind === 'usage_so_far')).toBe(false);
+  });
+
+  it("does not charge twice when the turn finishes and reports its own account", async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn, { employees: [employee({ model: 'claude-haiku-5-5' }), employee({ id: 'emp2', name: 'Grace' })] }));
+    const task = newTask(w);
+    await w.sup.tick();
+    fake.workers[0]!.say(started);
+    fake.workers[0]!.say({ t: 'event', event: { kind: 'usage_so_far', messageId: 'msg-1', inputTokens: 100_000, outputTokens: 4_000, cacheReadTokens: 0, cacheWriteTokens: 0 } });
+    fake.workers[0]!.say({ t: 'event', event: { kind: 'usage', inputTokens: 100_000, outputTokens: 4_000, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.25, sessionCostUsd: 0.25 } });
+    fake.workers[0]!.say(exit('done'));
+    await w.sup.settle();
+    expect(store.runsOf(w.db, task.id)[0]).toMatchObject({ costUsd: 0.25, inputTokens: 100_000 });
+  });
+
+  // Making a task's folder takes a moment (a clone). These stand in for that moment and change the task during it.
+  const slowFolder = (w: World) => {
+    const flow = (w.sup as unknown as { flow: { prepare: (...args: unknown[]) => Promise<unknown> } }).flow;
+    const real = flow.prepare.bind(flow);
+    flow.prepare = async (...args: unknown[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return real(...args);
+    };
+  };
+
+  it('does not start a task that was cancelled while its folder was being made', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn));
+    slowFolder(w);
+    const task = newTask(w);
+    const tick = w.sup.tick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    w.sup.cancelTask(task.id);
+    await tick;
+    await w.sup.tick();
+    await w.sup.settle();
+    expect(store.getTask(w.db, task.id)!.state).toBe('failed');
+    expect(store.liveRuns(w.db)).toHaveLength(0);
+    expect(fake.workers).toHaveLength(0);
+  });
+
+  it('starts only the new assignee when a task was reassigned while its folder was being made', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn));
+    slowFolder(w);
+    const task = newTask(w);
+    const tick = w.sup.tick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    w.sup.editTask(task.id, { assigneeId: 'emp2' });
+    await tick;
+    await w.sup.tick();
+    await w.sup.settle();
+    expect(store.getTask(w.db, task.id)!.assigneeId).toBe('emp2');
+    expect(store.liveRuns(w.db).map((run) => run.employeeId)).toEqual(['emp2']);
+    expect(fake.workers).toHaveLength(1);
+  });
+
+  it('integrates a split task even when the brief run failed after its split was accepted', async () => {
+    const said = (name: 'propose_subtasks' | 'report_done' | 'submit_review', input: unknown): ToSupervisor => ({ t: 'tool', askId: name, name, input });
+    let briefs = 0;
+    const fake = scripted((worker) => {
+      const { mode } = worker.job;
+      worker.say({ ...started, event: { ...started.event, sessionId: `sess-${mode}` } } as ToSupervisor);
+      if (mode === 'brief' && ++briefs === 1) {
+        // The split is accepted; then the lead's turn ends in an error.
+        worker.say(said('propose_subtasks', { subtasks: [{ title: 'Part one', assigneeId: 'emp2', brief: 'Do it.', ownership: [], doneCondition: 'Done.', gates: [], priority: 2, capUsd: 0.5, retryAllowed: true }] }));
+        return worker.say(exit('failed', 'error_max_turns', 'sess-brief'));
+      }
+      if (mode === 'review') worker.say(said('submit_review', { verdict: 'approve', notes: '' }));
+      else worker.say(said('report_done', { summary: `${mode} done` }));
+      worker.say(exit('done', null, `sess-${mode}`));
+    });
+    const w = track(world(fake.spawn, { teams: [team({ leadId: 'lead' })], employees: [employee({ id: 'lead', name: 'Lead' }), employee(), employee({ id: 'emp2', name: 'Grace' })] }));
+    const parent = w.sup.createTask({ teamId: 'team1', title: 'Build the thing', brief: 'Split it.' });
+    const pump = async () => {
+      for (let i = 0; i < 10; i++) {
+        await w.sup.tick();
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        await w.sup.settle();
+      }
+    };
+    await pump();
+    // The child is through; the parent waits on the card about its failed brief.
+    expect(store.listTasks(w.db, { parentId: parent.id }).map((child) => child.state)).toEqual(['done']);
+    const card = store.openDecisions(w.db).find((d) => d.taskId === parent.id)!;
+    expect(card.kind).toBe('failed');
+    w.sup.answer(card.id, { optionId: card.options[0]!.id });
+    await pump();
+
+    expect(store.openDecisions(w.db).map((d) => [d.kind, d.text])).toEqual([]);
+    expect(store.runsOf(w.db, parent.id).map((run) => run.mode)).toEqual(['brief', 'brief', 'integrate']);
+    expect(store.getTask(w.db, parent.id)!.state).toBe('done');
+  });
+
+  it('lets a task waiting for someone to be assigned be given to a teammate, who starts afresh', async () => {
+    const fake = scripted((worker) => {
+      if (worker.job.resumeSessionId || fake.workers.length > 1) return;
+      worker.say(started);
+      worker.say({ t: 'tool', askId: 'q', name: 'request_decision', input: { question: 'Which way?', options: ['Left', 'Right'] } });
+      worker.say(exit('stopped', 'asked', 'sess-1'));
+    });
+    const w = track(world(fake.spawn));
+    const task = newTask(w);
+    await w.sup.tick();
+    await w.sup.settle();
+    // Ada asked a question and was then let go. Answering it sends the work back to nobody.
+    apply(w.db, (tx) => tx.emit({ kind: 'employee_changed', employee: { ...store.getEmployee(w.db, 'emp1')!, fired: true } }));
+    const question = store.openDecisions(w.db).find((d) => d.kind === 'question')!;
+    w.sup.answer(question.id, { optionId: question.options[0]!.id });
+    await w.sup.tick();
+    await w.sup.settle();
+    const staffing = store.openDecisions(w.db);
+    expect(staffing).toMatchObject([{ kind: 'staffing', taskId: task.id }]);
+    expect(store.getTask(w.db, task.id)!.state).toBe('blocked');
+
+    // "Check again" with nobody new assigned asks again, and says so.
+    w.sup.answer(staffing[0]!.id, { optionId: staffing[0]!.options.find((option) => option.effect === 'recheck')!.id });
+    await w.sup.tick();
+    await w.sup.settle();
+    expect(store.openDecisions(w.db)).toMatchObject([{ kind: 'staffing', taskId: task.id }]);
+    expect(fake.workers).toHaveLength(1);
+
+    // Giving it to a teammate is what the card asks for, and it works.
+    expect(w.sup.editTask(task.id, { assigneeId: 'emp2' }).assigneeId).toBe('emp2');
+    expect(store.openDecisions(w.db)).toEqual([]);
+    await w.sup.tick();
+    await w.sup.settle();
+    expect(fake.workers).toHaveLength(2);
+    expect(fake.workers[1]!.job.resumeSessionId).toBeUndefined();
+    expect(store.liveRuns(w.db).map((run) => run.employeeId)).toEqual(['emp2']);
+    expect(store.getTask(w.db, task.id)!.state).toBe('running');
+  });
+
+  it('still refuses to reassign a task that is being worked on', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn));
+    const task = newTask(w);
+    await w.sup.tick();
+    expect(() => w.sup.editTask(task.id, { assigneeId: 'emp2' })).toThrow(/reassigned/);
   });
 
   it('stopRun ends the run as stopped, uses no retry, and asks what to do with the task', async () => {

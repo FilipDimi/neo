@@ -12,6 +12,7 @@ function input(over: Partial<PickInput> = {}): PickInput {
     employees: byId(employee()),
     company: company(),
     runningEmployeeIds: new Set(),
+    runningTaskIds: new Set(),
     runningCount: 0,
     spend: { company: 0, byTeam: new Map() },
     blockedRepoIds: new Set(),
@@ -50,6 +51,8 @@ describe('pickNext', () => {
   });
 
   it('never picks an employee who is already running', () => {
+    // One run on a task at a time, whoever it is for: two sessions never share a folder.
+    expect(pickNext(input({ runningTaskIds: new Set(['task1']) }))).toBeNull();
     expect(pickNext(input({ runningEmployeeIds: new Set(['emp1']) }))).toBeNull();
   });
 

@@ -9,6 +9,11 @@ export type RuntimeEvent =
   | { kind: 'tool_result'; id: string; ok: boolean }
   /** One per finished turn: that turn's own tokens and cost, and the session's running cost (it carries over a resume). */
   | { kind: 'usage'; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number; sessionCostUsd: number }
+  /**
+   * What one answer of the model has used, sent as it arrives. It is not the account: a turn that
+   * finishes reports its own `usage`. It exists so that a turn the engine cuts short is still paid for.
+   */
+  | { kind: 'usage_so_far'; messageId: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
   | { kind: 'turn_finished'; sessionId: string; ok: boolean; reason: string; turns: number; denials: string[] }
   /** The subscription's own limit: sent on every session, and with status "rejected" at the limit. */
   | { kind: 'plan_usage'; status: string; window: string | null; utilization: number | null; resetsAt: number | null }

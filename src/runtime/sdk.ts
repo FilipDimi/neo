@@ -86,6 +86,8 @@ export function mapMessage(raw: unknown): RuntimeEvent[] {
         if (block?.type === 'tool_use') events.push({ kind: 'tool_call', id: text(block.id), tool: text(block.name), input: block.input });
       }
       if (typeof message.error === 'string') events.push({ kind: 'api_error', error: message.error });
+      const used = fields(fields(message.message)?.usage);
+      if (used) events.push({ kind: 'usage_so_far', messageId: text(fields(message.message)?.id), inputTokens: number(used.input_tokens), outputTokens: number(used.output_tokens), cacheReadTokens: number(used.cache_read_input_tokens), cacheWriteTokens: number(used.cache_creation_input_tokens) });
       return events;
     }
     case 'user': {

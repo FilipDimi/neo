@@ -20,11 +20,14 @@ import type { TeamView } from './definition.ts';
 import { Flow } from './flow.ts';
 import { checkHealth, realProbes, type Probes } from './health.ts';
 import { buildJob, folderOf, sessionEnv } from './jobs.ts';
+import { canTransition } from './taskState.ts';
 import { remember } from './memory.ts';
 import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
 import { pickNext, requestFor } from './scheduler.ts';
+
+type Tokens = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
 
 export type SupervisorOptions = {
   db: Db;
@@ -59,6 +62,8 @@ export class Supervisor {
   readonly paths: Paths;
   readonly now: () => Date;
   private readonly tickMs: number;
+  /** Per live run: what each answer of its unfinished turn has used. */
+  private readonly unpaid = new Map<string, Map<string, Tokens>>();
   private readonly apiPort: number;
   private readonly spawn: Spawn;
   private readonly runtimeModule: string | undefined;
@@ -209,15 +214,24 @@ export class Supervisor {
     const team = task && store.getTeam(this.db, task.teamId);
     if (!task || !team) throw new Error(`no task ${taskId}`);
     const reassigned = patch.assigneeId !== undefined && patch.assigneeId !== task.assigneeId;
-    if (reassigned && task.state !== 'queued') throw new Error('only a task that has not started can be reassigned');
+    // A task can change hands before it starts, or while it waits on a card that says nobody can do it.
+    const cards = store.openDecisions(this.db).filter((card) => card.taskId === task.id);
+    const staffing = cards.filter((card) => card.kind === 'staffing');
+    if (reassigned && task.state !== 'queued' && staffing.length === 0) throw new Error('only a task that has not started, or one waiting for someone to be assigned, can be reassigned');
     if (reassigned && patch.assigneeId) {
       const assignee = store.getEmployee(this.db, patch.assigneeId);
       if (!assignee || assignee.fired || assignee.teamId !== team.id) throw new Error(`${patch.assigneeId} is not on the team ${team.name}`);
     }
     this.change((tx, now) => {
-      const next: Task = { ...task, priority: patch.priority ?? task.priority, assigneeId: patch.assigneeId === undefined ? task.assigneeId : patch.assigneeId, updatedAt: now.toISOString() };
+      let base = task;
+      if (reassigned && staffing.length > 0) {
+        // The card asked for exactly this. It is closed, and the task carries on unless another card still holds it.
+        for (const card of staffing) decisions.close(tx, card, now);
+        if (cards.length === staffing.length && canTransition(task, 'unblock')) base = decisions.move(tx, task, 'unblock', now);
+      }
+      const next: Task = { ...base, priority: patch.priority ?? task.priority, assigneeId: patch.assigneeId === undefined ? task.assigneeId : patch.assigneeId, updatedAt: now.toISOString() };
       tx.emit({ kind: 'task_changed', task: next, cause: 'edited' });
-      if (!reassigned) return;
+      if (!reassigned || next.state === 'blocked') return;
       for (const request of store.requestsOf(this.db, task.id)) tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: task.id });
       const who = requestFor(next, team);
       if ('problem' in who) decisions.raise(tx, this.db, now, { taskId: task.id, kind: 'staffing', text: decisions.staffingText(next, who.problem), options: decisions.optionsFor('staffing') });
@@ -299,6 +313,7 @@ export class Supervisor {
         employees: new Map(store.allEmployees(this.db).map((employee) => [employee.id, employee])),
         company,
         runningEmployeeIds: new Set(live.map((run) => run.employeeId)),
+        runningTaskIds: new Set(live.map((run) => run.taskId)),
         runningCount: live.length,
         spend,
         blockedRepoIds: this.blockedRepoIds(),
@@ -342,7 +357,18 @@ export class Supervisor {
       }
       // The engine readies the task's folder first; for an integration it also merges the children.
       const ready = await this.flow.prepare(task, request);
-      const prepared: Task = Object.keys(ready.task).length > 0 ? { ...task, ...ready.task } : task;
+      const readied = Object.keys(ready.task).length > 0;
+      // Making the folder took a moment. If the task was cancelled, blocked or given to someone else meanwhile, this start is off.
+      const current = store.getTask(this.db, task.id);
+      const stillAsked = store.openRequests(this.db).some((open) => open.id === asked.id);
+      const over = !current || current.state === 'done' || current.state === 'failed';
+      if (over || !stillAsked || current.state === 'blocked') {
+        return this.change((tx, at) => {
+          if (current && readied) tx.emit({ kind: 'task_changed', task: { ...current, ...ready.task, updatedAt: at.toISOString() }, cause: 'edited' });
+          if (over && stillAsked) tx.emit({ kind: 'request_dropped', requestId: asked.id, taskId: task.id });
+        });
+      }
+      const prepared: Task = { ...current, ...ready.task };
       if (ready.firstTurn) request = { ...request, firstTurn: ready.firstTurn };
       // The chief of staff keeps one conversation going, as long as it is recent.
       if (request.mode === 'route' && !request.resumeSessionId && employee.chatSessionId) {
@@ -382,7 +408,7 @@ export class Supervisor {
         this.db,
         (tx) => {
           if (prepared.state === 'queued') decisions.move(tx, prepared, request.mode === 'brief' ? 'start_brief' : 'start_work', now);
-          else if (prepared !== task) tx.emit({ kind: 'task_changed', task: { ...prepared, updatedAt: now.toISOString() }, cause: 'edited' });
+          else if (readied) tx.emit({ kind: 'task_changed', task: { ...prepared, updatedAt: now.toISOString() }, cause: 'edited' });
           tx.emit({ kind: 'run_started', run, requestId: request.id, teamId: team.id });
           for (const message of messages) tx.emit({ kind: 'message_delivered', message: { ...message, state: 'delivered', deliveredAt: now.toISOString() } });
         },
@@ -449,6 +475,13 @@ export class Supervisor {
   }
 
   private onRuntimeEvent(run: Run, event: RuntimeEvent): void {
+    // An estimate, kept until the turn's own account arrives. If the run is ended first, this is what it is charged.
+    if (event.kind === 'usage_so_far') {
+      const answers = this.unpaid.get(run.id) ?? new Map<string, Tokens>();
+      answers.set(event.messageId, event);
+      return void this.unpaid.set(run.id, answers);
+    }
+    if (event.kind === 'usage') this.unpaid.delete(run.id);
     const now = this.now();
     const teamId = store.getEmployee(this.db, run.employeeId)?.teamId ?? '';
     const recorded = event.kind === 'tool_call' ? { ...event, input: trimmed(event.input) } : event;
@@ -638,9 +671,23 @@ export class Supervisor {
     this.finishRun(run.id, outcome, reason);
   }
 
+  /** A turn that was cut short never reported its account. What its answers had used by then is charged, at list prices. */
+  private chargeUnfinishedTurn(run: Run): void {
+    const answers = [...(this.unpaid.get(run.id)?.values() ?? [])];
+    this.unpaid.delete(run.id);
+    if (answers.length === 0) return;
+    const sum = (pick: (tokens: Tokens) => number) => answers.reduce((total, tokens) => total + pick(tokens), 0);
+    const used = { inputTokens: sum((t) => t.inputTokens), outputTokens: sum((t) => t.outputTokens), cacheReadTokens: sum((t) => t.cacheReadTokens), cacheWriteTokens: sum((t) => t.cacheWriteTokens), costUsd: 0 };
+    const teamId = store.getEmployee(this.db, run.employeeId)?.teamId ?? '';
+    const event = this.priced(run, { kind: 'usage', ...used, sessionCostUsd: 0 });
+    apply(this.db, (tx) => tx.emit({ kind: 'run_event', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, teamId, event }), this.now());
+  }
+
   private finishRun(runId: string, outcome: RunOutcome, reason: string | null, patch: Partial<Run> = {}): void {
-    const run = store.getRun(this.db, runId);
-    if (!run || run.outcome !== 'running') return;
+    const live = store.getRun(this.db, runId);
+    if (!live || live.outcome !== 'running') return;
+    this.chargeUnfinishedTurn(live);
+    const run = store.getRun(this.db, runId)!;
     const now = this.now();
     const ended: Run = { ...run, ...patch, outcome, reason, endedAt: now.toISOString() };
     const teamId = store.getEmployee(this.db, run.employeeId)?.teamId ?? '';

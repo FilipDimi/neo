@@ -195,7 +195,8 @@ export class Flow {
       case 'review':
         return; // The verdict was acted on when it was given.
       case 'brief':
-        if (store.listTasks(this.db, { parentId: task.id }).length > 0) return; // Split: the children carry it from here.
+        // Split: the children carry it from here. If they are all through already (this brief was a second try), it is time to integrate.
+        if (store.listTasks(this.db, { parentId: task.id }).length > 0) return this.checkParent(task.id);
       // Otherwise the lead did the task itself: it is work like any other.
       // falls through
       case 'work': {
@@ -207,6 +208,8 @@ export class Flow {
         return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
       }
       case 'integrate': {
+        // A team with no repository has nothing to merge: the lead has put the parts together, and that is the task done.
+        if (!this.site(task)) return this.finish(task.id);
         await this.commitWork(run, task);
         // A conflict stopped the merging part-way: merge the rest in another integration run.
         const site = this.site(task)!;

@@ -12,6 +12,8 @@ export type PickInput = {
   employees: Map<string, Employee>;
   company: Company;
   runningEmployeeIds: Set<string>;
+  /** Tasks with a live run. One run on a task at a time: two sessions never share a folder. */
+  runningTaskIds: Set<string>;
   runningCount: number;
   spend: { company: number; byTeam: Map<string, number> };
   blockedRepoIds: Set<string>;
@@ -55,7 +57,7 @@ export function pickNext(input: PickInput): Pick {
     if (!employee || employee.fired) return { problem: 'fired', request };
     const team = teams.get(task.teamId);
     if (team && team.dailyCapUsd > 0 && (input.spend.byTeam.get(team.id) ?? 0) >= team.dailyCapUsd) continue;
-    if (input.runningEmployeeIds.has(employee.id)) continue;
+    if (input.runningEmployeeIds.has(employee.id) || input.runningTaskIds.has(task.id)) continue;
     if (task.repoId && input.blockedRepoIds.has(task.repoId)) continue;
     return { request };
   }

@@ -67,6 +67,30 @@ const straight = async (s: Scene) => {
 };
 const parentTask = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', title: 'Add a greeting and a farewell', brief: 'Two files, one each.', doneCondition: 'Both files exist.', gates: ['greeting', 'farewell'], capUsd: 2, ...over });
 
+describe('a team with no repository', () => {
+  it('finishes a task its lead split: there is nothing to merge, so integrating is only the lead putting it together', async () => {
+    const halves = proposal([
+      { title: 'Half one', assigneeId: 'emp1', ownership: [] },
+      { title: 'Half two', assigneeId: 'emp2', ownership: [] },
+    ]);
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'brief') await s.engine('propose_subtasks', halves);
+        if (s.mode === 'work') await s.engine('report_done', { summary: `${s.who} did a half.` });
+        if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '' });
+        if (s.mode === 'integrate') await s.engine('report_done', { summary: 'Put together.' });
+      },
+      { repo: false },
+    );
+    const parent = setup.w.sup.createTask({ teamId: 'team1', title: 'Plan the launch', brief: 'Two halves.', capUsd: 2 });
+    await drain(setup);
+    expect(store.openDecisions(setup.w.db).map((d) => [d.kind, d.text])).toEqual([]);
+    expect(store.listTasks(setup.w.db, { parentId: parent.id }).map((c) => c.state)).toEqual(['done', 'done']);
+    expect(store.runsOf(setup.w.db, parent.id).filter((run) => run.mode === 'integrate')).toHaveLength(1);
+    expect(store.getTask(setup.w.db, parent.id)!.state).toBe('done');
+  });
+});
+
 describe('briefing', () => {
   it('creates children from a valid proposal, moves the parent to running and queues each child', async () => {
     const setup = ledWorld(async (s) => void (s.mode === 'brief' && (await s.engine('propose_subtasks', twoFiles))));

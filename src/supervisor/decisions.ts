@@ -135,6 +135,9 @@ function unblock(tx: Tx, task: Task, now: Date, patch: Partial<Task> = {}): Task
 
 /** Queues another run of the same employee in the same mode, picking the session up where it stopped. */
 function requestAgain(tx: Tx, db: Db, now: Date, task: Task, last: Run | undefined, reason: RunRequest['reason'], firstTurn: string, more: Partial<RunRequest> = {}): void {
+  // Whoever ran it last carries on, unless they no longer work here: then it goes to whoever the task is assigned to now, from the start.
+  const gone = last ? store.getEmployee(db, last.employeeId)?.fired !== false : false;
+  if (gone) last = undefined;
   let who: { mode: RunRequest['mode']; employeeId: string } | undefined = last && { mode: last.mode, employeeId: last.employeeId };
   if (!who) {
     const team = store.getTeam(db, task.teamId);

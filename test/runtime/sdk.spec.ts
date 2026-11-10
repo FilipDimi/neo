@@ -15,10 +15,11 @@ const ofKind = <K extends RuntimeEvent['kind']>(list: RuntimeEvent[], kind: K) =
 describe('mapMessage', () => {
   it('maps a one-turn recording to events in order', () => {
     const list = events(hello);
-    expect(list.map((e) => e.kind)).toEqual(['session_started', 'plan_usage', 'assistant_text', 'usage', 'turn_finished']);
+    expect(list.map((e) => e.kind)).toEqual(['session_started', 'plan_usage', 'assistant_text', 'usage_so_far', 'usage', 'turn_finished']);
     expect(list[0]).toEqual({ kind: 'session_started', sessionId: 'sess-1', model: 'claude-haiku-5-5', loginSource: 'none', tools: [] });
     expect(list[2]).toEqual({ kind: 'assistant_text', text: 'OK' });
-    expect(list[4]).toEqual({ kind: 'turn_finished', sessionId: 'sess-1', ok: true, reason: 'success', turns: 1, denials: [] });
+    expect(list[3]).toMatchObject({ kind: 'usage_so_far', outputTokens: expect.any(Number) });
+    expect(list[5]).toEqual({ kind: 'turn_finished', sessionId: 'sess-1', ok: true, reason: 'success', turns: 1, denials: [] });
   });
 
   it("reports each turn's own tokens and cost beside the session's running cost", () => {
@@ -62,6 +63,12 @@ describe('mapMessage', () => {
       'usage',
     );
     expect(usage).toEqual({ kind: 'usage', inputTokens: 3, outputTokens: 4, cacheReadTokens: 5, cacheWriteTokens: 6, costUsd: 0, sessionCostUsd: 0.5 });
+  });
+
+  it('reports what each answer of the model has used as it arrives, so a turn that never finishes can still be paid for', () => {
+    const answer = { type: 'assistant', message: { id: 'msg_01', content: [{ type: 'text', text: 'hi' }], usage: { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 56, cache_creation_input_tokens: 78 } } };
+    expect(ofKind(mapMessage(answer), 'usage_so_far')).toEqual([{ kind: 'usage_so_far', messageId: 'msg_01', inputTokens: 12, outputTokens: 34, cacheReadTokens: 56, cacheWriteTokens: 78 }]);
+    expect(ofKind(mapMessage({ type: 'assistant', message: { id: 'msg_02', content: [] } }), 'usage_so_far')).toEqual([]);
   });
 
   it('reports an API error carried by an assistant message', () => {
