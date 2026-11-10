@@ -51,6 +51,29 @@ describe('TaskDrawer', () => {
     expect(api.calls.map((c) => c[1])).toContain('/api/tasks/task1/diff');
   });
 
+  it('shows the files a task without a repository wrote, in place of a diff', async () => {
+    const research = task({ state: 'done', assigneeId: 'emp1', title: 'Research the market' });
+    const written = { folder: '/data/folders/task1', more: 2, files: [{ path: 'market-brief.md', bytes: 16238, text: '# Market brief\n\nThree competitors.' }, { path: 'chart.png', bytes: 2048, text: null }] };
+    const api = fakeApi((_method, route) => (route.endsWith('/files') ? written : { task: research, children: [], runs: [], events: [], decisions: [] }));
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store([research]), now: T0, api });
+    expect(screen.queryByRole('button', { name: 'Diff' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Files' }));
+    expect(api.calls).toContainEqual(['GET', '/api/tasks/task1/files']);
+    expect(await screen.findByText(/market-brief\.md · 16 KB/)).toBeTruthy();
+    expect(screen.getByText(/Three competitors\./)).toBeTruthy();
+    expect(screen.getByText(/chart\.png · 2 KB/)).toBeTruthy();
+    expect(screen.getByText(/not shown here: it is not text, or it is too long/)).toBeTruthy();
+    expect(screen.getByText(/and 2 more/)).toBeTruthy();
+    expect(screen.getByText('/data/folders/task1')).toBeTruthy();
+  });
+
+  it('says so when a task without a repository has written nothing', async () => {
+    const research = task({ state: 'running', assigneeId: 'emp1' });
+    const api = fakeApi((_method, route) => (route.endsWith('/files') ? { folder: '/data/folders/task1', files: [], more: 0 } : { task: research, children: [], runs: [], events: [], decisions: [] }));
+    mount(<TaskDrawer taskId="task1" tab="diff" onClose={() => {}} />, { store: store([research]), now: T0, api });
+    expect(await screen.findByText('This task has not written any files yet.')).toBeTruthy();
+  });
+
   it('sends a message and shows waiting, then delivered', async () => {
     const sent = message({ id: 'm9', toId: 'emp1', taskId: 'task1', text: 'Stop at the test step.' });
     const api = fakeApi((method) => (method === 'POST' ? { message: sent } : detail([])));

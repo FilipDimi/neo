@@ -10,6 +10,8 @@ import { paths as pathsOf } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { git } from '../git/git.ts';
+import { folderOf } from '../supervisor/jobs.ts';
+import { writtenFiles } from './files.ts';
 import { PRESETS } from '../presets/presets.ts';
 import { EVENT_VERSION } from '../shared/events.ts';
 import { MODEL_LABELS } from '../shared/prices.ts';
@@ -234,6 +236,14 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     if (stat.code !== 0) return { stat: '', patch: '', lines: 0 };
     const count = (pattern: RegExp) => Number(pattern.exec(short.out)?.[1] ?? 0);
     return { stat: stat.out, patch: patch.out.slice(0, 200_000), lines: count(/(\d+) insertions?/) + count(/(\d+) deletions?/) };
+  });
+
+  /** What a task without a repository wrote: the files in its folder. A task with one has its diff instead. */
+  app.get('/api/tasks/:id/files', async (request) => {
+    const task: Task = found(store.getTask(db, id(request)), 'such task');
+    if (task.repoId || task.branch) return { folder: null, files: [], more: 0 };
+    const folder = folderOf(paths, task);
+    return { folder, ...writtenFiles(folder) };
   });
 
   app.post('/api/tasks/:id/message', async (request) => ({ message: supervisor.send({ taskId: found(store.getTask(db, id(request)), 'such task').id }, TextBody.parse(request.body).text, 'user') }));

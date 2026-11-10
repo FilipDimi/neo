@@ -37,6 +37,9 @@ function feedLine(row: EventRow, nameOf: (id: string) => string): string | null 
 }
 
 /** Everything about one task: its brief, its sub-tasks, its runs, what is happening now, the diff, and a line to its employee. */
+type Files = { folder: string | null; files: { path: string; bytes: number; text: string | null }[]; more: number };
+const size = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
+
 export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; tab?: TaskTab | undefined; onClose(): void }) {
   const api = useApi();
   const ui = useUi();
@@ -51,6 +54,9 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   const [detail, setDetail] = useState<Detail | null>(null);
   const [showing, setShowing] = useState<TaskTab>(tab);
   const [diff, setDiff] = useState<Diff | null>(null);
+  const [files, setFiles] = useState<Files | null>(null);
+  // A task with a repository shows what its branch changed. One without shows the files it wrote.
+  const hasRepo = Boolean(task?.repoId || task?.branch);
   const [text, setText] = useState('');
   const [sent, setSent] = useState<Message | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,10 +77,11 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   useEffect(() => {
     if (showing !== 'diff') return;
     let current = true;
-    api.get<Diff>(`/api/tasks/${taskId}/diff`).then((loaded) => current && setDiff(loaded), fail);
+    if (hasRepo) api.get<Diff>(`/api/tasks/${taskId}/diff`).then((loaded) => current && setDiff(loaded), fail);
+    else api.get<Files>(`/api/tasks/${taskId}/files`).then((loaded) => current && setFiles(loaded), fail);
     return () => void (current = false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showing, taskId, seq]);
+  }, [showing, taskId, seq, hasRepo]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
@@ -168,7 +175,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
           Live feed
         </button>
         <button type="button" className={`pill small${showing === 'diff' ? ' on' : ''}`} onClick={() => setShowing('diff')}>
-          Diff
+          {hasRepo ? 'Diff' : 'Files'}
         </button>
       </nav>
       {showing === 'feed' ? (
@@ -182,9 +189,30 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
         >
           {lines.length === 0 ? <p className="muted">Nothing has happened on this task yet.</p> : lines.map((entry) => <p key={entry.id}>{entry.line}</p>)}
         </div>
-      ) : (
+      ) : hasRepo ? (
         <div className="feed">
           {!diff ? <p className="muted">Loading…</p> : diff.patch ? <pre>{`${diff.stat}\n\n${diff.patch}`}</pre> : <p className="muted">No changes on this task's branch yet.</p>}
+        </div>
+      ) : (
+        <div className="feed files">
+          {!files ? (
+            <p className="muted">Loading…</p>
+          ) : files.files.length === 0 ? (
+            <p className="muted">This task has not written any files yet.</p>
+          ) : (
+            <>
+              {files.files.map((file, index) => (
+                <details key={file.path} open={index === 0}>
+                  <summary>{`${file.path} · ${size(file.bytes)}`}</summary>
+                  {file.text === null ? <p className="muted">This file is not shown here: it is not text, or it is too long. It is in the folder below.</p> : <pre>{file.text}</pre>}
+                </details>
+              ))}
+              {files.more > 0 && <p className="muted">{`and ${files.more} more`}</p>}
+              <p className="muted">
+                In <code>{files.folder}</code>
+              </p>
+            </>
+          )}
         </div>
       )}
 

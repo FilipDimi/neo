@@ -109,6 +109,39 @@ describe('tasks and the snapshot', () => {
     expect(store.openRequests(w.db)).toMatchObject([{ employeeId: 'emp2' }]);
   });
 
+  it('lists what a task without a repository wrote, with the text of small files, and follows no link out of the folder', async () => {
+    const { call, w } = await fresh();
+    const { json } = await call('POST', '/api/tasks', { teamId: 'team1', assigneeId: 'emp1', title: 'T', brief: 'B' });
+    const folder = path.join(w.dir, 'folders', json.task.id);
+    fs.mkdirSync(path.join(folder, 'notes'), { recursive: true });
+    fs.mkdirSync(path.join(folder, 'node_modules/pkg'), { recursive: true });
+    fs.writeFileSync(path.join(folder, 'market-brief.md'), '# Brief\n');
+    fs.writeFileSync(path.join(folder, 'notes/sources.txt'), 'one\n');
+    fs.writeFileSync(path.join(folder, 'node_modules/pkg/index.js'), 'x');
+    fs.writeFileSync(path.join(folder, 'chart.png'), Buffer.from([0x89, 0x50, 0x00, 0x01]));
+    fs.writeFileSync(path.join(folder, 'huge.log'), 'x'.repeat(300_000));
+    fs.symlinkSync('/etc/hosts', path.join(folder, 'hosts-link'));
+    const listed = (await call('GET', `/api/tasks/${json.task.id}/files`)).json;
+    expect(listed.folder).toBe(folder);
+    expect(listed.more).toBe(0);
+    expect(listed.files).toEqual([
+      { path: 'chart.png', bytes: 4, text: null },
+      { path: 'huge.log', bytes: 300_000, text: null },
+      { path: 'market-brief.md', bytes: 8, text: '# Brief\n' },
+      { path: 'notes/sources.txt', bytes: 4, text: 'one\n' },
+    ]);
+  });
+
+  it('lists no files for a task that has a repository, whose diff is its view, or for one that has written nothing', async () => {
+    const repoPath = gitRepo();
+    const { call } = await fresh(scripted().spawn, { repos: [{ id: 'repo1', path: repoPath, gates: [] }], teams: [team({ selfManaged: true, repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: null }] })] });
+    const { json } = await call('POST', '/api/tasks', { teamId: 'team1', assigneeId: 'emp1', title: 'T', brief: 'B' });
+    expect((await call('GET', `/api/tasks/${json.task.id}/files`)).json).toEqual({ folder: null, files: [], more: 0 });
+    const plain = await fresh();
+    const made = await plain.call('POST', '/api/tasks', { teamId: 'team1', assigneeId: 'emp1', title: 'T', brief: 'B' });
+    expect((await plain.call('GET', `/api/tasks/${made.json.task.id}/files`)).json).toMatchObject({ files: [], more: 0 });
+  });
+
   it("returns a task's diff stat and patch", async () => {
     const repoPath = gitRepo();
     const { call, w } = await fresh(scripted().spawn, { repos: [{ id: 'repo1', path: repoPath, gates: [] }], teams: [team({ selfManaged: true, repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: null }] })] });
