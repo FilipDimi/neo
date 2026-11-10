@@ -2,7 +2,7 @@
 
 A local-first web app that runs a software company of AI employees and shows it as an office. You set the teams, the roles and the headcount. Every piece of work is a task on a board. Each employee run is a Claude Agent SDK session on this machine's Claude login, started by a supervisor that enforces leases, budgets and limits. Anything beyond a team's limits becomes a decision card for you.
 
-Status: built, except the Receipts dogfood (engine plan task 15), which waits for Filip's go. The engine (plan tasks 1 to 14): supervisor, workers, leases, the team flow, git and gates run by the engine, budgets, health, hiring, chat, and the API. The screen (screen plan tasks 1 to 9): the office, the board and the hire view, with the decision deck and the chat line on each, served by the engine. The office needs WebGL; the board and the hire view do not.
+Status: built, except the Receipts dogfood (engine plan task 15), which waits for Filip's go. The engine (plan tasks 1 to 14): supervisor, workers, leases, the team flow, git and gates run by the engine, budgets, health, hiring, chat, and the API. The screen (screen plan tasks 1 to 9): the office, the board and the hire view, with the decision deck and the chat line on each, served by the engine. The office needs WebGL; the board and the hire view do not. The whole branch was reviewed on 2026-11-09 and its fifteen findings fixed; what is still open is in `docs/superpowers/reviews/2026-11-09-branch-review.md`.
 
 ## Documents
 
@@ -12,7 +12,7 @@ Status: built, except the Receipts dogfood (engine plan task 15), which waits fo
 | The decisions behind it, in Filip's words | `docs/superpowers/specs/2026-11-08-virtual-startup-brainstorm-record.md` |
 | The engine plan (15 tasks, revised after the review and the spike) | `docs/superpowers/plans/2026-11-08-virtual-startup-engine.md` |
 | The screen plan (9 tasks: board, decision cards, chat, hiring, office) | `docs/superpowers/plans/2026-11-09-virtual-startup-screen.md` |
-| The review of design and plan, and its evidence | `docs/superpowers/reviews/` |
+| The review of design and plan, its evidence, and the review of the built branch | `docs/superpowers/reviews/` |
 | The three artboards: Office, Board, Hire | `docs/design/` (copies of https://claude.ai/artifact/T6Pf7v49PdieyCFQDWRgCb) |
 | What the Agent SDK really does on this login | `docs/spike/2026-11-09-spike-findings.md` |
 
