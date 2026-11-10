@@ -5,15 +5,15 @@
 import os from 'node:os';
 import path from 'node:path';
 import { apply, type Tx } from '../db/apply.ts';
-import { paths as pathsOf, type Paths } from '../db/dataDir.ts';
+import { engineFiles, paths as pathsOf, type Paths } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { listSkills, mountSkills, type SkillDirs, type SkillRef } from '../runtime/skills.ts';
 import type { RuntimeEvent } from '../shared/runtime.ts';
-import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task } from '../shared/types.ts';
+import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task, Team } from '../shared/types.ts';
 import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
-import { GateQueue } from '../git/gates.ts';
-import { envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
+import { GateQueue, type GateLimits } from '../git/gates.ts';
+import { commandLimits, envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
 import { budgetFor, costOf, isUsageLimit } from './budget.ts';
 import * as decisions from './decisions.ts';
 import type { TeamView } from './definition.ts';
@@ -41,6 +41,10 @@ export type SupervisorOptions = {
   probes?: Probes;
   /** Where installed skills are looked for. Defaults to Claude Code's folders and the company's own. */
   skillDirs?: SkillDirs;
+  /** The port the API listens on. Gates are kept away from it. */
+  apiPort?: number;
+  /** How often a run waiting for a gate renews its lease. */
+  gateHeartbeatMs?: number;
 };
 
 export type NewTaskInput = Pick<Task, 'teamId' | 'title' | 'brief'> &
@@ -55,6 +59,7 @@ export class Supervisor {
   readonly paths: Paths;
   readonly now: () => Date;
   private readonly tickMs: number;
+  private readonly apiPort: number;
   private readonly spawn: Spawn;
   private readonly runtimeModule: string | undefined;
   protected readonly processes: Processes;
@@ -83,6 +88,7 @@ export class Supervisor {
     this.paths = pathsOf(options.dataDir);
     this.now = options.now ?? (() => new Date());
     this.tickMs = options.tickMs ?? 2000;
+    this.apiPort = options.apiPort ?? 4317;
     this.runtimeModule = options.runtimeModule;
     this.processes = options.processes ?? processes;
     this.dataDir = options.dataDir;
@@ -94,6 +100,8 @@ export class Supervisor {
       paths: this.paths,
       now: this.now,
       gates: new GateQueue(),
+      gateLimits: (folder, team) => this.gateLimits(folder, team),
+      ...(options.gateHeartbeatMs !== undefined ? { gateHeartbeatMs: options.gateHeartbeatMs } : {}),
       engineWork: (taskId, work) => this.engineWork(taskId, work),
       planRunEnd: (runId, outcome, reason) => void this.planned.set(runId, { outcome, reason }),
     });
@@ -538,7 +546,7 @@ export class Supervisor {
     const company = store.getCompany(this.db);
     if (!task || !employee || !team || !company) return { allow: false, reason: 'Refused: this run has lost its task.', stop: true };
     const folder = folderOf(this.paths, task);
-    const verdict = judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: store.grantsOf(this.db, task.id) }, call);
+    const verdict = judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: store.grantsOf(this.db, task.id), protect: engineFiles(this.paths) }, call);
     const now = this.now();
     if (verdict.useGrant) {
       const grant = store.grantsOf(this.db, task.id).find((g) => g.id === verdict.useGrant)!;
@@ -641,6 +649,13 @@ export class Supervisor {
     this.reports.delete(runId);
     this.routed.delete(runId);
     this.engineWork(ended.taskId, () => this.afterRun(ended));
+  }
+
+  /** A gate is confined as the team's own commands are, and kept away from this engine's API. */
+  private gateLimits(folder: string, team: Team): GateLimits {
+    const company = store.getCompany(this.db);
+    const limits = commandLimits({ folder, team, company: company ?? { denyRead: [] }, envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)), protect: engineFiles(this.paths) });
+    return { ...limits, blockPorts: [this.apiPort] };
   }
 
   /** Runs a piece of engine work for a task. While it runs the task is not idle; if it throws, a card says so. */

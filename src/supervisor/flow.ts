@@ -12,7 +12,7 @@ import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { changedFiles, commitAll, diffStat, patch } from '../git/commit.ts';
 import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
-import type { GateQueue } from '../git/gates.ts';
+import type { GateLimits, GateQueue } from '../git/gates.ts';
 import type { Identity } from '../git/git.ts';
 import { isMerged, landOn, mergeInto } from '../git/merge.ts';
 import { outside } from '../git/ownership.ts';
@@ -34,6 +34,10 @@ export type FlowHost = {
   paths: Paths;
   now(): Date;
   gates: GateQueue;
+  /** What a gate may touch when it runs in this folder for this team: the same as the team's own commands. */
+  gateLimits(folder: string, team: Team): GateLimits;
+  /** How often a run that is waiting for a gate says so. */
+  gateHeartbeatMs?: number;
   /** Runs a piece of engine work for a task; while it runs the task is not idle. */
   engineWork(taskId: string, work: () => Promise<void>): void;
   /** How a live run will be recorded when its worker exits. */
@@ -167,8 +171,18 @@ export class Flow {
     const site = this.site(task);
     const gate = site?.repo.gates.find((g) => g.name === name);
     if (!site || !gate) return { ok: false, text: `There is no gate named "${name}" for this task. The gates are: ${site?.repo.gates.map((g) => g.name).join(', ') || 'none'}.` };
-    const [result] = await this.host.gates.run([gate], site.folder);
-    return { ok: true, text: `${name}: ${result!.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${result!.exitCode})\n${result!.output.slice(-3000)}` };
+    // A gate may take longer than the lease, or wait its turn behind a lock. The run is not silent: it is waiting for the engine, and says so.
+    const waiting = () => {
+      if (store.getRun(this.db, run.id)?.outcome === 'running') this.change((tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: task.id, employeeId: run.employeeId, text: `running the gate "${name}"` }));
+    };
+    waiting();
+    const beat = setInterval(waiting, this.host.gateHeartbeatMs ?? 60_000);
+    try {
+      const [result] = await this.host.gates.run([gate], site.folder, { limits: this.host.gateLimits(site.folder, site.team) });
+      return { ok: true, text: `${name}: ${result!.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${result!.exitCode})\n${result!.output.slice(-3000)}` };
+    } finally {
+      clearInterval(beat);
+    }
   }
 
   // ---------- after a run ----------
@@ -248,6 +262,7 @@ export class Flow {
     const results = await this.host.gates.run(gates, site.folder, {
       onStart: (gate) => this.change((tx) => tx.emit({ kind: 'gate_started', runId, taskId: task.id, name: gate.name })),
       onFinish: (result) => this.change((tx) => tx.emit({ kind: 'gate_finished', runId, taskId: task.id, result })),
+      limits: this.host.gateLimits(site.folder, site.team),
     });
     const failed = results.find((r) => r.exitCode !== 0);
     if (!failed) return true;
@@ -333,7 +348,7 @@ export class Flow {
     let failedGate: GateResult | undefined;
     const recheck = async () => {
       const gates = site.repo.gates.filter((gate) => task.gates.includes(gate.name));
-      const results = await this.host.gates.run(gates, site.folder);
+      const results = await this.host.gates.run(gates, site.folder, { limits: this.host.gateLimits(site.folder, site.team) });
       failedGate = results.find((r) => r.exitCode !== 0);
       return failedGate === undefined;
     };

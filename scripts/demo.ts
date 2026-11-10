@@ -28,7 +28,7 @@ const runtimeModule = path.resolve(import.meta.dirname, '../test/fixtures/demoRu
 
 if (!process.env.VS_DEMO_EMPTY) seedDemoCompany({ db, dataDir, repoPath: path.join(root, 'repo'), now: new Date(), leaseMinutes: 1 });
 
-const supervisor = new Supervisor({ db, dataDir, runtimeModule, probes: healthyProbes, tickMs: 500 });
+const supervisor = new Supervisor({ db, dataDir, runtimeModule, probes: healthyProbes, tickMs: 500, apiPort: port });
 const app = await buildServer({ db, dataDir, supervisor, port });
 await app.listen({ host: '127.0.0.1', port });
 supervisor.start();

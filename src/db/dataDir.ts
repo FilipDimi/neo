@@ -17,6 +17,9 @@ export function dataDir(env: Record<string, string | undefined> = process.env, c
 
 export type Paths = ReturnType<typeof paths>;
 
+/** The engine's own files. No session and no gate reads them: the token would let it answer its own cards. */
+export const engineFiles = (p: Paths): string[] => [p.token, p.db, `${p.db}-wal`, `${p.db}-shm`, p.logs];
+
 export function paths(dir: string) {
   return {
     db: path.join(dir, 'company.db'),

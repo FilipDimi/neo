@@ -19,7 +19,7 @@ ensureWebBuilt();
 const dir = dataDir();
 const port = Number(process.env.VS_PORT ?? DEFAULT_PORT);
 const db = openDb(paths(dir).db);
-const supervisor = new Supervisor({ db, dataDir: dir, ...(process.env.VS_RUNTIME_MODULE ? { runtimeModule: process.env.VS_RUNTIME_MODULE } : {}) });
+const supervisor = new Supervisor({ db, dataDir: dir, apiPort: port, ...(process.env.VS_RUNTIME_MODULE ? { runtimeModule: process.env.VS_RUNTIME_MODULE } : {}) });
 const app = await buildServer({ db, dataDir: dir, supervisor, port });
 await app.listen({ host: '127.0.0.1', port });
 supervisor.start();

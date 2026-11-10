@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { owns } from '../git/ownership.ts';
+import { leadsTo } from '../git/paths.ts';
 import type { SessionInput } from '../runtime/sdk.ts';
 import type { ToolCall, ToolDecision } from '../shared/runtime.ts';
 import type { Capability, Company, Employee, Grant, RunMode, Task, Team } from '../shared/types.ts';
@@ -30,7 +31,17 @@ export function availableCapabilities(team: Pick<Team, 'mayPush'>): Capability[]
 }
 
 /** Never readable, by tool or by command: keys, logins, other sessions' transcripts. */
-export const DEFAULT_DENY_READ = ['~/.ssh', '~/.aws', '~/.gnupg', '~/.netrc', '~/.kube', '~/.docker', '~/.gcp', '~/.config/gcloud', '~/.config/gh', '~/.claude.json', '~/.claude/.credentials.json', '~/.claude/projects'];
+export const DEFAULT_DENY_READ = [
+  '~/.ssh', '~/.aws', '~/.gnupg', '~/.netrc', '~/.kube', '~/.docker', '~/.gcp', '~/.azure', '~/.config/gcloud', '~/.config/gh', '~/.config/git/credentials', '~/.config/op',
+  '~/.git-credentials', '~/.cargo/credentials', '~/.cargo/credentials.toml', '~/.gem/credentials', '~/.terraform.d', '~/.password-store',
+  '~/.claude.json', '~/.claude/.credentials.json', '~/.claude/projects',
+];
+/**
+ * Files the Read tool never opens but a command still can: settings that often hold a token
+ * (npm, yarn and pip stop working when they cannot read their own), and the keychains (signing a
+ * build reads them; they are encrypted). A command has no network to send anything anywhere.
+ */
+export const TOOL_DENY_READ = ['~/.npmrc', '~/.yarnrc.yml', '~/.pypirc', '~/.config/pip/pip.conf', '~/Library/Keychains'];
 
 const systemFolders = new Map<string, string>();
 /** macOS keeps a cache and a temp folder per user under /var/folders; `getconf` names them. Xcode writes to both. */
@@ -51,9 +62,23 @@ const home = (entry: string): string => {
   if (entry === '$DARWIN_USER_CACHE_DIR' || entry === '$DARWIN_USER_TEMP_DIR') return systemFolder(entry.slice(1));
   return entry === '~' || entry.startsWith('~/') ? path.join(os.homedir(), entry.slice(2)) : entry;
 };
-const isEnvFile = (file: string): boolean => /^\.env(\..+)?$/.test(path.basename(file)) && !/\.(example|sample|template)$/.test(file);
+const isEnvFile = (file: string): boolean => /^\.env(\..+)?$/i.test(path.basename(file)) && !/\.(example|sample|template)$/i.test(file);
 
-export type Radius = { task: Task; team: Team; employee: Employee; mode: RunMode; folder: string; company: Company; grants: Grant[] };
+/** `protect` is the engine's own files (its token, its database): no session reads those. */
+export type Radius = { task: Task; team: Team; employee: Employee; mode: RunMode; folder: string; company: Company; grants: Grant[]; protect?: string[] | undefined };
+
+/**
+ * What a command may touch. A session's commands and a repository's gates get the same lists:
+ * they write to the task folder and the team's build folders, never to the folder's git
+ * directory (its hooks and settings would run later, outside any sandbox), and never read a secret.
+ */
+export function commandLimits(input: { folder: string; team: Pick<Team, 'sandboxWrite'>; company: Pick<Company, 'denyRead'>; envFiles: string[]; protect?: string[] | undefined }): { allowWrite: string[]; denyWrite: string[]; denyRead: string[] } {
+  return {
+    allowWrite: input.team.sandboxWrite.map(home),
+    denyWrite: [path.join(input.folder, '.git')],
+    denyRead: [...DEFAULT_DENY_READ, ...input.company.denyRead, ...(input.protect ?? [])].map(home).concat(input.envFiles),
+  };
+}
 
 export function sessionShape(input: Omit<Radius, 'grants'> & { envFiles: string[] }): { tools: string[]; sandbox: SessionInput['sandbox']; additionalDirectories: string[] } {
   const { team, employee, mode, company } = input;
@@ -64,31 +89,27 @@ export function sessionShape(input: Omit<Radius, 'grants'> & { envFiles: string[
   return {
     tools,
     // Every command runs inside the sandbox, or not at all: it writes only to the task folder and the team's build folders.
-    sandbox: tools.includes('Bash')
-      ? {
-          enabled: true,
-          failIfUnavailable: true,
-          autoAllowBashIfSandboxed: true,
-          allowUnsandboxedCommands: false,
-          filesystem: { allowWrite: team.sandboxWrite.map(home), denyRead: [...DEFAULT_DENY_READ, ...company.denyRead].map(home).concat(input.envFiles) },
-        }
-      : undefined,
+    sandbox: tools.includes('Bash') ? { enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false, filesystem: commandLimits({ folder: input.folder, team, company, envFiles: input.envFiles, protect: input.protect }) } : undefined,
     additionalDirectories: [employee.memoryDir],
   };
 }
 
-/** The real path of a file that may not exist yet: its nearest existing ancestor resolved, the rest appended. */
-function realTarget(file: string): string {
-  let existing = file;
-  const rest: string[] = [];
-  while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
-    rest.unshift(path.basename(existing));
-    existing = path.dirname(existing);
-  }
-  return path.join(fs.existsSync(existing) ? fs.realpathSync(existing) : existing, ...rest);
-}
+// The Mac's disk ignores case, and shows the same files a second time under /System/Volumes/Data.
+const DATA_VOLUME = '/System/Volumes/Data';
+const spelled = (file: string): string => {
+  const plain = file === DATA_VOLUME || file.startsWith(`${DATA_VOLUME}/`) ? file.slice(DATA_VOLUME.length) || path.sep : file;
+  return process.platform === 'darwin' ? plain.toLowerCase() : plain;
+};
+const inside = (file: string, dir: string): boolean => spelled(file) === spelled(dir) || spelled(file).startsWith(`${spelled(dir).replace(/\/$/, '')}${path.sep}`);
 
-const inside = (file: string, dir: string): boolean => file === dir || file.startsWith(`${dir}${path.sep}`);
+const SECRET = { allow: false, reason: 'Refused: secrets and credentials are never readable. Carry on without this file.' };
+
+/** True for a file no session opens with a tool: a secret, a login, an env file, the engine's own token and database. */
+function unreadable(ctx: Radius, file: string): boolean {
+  const target = leadsTo(file);
+  if (target === null || isEnvFile(target)) return true;
+  return [...DEFAULT_DENY_READ, ...TOOL_DENY_READ, ...ctx.company.denyRead, ...(ctx.protect ?? [])].some((entry) => inside(target, leadsTo(home(entry)) ?? home(entry)));
+}
 
 /** What a grant is for: the file for a write, the exact input for anything else. Content may differ on the second try. */
 export function grantKey(call: ToolCall, folder: string): string {
@@ -116,22 +137,27 @@ function judge(ctx: Radius, call: ToolCall): Verdict {
     case 'Write':
     case 'Edit': {
       if (typeof input.file_path !== 'string') return refuse(`wants to use ${call.tool} without naming a file`);
-      const folder = fs.existsSync(ctx.folder) ? fs.realpathSync(ctx.folder) : ctx.folder;
-      const target = realTarget(path.resolve(folder, input.file_path));
-      if (!inside(target, folder)) return refuse(`wants to write ${target}, which is outside its task folder`);
-      const relative = path.relative(folder, target);
+      const folder = leadsTo(ctx.folder) ?? ctx.folder;
+      const target = leadsTo(path.resolve(ctx.folder, input.file_path));
+      if (target === null || !inside(target, folder)) return refuse(`wants to write ${target ?? input.file_path}, which is outside its task folder`);
+      const relative = target.slice(folder.length + 1);
+      if (relative === '') return refuse('wants to write over its task folder itself');
+      if (relative.split(path.sep).some((part) => part.toLowerCase() === '.git')) return refuse(`wants to write ${relative}, inside a git directory, which only the engine changes`);
       if (!owns(ctx.task.ownership, relative)) return refuse(`wants to change ${relative}, which is outside what this task owns (${ctx.task.ownership.join(', ')})`);
       return { allow: true };
     }
+    // A refused read is not a card: reading a secret is never something to ask the user for. The session carries on without it.
     case 'Read':
+      return typeof input.file_path === 'string' && unreadable(ctx, path.resolve(ctx.folder, input.file_path)) ? SECRET : { allow: true };
     case 'Glob':
     case 'Grep': {
-      const named = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : null;
-      if (named === null) return { allow: true };
-      const target = path.resolve(ctx.folder, named);
-      const denied = isEnvFile(target) || [...DEFAULT_DENY_READ, ...ctx.company.denyRead].map(home).some((entry) => inside(target, entry));
-      // Not a card: reading a secret is never something to ask the user for. The session carries on without it.
-      return denied ? { allow: false, reason: 'Refused: secrets and credentials are never readable. Carry on without this file.' } : { allow: true };
+      // A search opens every file under its root, so its root stays where the task's own files are.
+      const root = leadsTo(typeof input.path === 'string' ? path.resolve(ctx.folder, input.path) : ctx.folder);
+      const pattern = call.tool === 'Glob' && typeof input.pattern === 'string' ? input.pattern : '';
+      const climbs = path.isAbsolute(pattern) || pattern.split(/[\\/]/).includes('..');
+      const places = [ctx.folder, ctx.employee.memoryDir].map((dir) => leadsTo(dir) ?? dir);
+      if (root === null || climbs || !places.some((dir) => inside(root, dir))) return { allow: false, reason: 'Refused: search inside your task folder or your memory folder. To read one file from elsewhere, name it.' };
+      return unreadable(ctx, root) ? SECRET : { allow: true };
     }
     case 'Bash': // The sandbox confines every command; its text decides nothing.
     case 'Skill':

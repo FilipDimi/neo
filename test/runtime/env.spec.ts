@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { subscriptionEnv } from '../../src/runtime/env.ts';
+import { plainEnv, subscriptionEnv } from '../../src/runtime/env.ts';
+import { sessionEnv } from '../../src/supervisor/jobs.ts';
+
+describe('what a session or a gate inherits', () => {
+  it('lets through what a build needs, and no secret the engine happened to be started with', () => {
+    const kept = { PATH: '/bin', HOME: '/Users/x', USER: 'x', SHELL: '/bin/zsh', LANG: 'en_GB.UTF-8', LC_ALL: 'en_GB.UTF-8', TMPDIR: '/tmp/x', TZ: 'Europe/Skopje', CARGO_HOME: '/Users/x/.cargo', DEVELOPER_DIR: '/Applications/Xcode.app', HTTPS_PROXY: 'http://proxy:8080', https_proxy: 'http://proxy:8080', NODE_EXTRA_CA_CERTS: '/etc/ca.pem' };
+    const secrets = { AWS_SECRET_ACCESS_KEY: 's', AWS_ACCESS_KEY_ID: 'a', GITHUB_TOKEN: 'g', GH_TOKEN: 'g', NPM_TOKEN: 'n', DATABASE_URL: 'postgres://u:p@h/db', OPENAI_API_KEY: 'o', SSH_AUTH_SOCK: '/tmp/agent.sock', MY_APP_SECRET: 'm', SENTRY_AUTH_TOKEN: 't', ANTHROPIC_API_KEY: 'k' };
+    expect(plainEnv({ ...kept, ...secrets })).toEqual(kept);
+    expect(subscriptionEnv({ ...kept, ...secrets }).env).toEqual(kept);
+  });
+
+  it('gives a company on an API key that key and nothing else new', () => {
+    const parent = { PATH: '/bin', ANTHROPIC_API_KEY: 'k', ANTHROPIC_BASE_URL: 'https://proxy.example', GITHUB_TOKEN: 'g' };
+    expect(sessionEnv({ auth: 'api_key' }, parent)).toEqual({ PATH: '/bin', ANTHROPIC_API_KEY: 'k' });
+    expect(sessionEnv({ auth: 'subscription' }, parent)).toEqual({ PATH: '/bin' });
+  });
+});
 
 describe('subscriptionEnv', () => {
   it('removes the API key and the auth token', () => {

@@ -1,6 +1,8 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { readEvents } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import type { Gate } from '../../src/shared/types.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
@@ -19,6 +21,7 @@ const GATES: Gate[] = [
   { name: 'greeting', command: 'test -f GREETING.md', timeoutMinutes: 1, lock: null },
   { name: 'farewell', command: 'test -f FAREWELL.md', timeoutMinutes: 1, lock: null },
   { name: 'no-todo', command: '! grep -rn TODO --include=*.md .', timeoutMinutes: 1, lock: null },
+  { name: 'script', command: 'bash check.sh', timeoutMinutes: 1, lock: null },
 ];
 
 type Setup = { w: World; fixture: InProcess; repoPath: string | null };
@@ -246,6 +249,25 @@ describe('work and review', () => {
     expect(store.openRequests(setup.w.db)).toHaveLength(0);
   });
 
+  it("runs a gate confined: what an employee wrote cannot reach outside the folder through the engine's own check", async () => {
+    const outside = path.join(os.homedir(), `vs-flow-gate-probe-${process.pid}`);
+    const seen: string[] = [];
+    const setup = ledWorld(
+      async (s) => {
+        // The gate runs the repository's own script, and the employee has just rewritten it.
+        s.write('check.sh', `echo escaped > "${outside}" && echo WROTE-OUTSIDE\n`);
+        seen.push((await s.engine('run_gate', { name: 'script' })).text);
+        await s.engine('request_decision', { question: 'Stop here?', options: ['Yes'] });
+      },
+      { selfManaged: true },
+    );
+    parentTask(setup.w, { assigneeId: 'emp1' });
+    await drain(setup);
+    expect(seen[0]).toContain('FAILED');
+    expect(seen[0]).not.toContain('WROTE-OUTSIDE');
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+
   it('run_gate lets an employee run a named gate and see the real result', async () => {
     const seen: string[] = [];
     const setup = ledWorld(
@@ -263,6 +285,9 @@ describe('work and review', () => {
     expect(seen[0]).toContain('FAILED (exit 1)');
     expect(seen[1]).toContain('passed (exit 0)');
     expect(seen[2]).toMatch(/no gate named "nope"/);
+    // While the engine ran the gate for it, the run was not silent: it said what it was waiting for.
+    const waited = readEvents(setup.w.db, 0, 10_000).filter((row) => row.event.kind === 'run_activity' && row.event.text === 'running the gate "greeting"');
+    expect(waited.length).toBeGreaterThanOrEqual(2);
   });
 });
 

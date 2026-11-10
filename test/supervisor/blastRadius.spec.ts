@@ -46,6 +46,13 @@ describe('sessionShape', () => {
     expect(cache).toMatch(/^\/.+\/C$/);
   });
 
+  it("keeps commands out of the folder's git directory and away from the engine's own files", () => {
+    const shape = sessionShape({ ...ctx({ employee: coder, protect: ['/data/vs/token'] }), envFiles: [] });
+    expect(shape.sandbox!.filesystem!.denyWrite).toEqual([path.join(folder, '.git')]);
+    expect(shape.sandbox!.filesystem!.denyRead).toContain('/data/vs/token');
+    expect(shape.sandbox!.filesystem!.denyRead).toContain(path.join(os.homedir(), '.git-credentials'));
+  });
+
   it('drops write and command tools in review and route modes', () => {
     expect(sessionShape({ ...ctx({ employee: coder, mode: 'review' }), envFiles: [] }).tools).toEqual(['Read', 'Glob', 'Grep', 'Skill']);
     expect(sessionShape({ ...ctx({ employee: coder, mode: 'route' }), envFiles: [] }).tools).toEqual(['Read', 'Glob', 'Grep', 'Skill']);
@@ -76,6 +83,37 @@ describe('judgeToolCall', () => {
     expect(judgeToolCall(ctx(), call('Write', { file_path: path.join(folder, 'way-out/x.txt'), content: 'x' }))).toMatchObject({ allow: false, stop: true });
   });
 
+  it('refuses a write through a link to a file that does not exist yet, however long the chain', () => {
+    const outside = tempDir();
+    fs.symlinkSync(path.join(outside, 'new.plist'), path.join(folder, 'notes.plist'));
+    fs.symlinkSync(path.join(folder, 'notes.plist'), path.join(folder, 'again.plist'));
+    fs.symlinkSync('../'.repeat(12) + 'etc/new-file', path.join(folder, 'relative.txt'));
+    for (const file of ['notes.plist', 'again.plist', 'relative.txt']) {
+      const verdict = judgeToolCall(ctx(), call('Write', { file_path: path.join(folder, file), content: 'x' }));
+      expect(verdict, file).toMatchObject({ allow: false, stop: true });
+    }
+    expect(fs.existsSync(path.join(outside, 'new.plist'))).toBe(false);
+    // A link that stays inside the folder is an ordinary file.
+    fs.mkdirSync(path.join(folder, 'src'), { recursive: true });
+    fs.symlinkSync(path.join(folder, 'src/real.ts'), path.join(folder, 'alias.ts'));
+    expect(judgeToolCall(ctx(), call('Write', { file_path: path.join(folder, 'alias.ts'), content: 'x' }))).toEqual({ allow: true });
+  });
+
+  it('refuses a link that leads round in a circle', () => {
+    fs.symlinkSync(path.join(folder, 'loop-b'), path.join(folder, 'loop-a'));
+    fs.symlinkSync(path.join(folder, 'loop-a'), path.join(folder, 'loop-b'));
+    expect(judgeToolCall(ctx(), call('Write', { file_path: path.join(folder, 'loop-a/x'), content: 'x' }))).toMatchObject({ allow: false, stop: true });
+  });
+
+  it("refuses a write into a git directory: git's hooks and settings are the engine's", () => {
+    for (const file of ['.git/config', '.git/hooks/pre-commit', '.git/commondir', '.GIT/config', '.git', 'vendor/lib/.git/config']) {
+      const verdict = judgeToolCall(ctx(), call('Write', { file_path: path.join(folder, file), content: 'x' }));
+      expect(verdict, file).toMatchObject({ allow: false, stop: true });
+      expect(verdict.card, file).toMatch(/git/);
+    }
+    for (const file of ['.gitignore', '.github/workflows/ci.yml', 'docs/git.md']) expect(judgeToolCall(ctx(), call('Edit', { file_path: path.join(folder, file), old_string: 'a', new_string: 'b' })), file).toEqual({ allow: true });
+  });
+
   it("refuses a write outside the task's ownership with a card", () => {
     const owned = ctx({ task: task({ ownership: ['src/api'] }) });
     expect(judgeToolCall(owned, call('Write', { file_path: path.join(folder, 'src/api/routes.ts'), content: 'x' }))).toEqual({ allow: true });
@@ -93,6 +131,51 @@ describe('judgeToolCall', () => {
       expect(verdict.card, file).toBeUndefined();
     }
     expect(judgeToolCall(ctx({ company: company({ denyRead: ['/srv/private'] }) }), call('Grep', { pattern: 'x', path: '/srv/private/notes' }))).toMatchObject({ allow: false });
+  });
+
+  it('refuses reading a secret however its path is spelled', () => {
+    const secret = tempDir();
+    fs.writeFileSync(path.join(secret, 'key'), 'k');
+    fs.symlinkSync(secret, path.join(folder, 'docs-link'));
+    fs.symlinkSync(path.join(secret, 'key'), path.join(folder, 'README.link'));
+    const guarded = ctx({ company: company({ denyRead: [secret] }) });
+    const spellings = [path.join(secret, 'key'), `${secret.toUpperCase()}/key`, path.join(folder, 'docs-link/key'), path.join(folder, 'README.link'), `/System/Volumes/Data${secret}/key`, `${secret}/../${path.basename(secret)}/key`];
+    for (const file of spellings) expect(judgeToolCall(guarded, call('Read', { file_path: file })), file).toMatchObject({ allow: false });
+    for (const file of ['.ENV', 'backend/.Env.local', '.env.PRODUCTION']) expect(judgeToolCall(ctx(), call('Read', { file_path: path.join(folder, file) })), file).toMatchObject({ allow: false });
+  });
+
+  it("never reads the engine's own token and database, or the usual credential files", () => {
+    const home = os.homedir();
+    const engine = ctx({ protect: ['/data/vs/token', '/data/vs/company.db', '/data/vs/company.db-wal'] });
+    for (const file of ['/data/vs/token', '/data/vs/company.db', '/data/vs/company.db-wal', path.join(home, '.git-credentials'), path.join(home, '.npmrc'), path.join(home, '.config/gh/hosts.yml'), path.join(home, '.cargo/credentials.toml'), path.join(home, 'Library/Keychains/login.keychain-db')]) {
+      const verdict = judgeToolCall(engine, call('Read', { file_path: file }));
+      expect(verdict, file).toMatchObject({ allow: false });
+      expect(verdict.stop, file).toBeUndefined();
+    }
+  });
+
+  it('searches only inside the task folder and the memory folder', () => {
+    const worker = employee({ memoryDir: tempDir() });
+    const here = ctx({ employee: worker });
+    for (const input of [{ pattern: 'TODO' }, { pattern: 'TODO', path: path.join(folder, 'src') }, { pattern: 'TODO', path: 'src' }, { pattern: 'note', path: worker.memoryDir }]) expect(judgeToolCall(here, call('Grep', input)), JSON.stringify(input)).toEqual({ allow: true });
+    for (const input of [{ pattern: '**/*.ts' }, { pattern: 'src/**/*.ts', path: folder }]) expect(judgeToolCall(here, call('Glob', input)), JSON.stringify(input)).toEqual({ allow: true });
+
+    const outside = tempDir();
+    fs.symlinkSync(outside, path.join(folder, 'way-out-search'));
+    const refused = [
+      ['Grep', { pattern: 'KEY', path: os.homedir() }],
+      ['Grep', { pattern: 'KEY', path: '/' }],
+      ['Grep', { pattern: 'KEY', path: path.dirname(folder) }],
+      ['Grep', { pattern: 'KEY', path: path.join(folder, 'way-out-search') }],
+      ['Glob', { pattern: '**/.env*', path: os.homedir() }],
+      ['Glob', { pattern: `${os.homedir()}/**/.env` }],
+      ['Glob', { pattern: '../../**/*' }],
+    ] as const;
+    for (const [tool, input] of refused) {
+      const verdict = judgeToolCall(here, call(tool, input));
+      expect(verdict, JSON.stringify(input)).toMatchObject({ allow: false });
+      expect(verdict.stop, JSON.stringify(input)).toBeUndefined();
+    }
   });
 
   it('allows ordinary reads, inside the folder and out, and an example env file', () => {

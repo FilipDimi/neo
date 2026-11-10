@@ -3,8 +3,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Paths } from '../db/dataDir.ts';
-import { subscriptionEnv } from '../runtime/env.ts';
+import { engineFiles, type Paths } from '../db/dataDir.ts';
+import { plainEnv } from '../runtime/env.ts';
 import type { Company, Employee, Message, Repo, Run, RunMode, RunRequest, Task, Team } from '../shared/types.ts';
 import type { EngineTool, WorkerJob } from '../worker/protocol.ts';
 import { sessionShape } from './blastRadius.ts';
@@ -21,10 +21,15 @@ export const ENGINE_TOOLS_FOR: Record<RunMode, EngineTool[]> = {
   route: ['create_task', 'set_status'],
 };
 
-/** The environment of a session. On the subscription login nothing that could redirect billing gets through. */
+/**
+ * The environment of a session: the short list of `plainEnv`, so nothing that could redirect
+ * billing and no token from the engine's shell gets through. A company set to run on an API key
+ * gets that one key added, and nothing else.
+ */
 export function sessionEnv(company: Pick<Company, 'auth'>, parent: Record<string, string | undefined> = process.env): Record<string, string> {
-  if (company.auth === 'subscription') return subscriptionEnv(parent).env;
-  return Object.fromEntries(Object.entries(parent).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  const env = plainEnv(parent);
+  if (company.auth === 'api_key' && parent.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = parent.ANTHROPIC_API_KEY;
+  return env;
 }
 
 /** Where a task's files live. A task with a repository gets its clone here; one without gets a plain folder. */
@@ -65,7 +70,7 @@ export function buildJob(input: JobInput): WorkerJob {
   const { run, request, task, team, employee, company } = input;
   const cwd = folderOf(input.paths, task);
   fs.mkdirSync(cwd, { recursive: true });
-  const shape = sessionShape({ task, team, employee, mode: run.mode, folder: cwd, company, envFiles: input.envFiles });
+  const shape = sessionShape({ task, team, employee, mode: run.mode, folder: cwd, company, envFiles: input.envFiles, protect: engineFiles(input.paths) });
   const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams });
   // A command may run long, but never longer than the lease: the Bash timeout sits two minutes under it.
   const bashTimeout = String(Math.max(1, run.leaseMinutes - 2) * 60_000);
