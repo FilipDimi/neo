@@ -38,6 +38,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
     await app.close();
     await supervisor.stop();
+    // The company was a throwaway: take it, and what its employees remembered between runs, off the disk.
+    fs.rmSync(root, { recursive: true, force: true });
+    for (const name of fs.readdirSync(os.tmpdir())) if (name.startsWith(`vs-demo-once-${process.pid}-`)) fs.rmSync(path.join(os.tmpdir(), name), { force: true });
     process.exit(0);
   });
 }

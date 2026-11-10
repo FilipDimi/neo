@@ -156,4 +156,6 @@ console.log(`open cards at the end: ${store.openDecisions(db).map((d) => d.kind)
 console.log(`tasks: ${store.listTasks(db).filter((t) => t.kind === 'work').map((t) => `${t.title} [${t.state}]`).join('; ')}`);
 await app.close();
 await sup.stop();
+db.close();
+fs.rmSync(root, { recursive: true, force: true });
 process.exit(0);

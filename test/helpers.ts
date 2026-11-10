@@ -2,14 +2,30 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { afterAll } from 'vitest';
 import { openDb, type Db } from '../src/db/open.ts';
 import type { Company, Employee, Repo, Team } from '../src/shared/types.ts';
 import { company, employee, plus, T0, team } from './rows.ts';
 
 export * from './rows.ts';
 
+// Every folder a test file makes is removed when the file is done: a run makes about seventy
+// (databases, repositories and their clones), and nothing else ever clears them.
+const made: string[] = [];
+afterAll(() => {
+  for (const dir of made.splice(0)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      // Something still holds it. The system's own clearing of the temp folder gets it later.
+    }
+  }
+});
+
 export function tempDir(prefix = 'vs-test-'): string {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  made.push(dir);
+  return dir;
 }
 
 export function tempDb(): Db {
