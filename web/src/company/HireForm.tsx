@@ -149,8 +149,8 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
         </fieldset>
       </div>
 
-      <div className="hire-group" role="group" aria-label="Skills · loaded first on every run">
-        <div className="group-title">Skills · loaded first on every run</div>
+      <div className="hire-group" role="group" aria-label="Skills · one by itself is loaded first, a set is drawn on as the task needs">
+        <div className="group-title">Skills · one by itself is loaded first, a set is drawn on as the task needs</div>
         {allSkills && (
           <>
             <label htmlFor="find-skill" className="sr-only">

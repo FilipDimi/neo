@@ -172,7 +172,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
           </div>
           {noTools && <p className="muted small">With no tools this employee can read nothing and do nothing but ask you questions. Tick at least one.</p>}
 
-          <div className="label">Skills · loaded first on every run</div>
+          <div className="label">Skills · one by itself is loaded first, a set is drawn on as the task needs</div>
           <div className="chips">
             {draft.skills.length === 0 && <span className="muted small">none</span>}
             {/* A family this person has whole is one tick: taking it away takes all of it. */}
