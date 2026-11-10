@@ -1,6 +1,6 @@
 # Virtual startup: design
 
-Date: 2026-11-08. Author: Neo (fork), with Filip. Status: for Filip's review before any implementation plan.
+Date: 2026-11-08. Author: Neo (fork), with Filip. Status: approved by Filip on 2026-11-08; reviewed on 2026-11-09; amended by section 15, which wins where it differs from the text above it.
 
 ## 1. Purpose
 
@@ -99,3 +99,24 @@ Hosted mode, billing, multiple users, API keys for other users, a skills marketp
 ## 14. Home
 
 A new repository of its own, outside Receipts; Filip names it. This file moves there with the first commit.
+
+## 15. Amendments of 2026-11-09
+
+From the review (`docs/superpowers/reviews/`, finding numbers in brackets) and the spike (`docs/spike/2026-11-09-spike-findings.md`). None changes what Filip approved. Two wait on his answer and say so.
+
+1. **Status (C1).** The header's status line was stale. It now says: approved, reviewed, amended here.
+2. **Section 2, decision 5 (C2).** The assumption is verified: the SDK runs on the claude.ai login already on the machine, once the key and provider variables are removed from the session's environment. The CLI fallback is not needed.
+3. **Section 12 (C3).** The engine plan builds no screen. The screen is a second plan, `docs/superpowers/plans/2026-11-09-virtual-startup-screen.md`, written before the engine's API task and built after it. The dogfood starts only when both are built.
+4. **Section 10 (C4).** The led-team end-to-end run is a scripted live smoke test run directly after the led-team task. A one-task live test comes earlier, as the first live check.
+5. **Section 11 (C5).** "One command starts it and opens the browser" means `npm start`. All state lives in a data directory outside the repository (`VS_DATA_DIR`, default `~/.virtual-startup`), one company per directory.
+6. **Sections 3, 7 and 8 (C6).** The artboards need fields the lists above lack. A team has, per repository, a base branch and a merge target (none by default; "may merge: team branch"). An employee has capabilities (read files, run commands, write code, web search, git push, send messages), not raw tool names; the engine maps them. A task records who created it, its repository, its named gates, and an optional reviewer. A decision's options are data (label, effect, parameters), so "Retry, 20 min" can carry its lease. A card's colour comes from one attention value (working, review, waiting on you, silent, over budget). A run carries a short activity line for the speech bubble.
+7. **Sections 4 and 9 (P53).** "A worktree per run" becomes: one task folder and one branch per task, created at the task's first run and reused, in sequence, by every later run of that task. No two concurrent runs share a folder. Folders live under the data directory. The folder is removed when the task is done; the branch stays until it is merged or discarded on a card. **Waiting on Filip:** whether the folder is a clone or a linked worktree. The spike showed that the SDK sandbox lets an employee move branches of the user's repository from a linked worktree and cannot from a clone.
+8. **Section 9 (P73).** "Re-attaches to or expires in-flight runs" becomes: on restart every in-flight run is marked expired and resumed from its stored session through the scheduler. A leftover worker is killed only when its pid and its start time both match the run's record.
+9. **Section 9, durability.** "Rebuilds the board from events" becomes: a state change and its event are written in one transaction, and each event carries the rows it changed, so replaying the log reproduces the tables. A test holds this.
+
+From the spike:
+
+10. **Section 6, blast radius.** "Tools mounted only where allowed" becomes three mechanisms, none of them a prompt: the SDK sandbox confines every command to the task folder; a hook that runs before every tool call asks the supervisor; and git writes to the user's repository (commit, merge, push) are engine operations an employee's session does not have. Publish, send, pay and delete have no tool in the first version: they are impossible, and asking for one raises a card.
+11. **Section 6, spend.** The SDK estimates cost at list prices on the subscription login and enforces a per-run cap itself. A task's cap covers all its runs. Reaching the subscription's own usage limit pauses the whole company with one card and uses no retry. **Waiting on Filip:** whether caps are shown in dollars or tokens.
+12. **Section 9, gates.** Gates are named commands registered per repository and run by the engine, never reported by the employee. The reviewer's re-run is the same engine call. Simulator tests cannot run inside the sandbox, so they are gates.
+13. **Section 7, skills.** A session loads none of the user's settings, so chosen skills are mounted for each run as local plugins. A user skill reaches an employee as `user:<name>`, a company skill as `company:<name>`.
