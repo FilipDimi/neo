@@ -109,11 +109,12 @@ export function TeamForm({ teamId, onDone }: { teamId?: string | undefined; onDo
                 {entry && (
                   <div className="row">
                     <label>
-                      Base branch for {repo.path}
+                      {/* The path is in the line above; here it is only for someone who cannot see that line. */}
+                      Base branch<span className="sr-only"> for {repo.path}</span>
                       <input className="field" required value={entry.baseBranch} onChange={(event) => set({ baseBranch: event.target.value })} />
                     </label>
                     <label>
-                      May merge into, for {repo.path}
+                      May merge into<span className="sr-only">, for {repo.path}</span>
                       <input className="field" placeholder="nothing: every merge is your decision" value={entry.mergeTarget} onChange={(event) => set({ mergeTarget: event.target.value })} />
                     </label>
                   </div>
