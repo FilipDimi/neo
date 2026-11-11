@@ -13,3 +13,6 @@ data/
 
 # Working copies made for reviewers
 .claude/worktrees/
+
+# The design kit: a local copy of the Fine Print canvas, kept by the designers for the iOS team. Not part of this app.
+design-kit/
