@@ -78,6 +78,13 @@ describe('Deck', () => {
     expect(api.calls).toEqual([['POST', '/api/decisions/d2/answer', { optionId: 'answer', text: 'Teal, actually.' }]]);
   });
 
+  it('shows what a card asks with its formatting', () => {
+    const asked = decision({ id: 'd3', kind: 'question', text: '**Merge task/x?**\n\n- 14 files\n- `tests` passed', options: [{ id: 'stop', label: 'Stop it', effect: 'stop_task' }] });
+    mount(<Deck />, { store: store([asked]), now: T0 });
+    expect(screen.getByText('Merge task/x?').tagName).toBe('STRONG');
+    expect(screen.getAllByRole('listitem').map((item) => item.textContent)).toEqual(['14 files', 'tests passed']);
+  });
+
   it('drops a card as soon as the engine says it was answered', () => {
     const { handle } = mount(<Deck />, { store: store(), now: T0 });
     const answered = { kind: 'decision_answered' as const, decision: { ...lease, answer: { optionId: 'stop' }, answeredAt: T0.toISOString() }, result: 'applied' as const };

@@ -1,8 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useApi } from '../app/context.ts';
 import { useNow, useStore } from '../store/store.ts';
+import { MessageBox } from './MessageBox.tsx';
+import { Prose } from './Prose.tsx';
 
+/** How long a reply stays: long enough to read it, and never less than this. */
 const REPLY_SHOWN_MS = 20_000;
+const MS_PER_LETTER = 60; // an unhurried reader
 
 /** The line to the chief of staff, on every view. What is typed here becomes tasks on the board. */
 export function ChatLine() {
@@ -12,7 +16,7 @@ export function ChatLine() {
   const [error, setError] = useState<string | null>(null);
   const chief = useStore((store) => (store.company?.chiefOfStaffId ? store.employees.get(store.company.chiefOfStaffId) : undefined));
   const reply = useStore((store) => [...store.messages.values()].filter((message) => message.toId === 'user').sort((a, b) => a.at.localeCompare(b.at)).at(-1));
-  const fresh = reply && now.getTime() - new Date(reply.at).getTime() < REPLY_SHOWN_MS;
+  const fresh = reply && now.getTime() - new Date(reply.at).getTime() < Math.max(REPLY_SHOWN_MS, reply.text.length * MS_PER_LETTER);
   // Anyone who was written to can answer here, so the answer carries the name of whoever gave it.
   const from = useStore((store) => (reply ? store.employees.get(reply.fromId)?.name : undefined), [reply?.fromId]);
   const ready = Boolean(chief && !chief.fired);
@@ -33,7 +37,12 @@ export function ChatLine() {
 
   return (
     <form className="chat" onSubmit={(event) => void send(event)}>
-      {fresh && <div className="chat-reply">{`${from ?? chief?.name ?? 'Chief of staff'}: ${reply.text}`}</div>}
+      {fresh && (
+        <div className="chat-reply">
+          <div className="chat-from">{from ?? chief?.name ?? 'Chief of staff'}</div>
+          <Prose text={reply.text} />
+        </div>
+      )}
       {error && (
         <div className="chat-reply error" role="alert">
           {error}
@@ -43,7 +52,7 @@ export function ChatLine() {
         <label htmlFor="chat-text" className="sr-only">
           {label}
         </label>
-        <input id="chat-text" type="text" autoComplete="off" disabled={!ready} placeholder={`${label}…`} value={text} onChange={(event) => setText(event.target.value)} />
+        <MessageBox id="chat-text" autoComplete="off" disabled={!ready} placeholder={`${label}…`} value={text} onChange={setText} />
         <button type="submit" className="send" disabled={!ready}>
           Send
         </button>

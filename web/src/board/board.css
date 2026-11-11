@@ -37,7 +37,7 @@
 .drawer h2 { margin: 4px 0 0; font-size: 18px; overflow-wrap: anywhere; }
 .drawer section { display: flex; flex-direction: column; gap: 6px; }
 .drawer p { margin: 0; overflow-wrap: anywhere; }
-.drawer .brief { white-space: pre-line; line-height: 19px; }
+.drawer .brief { line-height: 19px; }
 .drawer .child { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; border-radius: var(--input); background: var(--surface); border: 1px solid var(--line); text-align: left; }
 .drawer .run { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--soft); }
 .gate { font-size: 11px; padding: 1px 8px; border-radius: var(--pill); }
@@ -49,6 +49,6 @@
 .feed.files summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .feed.files code { font: 11px/16px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
 .feed pre { margin: 0; font: 11px/16px ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.drawer-message { display: flex; gap: 8px; } .drawer-message input { flex-grow: 1; min-width: 0; font-size: 13px; }
+.drawer-message { display: flex; gap: 8px; align-items: flex-end; } .drawer-message .message-box { flex-grow: 1; min-width: 0; font-size: 13px; }
 .drawer footer { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .drawer .inline { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); } .drawer .inline select { padding: 5px 8px; font-size: 12px; }

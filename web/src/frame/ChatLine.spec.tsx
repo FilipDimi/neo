@@ -31,7 +31,8 @@ describe('ChatLine', () => {
     expect(screen.queryByText(/I wrote 2 tasks/)).toBeNull();
     const reply = { kind: 'message_sent' as const, message: message({ id: 'r1', fromId: store.company!.chiefOfStaffId!, toId: 'user', text: 'I wrote 2 tasks from that.', at: now.toISOString(), state: 'delivered' }) };
     act(() => handle.apply({ id: store.lastEventId + 1, at: now.toISOString(), ...subjectsOf(reply), event: reply }));
-    expect(screen.getByText('Neo: I wrote 2 tasks from that.')).toBeTruthy();
+    expect(document.querySelector('.chat-reply')!.textContent).toBe('NeoI wrote 2 tasks from that.');
+    expect(screen.getByText('Neo').className).toBe('chat-from');
     unmount();
     mount(<ChatLine />, { store: handle.get(), now: plus(now, 60) });
     expect(screen.queryByText(/I wrote 2 tasks/)).toBeNull();
@@ -44,6 +45,32 @@ describe('ChatLine', () => {
     await userEvent.type(field, 'Hello{Enter}');
     expect((await screen.findByRole('alert')).textContent).toContain('not answering');
     expect(field.value).toBe('Hello');
+  });
+
+  it('shows a reply with its formatting, and takes several lines', async () => {
+    const { store, now } = storyAt('start');
+    const { handle, api } = mount(<ChatLine />, { store, now, api: fakeApi(() => ({ message: {} })) });
+    const reply = { kind: 'message_sent' as const, message: message({ id: 'r1', fromId: store.company!.chiefOfStaffId!, toId: 'user', text: '**Done:** 2 tasks.\n\n- header\n- footer', at: now.toISOString(), state: 'delivered' }) };
+    act(() => handle.apply({ id: store.lastEventId + 1, at: now.toISOString(), ...subjectsOf(reply), event: reply }));
+    expect(screen.getByText('Done:').tagName).toBe('STRONG');
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    const field = screen.getByLabelText('Tell Neo what to do next') as HTMLTextAreaElement;
+    expect(field.tagName).toBe('TEXTAREA');
+    await userEvent.type(field, 'One{Shift>}{Enter}{/Shift}two{Enter}');
+    expect(api.calls).toEqual([['POST', '/api/chat', { text: 'One\ntwo' }]]);
+  });
+
+  it('keeps a long reply for as long as it takes to read', () => {
+    const { store, now } = storyAt('start');
+    const long = { kind: 'message_sent' as const, message: message({ id: 'r1', fromId: store.company!.chiefOfStaffId!, toId: 'user', text: `Here is where every team stands. ${'The board is moving. '.repeat(100)}`, at: now.toISOString(), state: 'delivered' }) };
+    const { handle, unmount } = mount(<ChatLine />, { store, now });
+    act(() => handle.apply({ id: store.lastEventId + 1, at: now.toISOString(), ...subjectsOf(long), event: long }));
+    unmount();
+    const later = mount(<ChatLine />, { store: handle.get(), now: plus(now, 60) }); // a short reply is gone by now
+    expect(screen.getByText(/Here is where every team stands/)).toBeTruthy();
+    later.unmount();
+    mount(<ChatLine />, { store: handle.get(), now: plus(now, 600) });
+    expect(screen.queryByText(/Here is where every team stands/)).toBeNull();
   });
 
   it('is disabled when there is no chief of staff', () => {

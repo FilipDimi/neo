@@ -1,0 +1,22 @@
+/* What someone wrote, with its formatting. */
+.prose { display: flex; flex-direction: column; gap: 8px; min-width: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.prose p { margin: 0; }
+.prose p, .prose li, .prose td, .prose th { white-space: pre-line; }
+.prose ul, .prose ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.prose li > ul, .prose li > ol, .prose li > p, .prose li > pre { margin-top: 4px; }
+.prose h3, .prose h4, .prose h5 { margin: 4px 0 0; font-weight: 700; line-height: 1.3; }
+.prose h3 { font-size: 1.15em; } .prose h4 { font-size: 1.05em; } .prose h5 { font-size: 1em; color: var(--soft); }
+.prose strong { font-weight: 700; color: var(--text); }
+.prose code { font: 0.92em ui-monospace, Menlo, monospace; padding: 1px 5px; border-radius: 5px; background: var(--raised); border: 1px solid var(--line); }
+.prose pre { margin: 0; padding: 10px 12px; border-radius: var(--input); background: var(--ground); border: 1px solid var(--line); overflow-x: auto; }
+.prose pre code { padding: 0; background: none; border: 0; font-size: 12px; line-height: 17px; white-space: pre; overflow-wrap: normal; }
+.prose blockquote { margin: 0; padding-left: 12px; border-left: 2px solid var(--line); color: var(--soft); display: flex; flex-direction: column; gap: 8px; }
+.prose hr { width: 100%; margin: 2px 0; border: 0; border-top: 1px solid var(--line); }
+.prose a { color: var(--review); text-decoration: underline; }
+.prose-table { overflow-x: auto; }
+.prose table { border-collapse: collapse; font-size: 0.95em; }
+.prose th, .prose td { padding: 5px 9px; border: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: normal; }
+.prose th { background: var(--raised); font-weight: 600; }
+
+/* Where a message is typed: one line to begin with, as tall as its text after that, and no taller than this. */
+.message-box { display: block; resize: none; max-height: min(40vh, 320px); overflow-y: auto; line-height: 1.45; }

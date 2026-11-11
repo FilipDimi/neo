@@ -3,15 +3,30 @@
 .app-wait { height: 100%; display: grid; place-items: center; color: var(--muted); }
 .app-chat { flex: none; padding: 10px 24px 14px; border-top: 1px solid var(--header-line); display: flex; justify-content: flex-end; }
 .app-chat .chat { width: min(520px, 100%); }
-.app-chat .chat-line { height: 44px; }
+.app-chat .chat-line { min-height: 44px; padding-top: 3px; padding-bottom: 3px; border-radius: 22px; }
 .office-deck { position: absolute; top: 76px; left: 24px; right: 24px; z-index: 10; display: flex; align-items: flex-start; gap: 8px; }
 .office-deck .deck { flex-grow: 1; min-width: 0; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6); }
 
-/* A line of a conversation with one person, on that person's page. */
+/* One message of a conversation with one person, on that person's page: theirs across the page, yours to the right. */
 .said {
-  margin: 4px 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--card);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.said.mine {
+  align-self: flex-end;
+  max-width: 88%;
+  background: var(--chosen-ground);
+  border-color: var(--chosen-edge);
+}
+.said-who {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
 }
 
 /* A button that removes something for good. */

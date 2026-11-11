@@ -3,6 +3,8 @@ import type { EventRow } from '../../../src/shared/events.ts';
 import type { Decision, Message, Run, Task } from '../../../src/shared/types.ts';
 import { useApi, useUi, type TaskTab } from '../app/context.ts';
 import { money } from '../format.ts';
+import { MessageBox } from '../frame/MessageBox.tsx';
+import { Prose } from '../frame/Prose.tsx';
 import { liveRuns } from '../model/select.ts';
 import { useStore } from '../store/store.ts';
 
@@ -112,7 +114,8 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
 
   const lines = (detail?.events ?? []).flatMap((row) => {
     const line = feedLine(row, nameOf);
-    return line ? [{ id: row.id, line }] : [];
+    // What the employee wrote is shown with its formatting; the engine's own lines are plain.
+    return line ? [{ id: row.id, line, words: row.event.kind === 'run_event' && row.event.event.kind === 'assistant_text' }] : [];
   });
 
   return (
@@ -130,7 +133,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
       </header>
 
       <section>
-        <p className="brief">{task.brief}</p>
+        <Prose className="brief" text={task.brief} />
         {task.doneCondition && (
           <p>
             <span className="label">Done when</span> <span>{task.doneCondition}</span>
@@ -187,7 +190,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
             following.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
           }}
         >
-          {lines.length === 0 ? <p className="muted">Nothing has happened on this task yet.</p> : lines.map((entry) => <p key={entry.id}>{entry.line}</p>)}
+          {lines.length === 0 ? <p className="muted">Nothing has happened on this task yet.</p> : lines.map((entry) => (entry.words ? <Prose key={entry.id} text={entry.line} /> : <p key={entry.id}>{entry.line}</p>))}
         </div>
       ) : hasRepo ? (
         <div className="feed">
@@ -225,7 +228,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
         <label htmlFor="task-message" className="sr-only">
           Message to {recipient}
         </label>
-        <input id="task-message" className="field" placeholder={`Message to ${recipient}…`} value={text} onChange={(event) => setText(event.target.value)} />
+        <MessageBox id="task-message" className="field" placeholder={`Message to ${recipient}…`} value={text} onChange={setText} />
         <button type="submit" className="pill small on">
           Send
         </button>

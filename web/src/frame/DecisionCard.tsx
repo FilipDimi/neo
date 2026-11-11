@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { useApi, useUi } from '../app/context.ts';
 import type { DeckCard, LocalAction } from '../model/select.ts';
+import { Prose } from './Prose.tsx';
 
 const LOCAL_LABEL: Record<LocalAction, string> = { open_diff: 'Open diff', read_first: 'Read it first', not_now: 'Not now' };
 
@@ -40,7 +41,7 @@ export function DecisionCard({ card, onAside, onGone }: { card: DeckCard; onAsid
         Decision · {card.age}
         {card.team ? ` · ${card.team}` : ''}
       </div>
-      <p className="decision-text">{card.text}</p>
+      <Prose className="decision-text" text={card.text} />
       {card.asker && <p className="decision-note">{`Your answer goes back to ${card.asker} as words. It changes no tools and no limits.`}</p>}
       {card.freeText && (
         <>

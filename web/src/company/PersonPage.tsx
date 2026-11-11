@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { Capability, Employee, Message, Run } from '../../../src/shared/types.ts';
 import { useApi } from '../app/context.ts';
 import { money } from '../format.ts';
+import { MessageBox } from '../frame/MessageBox.tsx';
+import { Prose } from '../frame/Prose.tsx';
 import { skillSets, skillsInBrief } from '../../../src/shared/skills.ts';
 import { personStatus } from '../model/select.ts';
 import { useStore } from '../store/store.ts';
@@ -251,9 +253,10 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
         <section>
           <div className="label">Conversation</div>
           {talk.map((message) => (
-            <p key={message.id} className={message.fromId === 'user' ? 'said muted' : 'said'}>
-              {`${message.fromId === 'user' ? 'You' : employee.name}: ${message.text}`}
-            </p>
+            <div key={message.id} className={message.fromId === 'user' ? 'said mine' : 'said'}>
+              <div className="said-who">{message.fromId === 'user' ? 'You' : employee.name}</div>
+              <Prose text={message.text} />
+            </div>
           ))}
         </section>
       )}
@@ -261,7 +264,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
         <label htmlFor="person-message" className="sr-only">
           Message to {employee.name}
         </label>
-        <input id="person-message" className="field" placeholder={`Message to ${employee.name}…`} value={text} onChange={(event) => setText(event.target.value)} />
+        <MessageBox id="person-message" className="field" placeholder={`Message to ${employee.name}…`} value={text} onChange={setText} />
         <button type="submit" className="pill small on">
           Send
         </button>

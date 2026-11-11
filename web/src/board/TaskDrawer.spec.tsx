@@ -44,6 +44,14 @@ describe('TaskDrawer', () => {
     expect(api.calls).toHaveLength(2);
   });
 
+  it("shows what an employee wrote with its formatting, and the engine's own lines as they are", async () => {
+    const api = fakeApi(() => detail([said(3, '**Done.** Two files:\n\n- `NOTE.md`\n- `README.md`'), row(4, { kind: 'run_event', runId: 'run1', taskId: 'task1', employeeId: 'emp1', teamId: 'team1', event: { kind: 'tool_call', id: 't', tool: 'Bash', input: { command: 'ls **/*.md' } } })]));
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
+    expect((await screen.findByText('Done.')).tagName).toBe('STRONG');
+    expect(screen.getAllByRole('listitem').map((item) => item.innerHTML)).toEqual(['<code>NOTE.md</code>', '<code>README.md</code>']);
+    expect(screen.getByText('▸ Bash ls **/*.md')).toBeTruthy();
+  });
+
   it('shows the diff when asked', async () => {
     const api = fakeApi((_method, path) => (path.endsWith('/diff') ? { stat: ' NOTE.md | 1 +', patch: '+a note', lines: 1 } : detail([])));
     mount(<TaskDrawer taskId="task1" tab="diff" onClose={() => {}} />, { store: store(), now: T0, api });
@@ -78,6 +86,7 @@ describe('TaskDrawer', () => {
     const sent = message({ id: 'm9', toId: 'emp1', taskId: 'task1', text: 'Stop at the test step.' });
     const api = fakeApi((method) => (method === 'POST' ? { message: sent } : detail([])));
     const { handle } = mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
+    expect(screen.getByLabelText('Message to Ada').tagName).toBe('TEXTAREA'); // long messages stay readable while they are typed
     await userEvent.type(screen.getByLabelText('Message to Ada'), 'Stop at the test step.{Enter}');
     expect(api.calls).toContainEqual(['POST', '/api/tasks/task1/message', { text: 'Stop at the test step.' }]);
     expect(await screen.findByText(/waiting for Ada's next turn/)).toBeTruthy();

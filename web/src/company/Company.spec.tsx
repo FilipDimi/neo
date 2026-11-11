@@ -298,9 +298,30 @@ describe('PersonPage', () => {
       messages: new Map([said('m1', 'user', 'lead', 'yo, what are we working on?', 1), said('m2', 'lead', 'user', 'Nothing right now: the board is empty.', 2), said('m3', 'user', 'someone-else', 'Not for Priya.', 3)].map((message) => [message.id, message])),
     };
     mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: talking, now: T0, api: fakeApi(() => detail) });
-    expect(screen.getByText('You: yo, what are we working on?')).toBeTruthy();
-    expect(screen.getByText('Priya: Nothing right now: the board is empty.')).toBeTruthy();
+    const lines = [...document.querySelectorAll('.said')].map((line) => [line.querySelector('.said-who')!.textContent, line.querySelector('.prose')!.textContent]);
+    expect(lines).toEqual([
+      ['You', 'yo, what are we working on?'],
+      ['Priya', 'Nothing right now: the board is empty.'],
+    ]);
     expect(screen.queryByText(/Not for Priya/)).toBeNull();
+  });
+
+  it('shows a long answer with its formatting, not with the marks it was written in', () => {
+    const answer = '**Where it stands:** two tasks are on the board.\n\n- the header is in review\n- the footer is queued';
+    const talking = { ...store, messages: new Map([['m1', { id: 'm1', fromId: 'lead', toId: 'user', taskId: null, text: answer, state: 'delivered' as const, at: T0.toISOString(), deliveredAt: null }]]) };
+    mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: talking, now: T0, api: fakeApi(() => detail) });
+    expect(screen.getByText('Where it stands:').tagName).toBe('STRONG');
+    expect(screen.getAllByRole('listitem').map((item) => item.textContent)).toEqual(['the header is in review', 'the footer is queued']);
+    expect(document.querySelector('.said')!.textContent).not.toContain('**');
+  });
+
+  it('takes a message of several lines in a box that shows them all', async () => {
+    const api = fakeApi((method) => (method === 'GET' ? detail : { message: { state: 'delivered', taskId: 't1' } }));
+    mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store, now: T0, api });
+    const box = screen.getByLabelText('Message to Priya');
+    expect(box.tagName).toBe('TEXTAREA');
+    await userEvent.type(box, 'Two things:{Shift>}{Enter}{/Shift}first, the header.{Enter}');
+    expect(api.calls).toContainEqual(['POST', '/api/employees/lead/message', { text: 'Two things:\nfirst, the header.' }]);
   });
 
   it('sends a message, and asks before firing', async () => {
