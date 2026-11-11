@@ -96,7 +96,8 @@ export function handToUser(tx: Tx, decision: Decision, note: string): Decision {
   return handed;
 }
 
-export type RaiseInput = Pick<Decision, 'taskId' | 'kind' | 'text' | 'options'> & Partial<Pick<Decision, 'runId' | 'employeeId' | 'freeText' | 'subject'>>;
+/** `usersOwn`: a card about something the user did themself (a run they stopped). It is theirs whoever decides the company's cards. */
+export type RaiseInput = Pick<Decision, 'taskId' | 'kind' | 'text' | 'options'> & Partial<Pick<Decision, 'runId' | 'employeeId' | 'freeText' | 'subject'>> & { usersOwn?: boolean };
 
 /** Moves a task along its state table and records it. Returns the task as it now is. */
 export function move(tx: Tx, task: Task, event: TaskEvent, now: Date, patch: Partial<Task> = {}): Task {
@@ -116,17 +117,18 @@ export function raise(tx: Tx, db: Db, now: Date, input: RaiseInput): Decision {
   if (open) return open;
   const task = input.taskId ? store.getTask(db, input.taskId) : undefined;
   if (task && canTransition(task, 'block')) move(tx, task, 'block', now);
+  const { usersOwn, ...card } = input;
   const asked: Decision = {
     id: store.newId(),
     runId: null,
     employeeId: null,
-    ...input,
+    ...card,
     costSoFarUsd: input.taskId ? store.spentOn(db, input.taskId) : 0,
     answer: null,
     askedAt: now.toISOString(),
     answeredAt: null,
   };
-  const decision = delegate(tx, db, now, asked, task);
+  const decision = usersOwn ? asked : delegate(tx, db, now, asked, task);
   tx.emit({ kind: 'decision_raised', decision });
   return decision;
 }
@@ -265,7 +267,12 @@ function applyEffect(tx: Tx, db: Db, now: Date, decision: Decision, option: Deci
       const author = store.runsOf(db, task.id).filter((r) => r.mode === 'work' || r.mode === 'brief' || r.mode === 'integrate').at(-1) ?? last;
       const back = unblock(tx, task, now);
       const working = canTransition(back, 'sent_back') ? move(tx, back, 'sent_back', now) : back;
-      return requestAgain(tx, db, now, working, author, 'send_back', `This was sent back to you:\n\n${text?.trim() || 'See the card.'}`);
+      // A card that stands in for a send-back (the round limit was reached) carries what the author was to be told: the
+      // review's findings, or the gate's output. Without words of their own, the author is told what the card said.
+      const original = typeof decision.subject?.firstTurn === 'string' ? decision.subject.firstTurn : null;
+      const words = text?.trim();
+      const told = original ? `${original}${words ? `\n\nAnd with it, from whoever decided to send this back to you once more:\n\n${words}` : ''}` : `This was sent back to you:\n\n${words || decision.text}`;
+      return requestAgain(tx, db, now, working, author, 'send_back', told);
     }
     case 'recheck': {
       const open = unblock(tx, task, now);

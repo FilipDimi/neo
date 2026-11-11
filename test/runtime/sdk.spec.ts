@@ -43,6 +43,13 @@ describe('mapMessage', () => {
     expect(ofKind(events(maxTurns), 'turn_finished')).toEqual([{ kind: 'turn_finished', sessionId: 'sess-1', ok: false, reason: 'error_max_turns', turns: 2, denials: [] }]);
   });
 
+  it('gives the reason of a turn the API ended, which the SDK files under "success"', () => {
+    const [finished] = mapMessage({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 Overloaded\nmore detail', session_id: 'sess-1', num_turns: 1, total_cost_usd: 0 }).filter((event) => event.kind === 'turn_finished');
+    expect(finished).toMatchObject({ ok: false, reason: 'API Error: 529 Overloaded' });
+    const [bare] = mapMessage({ type: 'result', subtype: 'success', is_error: true, session_id: 'sess-1', num_turns: 1, total_cost_usd: 0 }).filter((event) => event.kind === 'turn_finished');
+    expect(bare).toMatchObject({ ok: false, reason: 'api_error' });
+  });
+
   it('shows a refused tool call as a failed result and names it in the denials', () => {
     const list = events(denied);
     expect(ofKind(list, 'tool_result').map((e) => e.ok)).toEqual([true, false]);

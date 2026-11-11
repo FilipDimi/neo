@@ -107,13 +107,16 @@ export function mapMessage(raw: unknown): RuntimeEvent[] {
       return [{ kind: 'plan_usage', status: text(info.status), window, utilization: numberOrNull(info.utilization) ?? numberOrNull(named?.utilization), resetsAt: numberOrNull(info.resetsAt) }];
     }
     case 'result': {
-      const reason = text(message.subtype);
+      // A turn the API itself ended (overloaded, a prompt too long, the account) comes filed under "success" with is_error
+      // set: the reason anyone can act on is in its text, never in "success".
+      const failedAsSuccess = message.subtype === 'success' && message.is_error === true;
+      const reason = failedAsSuccess ? (typeof message.result === 'string' && message.result.trim().split('\n')[0]!.slice(0, 200)) || 'api_error' : text(message.subtype);
       return [
         { kind: 'usage', ...turnSpend(message), sessionCostUsd: number(message.total_cost_usd) },
         {
           kind: 'turn_finished',
           sessionId: text(message.session_id),
-          ok: reason === 'success' && message.is_error !== true,
+          ok: message.subtype === 'success' && message.is_error !== true,
           reason,
           turns: number(message.num_turns),
           denials: list(message.permission_denials).map((denial) => text(fields(denial)?.tool_name)),

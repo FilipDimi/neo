@@ -492,6 +492,80 @@ describe('Supervisor', () => {
     expect(store.liveRuns(w.db)).toEqual([]);
   });
 
+  it('keeps a verdict that was given when the reviewer is cut off before it has gone, by a crash or by the plan\'s limit', async () => {
+    for (const cut of ['crash', 'limit'] as const) {
+      const fake = scripted();
+      const w = track(world(fake.spawn, { employees: [employee(), employee({ id: 'emp2', name: 'Grace' })] }));
+      const { task, reviewer } = await underReview(fake, w);
+      reviewer.say({ t: 'tool', askId: 'r1', name: 'submit_review', input: { verdict: 'approve', notes: '' } });
+      await new Promise((resolve) => setImmediate(resolve));
+      if (cut === 'crash') reviewer.die();
+      else (w.sup as unknown as { pauseForUsageLimit(until: string | null): void }).pauseForUsageLimit(null);
+      await w.sup.settle();
+      expect(store.runsOf(w.db, task.id).at(-1), cut).toMatchObject({ mode: 'review', outcome: 'done', reason: 'approved' });
+      // It is not asked for its verdict a second time.
+      expect(store.openRequests(w.db).filter((request) => request.mode === 'review'), cut).toEqual([]);
+      await w.sup.stop();
+    }
+  });
+
+  it('gives every run its lease again when the machine wakes from sleep, and still ends one that stays silent after that', async () => {
+    const fake = scripted();
+    let wall = 1_000_000;
+    const w = track(world(fake.spawn, { options: { wallClock: () => wall } }));
+    const task = newTask(w);
+    const pass = async (seconds: number) => {
+      w.clock.advance(seconds);
+      wall += seconds * 1000;
+      await w.sup.tick();
+    };
+    await w.sup.tick();
+    await pass(8 * 3600); // the lid was closed for the night
+    expect(store.liveRuns(w.db)).toHaveLength(1);
+    expect(fake.workers[0]!.killed).toBe(false);
+    for (let i = 0; i < 20; i++) await pass(50);
+    expect(store.runsOf(w.db, task.id)[0]).toMatchObject({ outcome: 'expired', reason: 'silent' });
+  });
+
+  it('takes an answer in the making as a sign of life', async () => {
+    const fake = scripted();
+    const w = track(world(fake.spawn));
+    newTask(w);
+    await w.sup.tick();
+    w.clock.advance(10 * 60);
+    fake.workers[0]!.say({ t: 'event', event: { kind: 'usage_so_far', messageId: 'm1', inputTokens: 10, outputTokens: 900, cacheReadTokens: 0, cacheWriteTokens: 0 } });
+    w.clock.advance(10 * 60);
+    await w.sup.tick();
+    expect(store.liveRuns(w.db)).toHaveLength(1);
+    expect(fake.workers[0]!.killed).toBe(false);
+  });
+
+  it('starts afresh after a session that could not be resumed twice, where the same retry would fail for ever', async () => {
+    const gone = 'Claude Code process exited with code 1';
+    const fake = scripted((worker) => {
+      if (fake.workers.length === 1) {
+        worker.say(started);
+        return worker.say(exit('failed', 'crashed', 'sess-1'));
+      }
+      // The session's record is gone: resuming it fails before it has begun, each time.
+      if (worker.job.resumeSessionId) worker.say(exit('failed', gone, worker.job.resumeSessionId));
+    });
+    const w = track(world(fake.spawn));
+    newTask(w);
+    for (let i = 0; i < 4; i++) {
+      await w.sup.tick();
+      await new Promise((resolve) => setImmediate(resolve));
+      await w.sup.settle();
+    }
+    expect(fake.workers.map((worker) => worker.job.resumeSessionId ?? null)).toEqual([null, 'sess-1']);
+    const [card] = store.openDecisions(w.db);
+    expect(card).toMatchObject({ kind: 'failed' });
+    w.sup.answer(card!.id, { optionId: 'retry' });
+    await w.sup.tick();
+    expect(fake.workers).toHaveLength(3);
+    expect(fake.workers.at(-1)!.job.resumeSessionId ?? null).toBeNull();
+  });
+
   it('runs the gates of a team that builds with Xcode with the Xcode tools, and other teams without', () => {
     const w = track(world(scripted().spawn));
     const limits = (team: Team) => (w.sup as unknown as { gateLimits(folder: string, team: Team): { xcode?: boolean } }).gateLimits('/tmp/x', team);

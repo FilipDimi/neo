@@ -51,8 +51,10 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
     if (stopping) return;
     stopping = true;
-    await app.close();
+    // The port is held until the engine has really stopped. It finishes the work it is in the middle of first (a commit,
+    // a gate, a merge), and an engine started on a port that looked free meanwhile would open the same database beside it.
     await supervisor.stop();
+    await app.close();
     db.close();
     process.exit(0);
   });

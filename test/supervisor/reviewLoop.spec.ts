@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as store from '../../src/db/store.ts';
 import type { Gate } from '../../src/shared/types.ts';
@@ -24,11 +26,11 @@ const GATES: Gate[] = [
 type Setup = { w: World; fixture: InProcess };
 
 /** Priya leads Ada and Grace, in a repository. Finished work lands on `team` by itself unless told otherwise. */
-function ledWorld(play: (scene: Scene) => Promise<void> | void, over: { mergeTarget?: string | null } = {}): Setup {
+function ledWorld(play: (scene: Scene) => Promise<void> | void, over: { mergeTarget?: string | null; maxReviewRounds?: number } = {}): Setup {
   const fixture = inProcess(staged(play));
   const w = (open = world(fixture.spawn, {
     repos: [repo({ path: gitRepo(), gates: GATES })],
-    teams: [team({ leadId: 'lead', repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: over.mergeTarget === undefined ? 'team' : over.mergeTarget }] })],
+    teams: [team({ leadId: 'lead', maxReviewRounds: over.maxReviewRounds ?? 3, repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: over.mergeTarget === undefined ? 'team' : over.mergeTarget }] })],
     employees: people,
   }));
   return { w, fixture };
@@ -109,6 +111,93 @@ describe('a review gives findings, and each is checked again', () => {
     // Approved with something minor: it lands, and what was noticed is kept.
     expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
     expect(store.runsOf(setup.w.db, task.id).at(-1)!.findings).toMatchObject([{ severity: 'minor', title: 'No newline at the end' }]);
+  });
+});
+
+describe('a send-back the author can act on, however it comes', () => {
+  /** Ada reworks whenever asked; `review` plays each review by its number. */
+  const loop = (seen: { author: string[]; reviewer: string[] }, review: (s: Scene, round: number) => Promise<unknown>) => async (s: Scene) => {
+    if (s.mode === 'work') {
+      seen.author.push(s.input.prompt);
+      s.write('GREETING.md', `try ${seen.author.length}\n`);
+      await s.engine('report_done', { summary: `Try ${seen.author.length}.` });
+    }
+    if (s.mode === 'review') {
+      seen.reviewer.push(s.input.prompt);
+      await review(s, seen.reviewer.length);
+    }
+  };
+
+  it('gives the author the findings when the round limit made a card of the send-back and "Send back" was pressed with no words', async () => {
+    const seen = { author: [] as string[], reviewer: [] as string[] };
+    const setup = ledWorld(loop(seen, (s, round) => (round < 3 ? s.engine('submit_review', { verdict: 'send_back', notes: `Round ${round}.`, findings: [tooCurt] }) : s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] }))), { maxReviewRounds: 1 });
+    const task = greet(setup.w);
+    await drain(setup);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'review' });
+    expect(card!.text).toMatch(/already been sent back 1 time/);
+    setup.w.sup.answer(card!.id, { optionId: 'send_back' });
+    await drain(setup);
+    expect(seen.author).toHaveLength(3);
+    for (const part of ['Round 2.', '1. [blocking] GREETING.md:1: The greeting is one curt word.', 'mcp__engine__report_done']) expect(seen.author[2], part).toContain(part);
+    expect(seen.author[2]).not.toContain('See the card');
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done' });
+  });
+
+  it('shows the next review only what the review before it found, not the findings of an older one', async () => {
+    const seen = { author: [] as string[], reviewer: [] as string[] };
+    const setup = ledWorld(
+      loop(seen, (s, round) => {
+        if (round === 1) return s.engine('submit_review', { verdict: 'send_back', notes: 'First.', findings: [tooCurt] });
+        if (round === 2) return s.engine('submit_review', { verdict: 'send_back', notes: 'Fixed, but now it rambles. Shorten it.', findings: [] });
+        return s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+      }),
+    );
+    greet(setup.w);
+    await drain(setup);
+    expect(seen.reviewer).toHaveLength(3);
+    expect(seen.reviewer[1]).toContain('The greeting is one curt word');
+    expect(seen.reviewer[2]).not.toContain('The greeting is one curt word');
+  });
+
+  it('takes one verdict from a review, not two', async () => {
+    const replies: { ok: boolean; text: string }[] = [];
+    const seen = { author: [] as string[], reviewer: [] as string[] };
+    const setup = ledWorld(
+      loop(seen, async (s, round) => {
+        if (round > 1) return s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+        replies.push(await s.engine('submit_review', { verdict: 'send_back', notes: 'Again.', findings: [tooCurt] }));
+        replies.push(await s.engine('submit_review', { verdict: 'send_back', notes: 'Again.', findings: [tooCurt] }));
+      }),
+    );
+    const task = greet(setup.w);
+    await drain(setup);
+    expect(replies.map((reply) => reply.ok)).toEqual([true, false]);
+    expect(replies[1]!.text).toMatch(/already/);
+    expect(seen.author).toHaveLength(2);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', reviewRounds: 1 });
+  });
+
+  it('still holds blocking findings open when the author has run again and no review has cleared them', async () => {
+    const seen = { author: [] as string[], reviewer: [] as string[] };
+    // The rework breaks the gate, past the round limit: a card comes before any second review.
+    const setup = ledWorld(
+      async (s) => {
+        if (s.mode === 'work') {
+          seen.author.push(s.input.prompt);
+          if (s.resumed) fs.rmSync(path.join(s.input.cwd, 'GREETING.md'));
+          else s.write('GREETING.md', 'yo\n');
+          await s.engine('report_done', { summary: 'Done.' });
+        }
+        if (s.mode === 'review') await s.engine('submit_review', { verdict: 'send_back', notes: 'No.', findings: [tooCurt] });
+      },
+      { maxReviewRounds: 1 },
+    );
+    const task = greet(setup.w);
+    await drain(setup);
+    expect(store.openDecisions(setup.w.db)[0]!.text).toMatch(/failed its gate/);
+    const open = (setup.w.sup as unknown as { flow: { openFindings(taskId: string): { findings: unknown[] } | null } }).flow.openFindings(task.id);
+    expect(open?.findings).toMatchObject([{ title: 'The greeting is one curt word' }]);
   });
 });
 

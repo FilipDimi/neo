@@ -258,4 +258,20 @@ describe('cards go to the chief of staff first', () => {
     await setup.w.sup.tick();
     expect(store.forUser(setup.w.db)).toMatchObject([{ kind: 'review', taskId: task.id, deciderId: null }]);
   });
+
+  it("leaves a run the user stopped with the user: the chief of staff is not asked whether to start it again", async () => {
+    const setup = company(async (s) => {
+      if (s.mode === 'work') await new Promise(() => {}); // at work until stopped
+    });
+    const task = greet(setup.w);
+    await setup.w.sup.tick();
+    await new Promise((resolve) => setImmediate(resolve));
+    const [live] = store.liveRuns(setup.w.db);
+    setup.w.sup.stopRun(live!.id);
+    await setup.w.sup.settle();
+    const [card] = store.openDecisions(setup.w.db, task.id);
+    expect(card!.text).toMatch(/You stopped Ada's run/);
+    expect(card!.deciderId ?? null).toBeNull();
+    expect(store.forUser(setup.w.db).map((mine) => mine.id)).toEqual([card!.id]);
+  });
 });

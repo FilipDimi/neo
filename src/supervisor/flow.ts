@@ -261,6 +261,8 @@ export class Flow {
     const asker = this.asked(task.id);
     if (asker) return this.onAnswer(run, task, asker, verdict, notes);
     const reviewer = store.getEmployee(this.db, run.employeeId)?.name ?? 'The reviewer';
+    // One review, one verdict: a second call in the same run would send the work back twice, or land it twice.
+    if (this.verdicts.has(run.id)) return { ok: false, text: 'You have already given your verdict on this work, and it stands. End your turn now.' };
     // A verdict has to agree with what was found: nothing lands with something blocking in it, and nothing goes back with nothing to fix.
     const blocking = findings.filter((finding) => finding.severity === 'blocking');
     if (verdict === 'approve' && blocking.length > 0) return { ok: false, text: `You approved, and listed ${blocking.length === 1 ? 'a finding' : `${blocking.length} findings`} as blocking. If it must be fixed before this lands, send the work back. If it need not be, mark it minor.` };
@@ -280,7 +282,7 @@ export class Flow {
       );
     else
       this.change((tx, now) =>
-        decisions.raise(tx, this.db, now, { taskId: task.id, runId: run.id, employeeId: run.employeeId, kind: 'review', text: `${reviewer} could not decide on "${task.title}": ${notes.trim() || '(no notes)'}`, freeText: true, options: decisions.optionsFor('review') }),
+        decisions.raise(tx, this.db, now, { taskId: task.id, runId: run.id, employeeId: run.employeeId, kind: 'review', text: `${reviewer} could not decide on "${task.title}": ${notes.trim() || '(no notes)'}${findings.length > 0 ? `\n\nWhat ${reviewer} found:\n${findingLines(findings)}` : ''}`, freeText: true, options: decisions.optionsFor('review') }),
       );
     return { ok: true, text: 'Recorded. End your turn now.' };
   }
@@ -500,6 +502,8 @@ export class Flow {
           text: `${what}, and it has already been sent back ${task.reviewRounds} time${task.reviewRounds === 1 ? '' : 's'}. ${acceptable ? 'Send it back once more, accept it as it is, or stop?' : 'Send it back once more, or stop? It cannot be accepted as it is: the work is not committed, so accepting would lose it.'}`,
           freeText: true,
           options: decisions.optionsFor(acceptable ? 'review' : 'briefing'),
+          // What the author was to be told. "Send back" on this card sends it, whatever words go with the button.
+          subject: { firstTurn },
         });
       }
       const counted: Task = { ...task, reviewRounds: rounds };
@@ -518,7 +522,9 @@ export class Flow {
     const site = this.site(task);
     const base = site ? this.baseOf(task, site.teamRepo) : null;
     // What the last review of this work found: this one checks each of those, not only the work as it now is.
-    const before = store.runsOf(this.db, task.id).findLast((earlier) => earlier.mode === 'review' && earlier.reason === VERDICT.send_back && (earlier.findings?.length ?? 0) > 0);
+    // Only the review just before this one: findings an older review made were settled by the one after it.
+    const lastVerdict = store.runsOf(this.db, task.id).findLast((earlier) => earlier.mode === 'review' && (earlier.reason === VERDICT.send_back || earlier.reason === VERDICT.approve));
+    const before = lastVerdict?.reason === VERDICT.send_back && (lastVerdict.findings?.length ?? 0) > 0 ? lastVerdict : undefined;
     const parts = store.listTasks(this.db, { parentId: task.id }).filter((child) => child.state === 'done');
     const nameOf = (id: string | null | undefined): string => (id && store.getEmployee(this.db, id)?.name) || 'someone';
     const material = {
@@ -558,8 +564,8 @@ export class Flow {
 
   /** What the last review of this work found and marked blocking, when that review did not approve: these are still open. */
   openFindings(taskId: string): { by: string; findings: Finding[] } | null {
-    const runs = store.runsOf(this.db, taskId);
-    const review = runs.slice(runs.findLastIndex(authored) + 1).findLast((run) => run.mode === 'review');
+    // The last review that approved or found something. Work done since does not clear what it found: only a review does.
+    const review = store.runsOf(this.db, taskId).findLast((run) => run.mode === 'review' && (run.reason === VERDICT.approve || (run.findings?.length ?? 0) > 0));
     const blocking = review && review.reason !== VERDICT.approve ? (review.findings ?? []).filter((finding) => finding.severity === 'blocking') : [];
     return review && blocking.length > 0 ? { by: store.getEmployee(this.db, review.employeeId)?.name ?? 'the reviewer', findings: blocking } : null;
   }

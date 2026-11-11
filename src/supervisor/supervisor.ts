@@ -41,6 +41,8 @@ export type SupervisorOptions = {
   dataDir: string;
   now?: () => Date;
   tickMs?: number;
+  /** The machine's own clock in milliseconds, by which a tick that came far too late is known for the wake from sleep it was. */
+  wallClock?: () => number;
   /** How a worker is started. Defaults to a child process per run. */
   spawn?: Spawn;
   workerEntry?: string;
@@ -72,6 +74,10 @@ export class Supervisor {
   readonly paths: Paths;
   readonly now: () => Date;
   private readonly tickMs: number;
+  private readonly wallClock: () => number;
+  private lastTickAt: number | null = null;
+  /** When each live run last gave a sign of life that is not written down: an answer still in the making, or the machine waking. */
+  private readonly signs = new Map<string, number>();
   /** Per live run: what each answer of its unfinished turn has used. */
   private readonly unpaid = new Map<string, Map<string, Tokens>>();
   /** Per live run: the writes that were allowed and are not yet done. */
@@ -105,6 +111,7 @@ export class Supervisor {
     this.paths = pathsOf(options.dataDir);
     this.now = options.now ?? (() => new Date());
     this.tickMs = options.tickMs ?? 2000;
+    this.wallClock = options.wallClock ?? Date.now;
     this.apiPort = options.apiPort ?? 4317;
     this.runtimeModule = options.runtimeModule;
     this.processes = options.processes ?? processes;
@@ -186,6 +193,7 @@ export class Supervisor {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      this.noteWake();
       this.liftPauseIfDue();
       this.closeCapCardsOfEarlierDays();
       this.expireLeases();
@@ -323,15 +331,42 @@ export class Supervisor {
 
   // ---------- the loop ----------
 
+  /**
+   * A tick that comes minutes late did not find silent workers: the machine was asleep, and they with it. Every live run
+   * gets its lease again from here, or a night with the lid closed would end them all as silent at the first tick after.
+   */
+  private noteWake(): void {
+    const at = this.wallClock();
+    const late = this.lastTickAt !== null && at - this.lastTickAt > Math.max(60_000, this.tickMs * 10);
+    this.lastTickAt = at;
+    if (!late) return;
+    const now = this.now().getTime();
+    for (const run of store.liveRuns(this.db)) this.signs.set(run.id, now);
+  }
+
   private expireLeases(): void {
     const now = this.now();
     for (const run of store.liveRuns(this.db)) {
       if (!isExpired(run.leaseUntil, now)) continue;
+      const sign = this.signs.get(run.id);
+      if (sign !== undefined && now.getTime() <= sign + run.leaseMinutes * 60_000) continue;
       const link = this.links.get(run.id);
       this.links.delete(run.id);
       link?.kill();
-      this.finishRun(run.id, 'expired', 'silent');
+      if (!this.endAsPlanned(run.id)) this.finishRun(run.id, 'expired', 'silent');
     }
+  }
+
+  /**
+   * Ends a run the way it had already decided to end (a verdict given, a question asked, a call refused), when
+   * something cuts it off before its worker has said goodbye. Written down as lost, it would be run again and
+   * give its verdict or ask its question a second time. False when nothing was decided.
+   */
+  private endAsPlanned(runId: string): boolean {
+    const planned = this.planned.get(runId);
+    if (!planned) return false;
+    this.finishRun(runId, planned.outcome, planned.reason, { ...planned.record, summary: this.reports.get(runId) ?? store.getRun(this.db, runId)?.summary ?? null });
+    return true;
   }
 
   /** Every task that is under way has something working on it. One that does not is exactly the silent idle this product exists to prevent. */
@@ -549,7 +584,11 @@ export class Supervisor {
         const planned = this.planned.get(runId);
         // The SDK stopped the session at the run's budget: not a failure to retry, a cap for the user to decide on.
         const outcome = planned?.outcome ?? (message.reason === 'error_max_budget_usd' ? 'over_budget' : message.outcome);
-        return this.finishRun(runId, outcome, planned?.reason ?? message.reason, { ...planned?.record, sessionId: message.sessionId ?? run.sessionId, summary: this.reports.get(runId) ?? message.summary });
+        // A second failure in a row before the session had even begun: the session it was to carry on from cannot be
+        // resumed (its record is gone). It is let go, so the next try starts afresh from what is in the folder.
+        const began = store.getRun(this.db, runId)?.sessionId;
+        const dead = outcome === 'failed' && !began && run.attempt > 1;
+        return this.finishRun(runId, outcome, planned?.reason ?? message.reason, { ...planned?.record, sessionId: dead ? null : (message.sessionId ?? run.sessionId), summary: this.reports.get(runId) ?? message.summary });
       }
     }
   }
@@ -557,12 +596,14 @@ export class Supervisor {
   /** The worker process is gone. If it never said goodbye, it crashed. */
   private onWorkerGone(runId: string): void {
     if (!this.links.delete(runId)) return;
-    this.finishRun(runId, 'failed', 'crashed');
+    if (!this.endAsPlanned(runId)) this.finishRun(runId, 'failed', 'crashed');
   }
 
   private onRuntimeEvent(run: Run, event: RuntimeEvent): void {
     // An estimate, kept until the turn's own account arrives. If the run is ended first, this is what it is charged.
     if (event.kind === 'usage_so_far') {
+      // Nothing is written for it, but it is the worker speaking: a long answer in the making is not silence.
+      this.signs.set(run.id, this.now().getTime());
       const answers = this.unpaid.get(run.id) ?? new Map<string, Tokens>();
       answers.set(event.messageId, event);
       return void this.unpaid.set(run.id, answers);
@@ -608,6 +649,15 @@ export class Supervisor {
       decisions.raise(tx, this.db, now, { taskId: null, kind: 'usage_limit', text: `The Claude plan's usage limit was reached. Every run is paused ${when}. Nothing was lost and no retry was spent.`, options: decisions.optionsFor('usage_limit'), subject: { key: 'usage_limit' } });
     });
     for (const live of store.liveRuns(this.db)) {
+      if (this.planned.has(live.id)) {
+        // It had given its verdict or asked its question: that stands, and it is not run again to say it twice.
+        const link = this.links.get(live.id);
+        this.links.delete(live.id);
+        link?.send({ t: 'stop' });
+        link?.kill();
+        this.endAsPlanned(live.id);
+        continue;
+      }
       this.endRunNow(live, 'usage_limit', 'usage_limit');
       const ended = store.getRun(this.db, live.id)!;
       const firstTurn = ended.sessionId ? 'You were paused because the plan\'s usage limit was reached. The files in your folder are as you left them. Carry on with the task.' : null;
@@ -926,6 +976,7 @@ export class Supervisor {
     const teamId = store.getEmployee(this.db, run.employeeId)?.teamId ?? '';
     apply(this.db, (tx) => tx.emit({ kind: 'run_ended', run: ended, teamId }), now);
     this.planned.delete(runId);
+    this.signs.delete(runId);
     this.reports.delete(runId);
     this.routed.delete(runId);
     this.allowedWrites.delete(runId);
@@ -987,7 +1038,7 @@ export class Supervisor {
       case 'expired':
         return this.onRunFailed(run, task);
       case 'stopped':
-        if (run.reason === 'stopped_by_user') this.raiseForRun(run, task, 'failed', (name) => `You stopped ${name}'s run on "${task.title}". Run it again, or stop the task?`);
+        if (run.reason === 'stopped_by_user') this.raiseForRun(run, task, 'failed', (name) => `You stopped ${name}'s run on "${task.title}". Run it again, or stop the task?`, { usersOwn: true });
         return;
       case 'over_budget':
         return this.raiseCap(store.getTask(this.db, task.id)!, run);
@@ -1072,10 +1123,10 @@ export class Supervisor {
     this.raiseForRun(run, task, 'failed', (name) => `${name}'s run on "${task.title}" failed: ${explain(run.reason)}. Retry, or stop the task?`);
   }
 
-  protected raiseForRun(run: Run, task: Task, kind: 'lease' | 'failed', text: (employeeName: string) => string, context: { leaseMinutes?: number } = {}): void {
+  protected raiseForRun(run: Run, task: Task, kind: 'lease' | 'failed', text: (employeeName: string) => string, context: { leaseMinutes?: number; usersOwn?: boolean } = {}): void {
     const now = this.now();
     const name = store.getEmployee(this.db, run.employeeId)?.name ?? 'An employee';
-    apply(this.db, (tx) => decisions.raise(tx, this.db, now, { taskId: task.id, runId: run.id, employeeId: run.employeeId, kind, text: text(name), options: decisions.optionsFor(kind, context) }), now);
+    apply(this.db, (tx) => decisions.raise(tx, this.db, now, { taskId: task.id, runId: run.id, employeeId: run.employeeId, kind, text: text(name), options: decisions.optionsFor(kind, context), ...(context.usersOwn ? { usersOwn: true } : {}) }), now);
   }
 
   protected nameOf(id: string): string {
