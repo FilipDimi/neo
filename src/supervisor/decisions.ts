@@ -56,6 +56,46 @@ export function optionsFor(kind: DecisionKind, context: { leaseMinutes?: number;
   }
 }
 
+/** The cards the chief of staff may answer for the user. Money, tools, hiring and the machine stay the user's. */
+export const DELEGATED: ReadonlySet<DecisionKind> = new Set(['question', 'review', 'merge', 'briefing', 'ownership', 'lease', 'failed', 'invariant']);
+/** How often the chief of staff decides one kind of card on one task. After that it is going round in a circle, and the user is asked. */
+export const DECIDES_PER_TASK = 2;
+/** Not a button of any card: the chief of staff's way of saying that only the user can decide. */
+export const ASK_USER = 'ask_user';
+/** What no one answers on the user's behalf, whatever card it is on. */
+const USERS_ALONE: ReadonlySet<Effect> = new Set(['raise_cap', 'raise_daily_cap', 'grant_capabilities', 'allow_once']);
+export const mayDecide = (option: DecisionOption): boolean => !USERS_ALONE.has(option.effect);
+
+const firstLine = (text: string): string => {
+  const line = text.trim().split('\n')[0]!;
+  return line.length <= 60 ? line : `${line.slice(0, 57).trimEnd()}…`;
+};
+
+/**
+ * In a company whose cards go to the chief of staff first, a card about a team's work becomes a
+ * small task of the chief's own: read it, press a button, say why. The card is not on the user's
+ * desk while that lasts. A card about the chief's own conversations is never one of these.
+ */
+function delegate(tx: Tx, db: Db, now: Date, decision: Decision, task: Task | undefined): Decision {
+  const company = store.getCompany(db);
+  const chief = company?.decider === 'chief' && company.chiefOfStaffId ? store.getEmployee(db, company.chiefOfStaffId) : undefined;
+  const office = chief ? store.getTeam(db, chief.teamId) : undefined;
+  if (!chief || chief.fired || !office || office.removed || !task || task.kind !== 'work' || !DELEGATED.has(decision.kind)) return decision;
+  const already = store.allDecisions(db).filter((other) => other.taskId === task.id && other.kind === decision.kind && other.answer?.by === chief.id).length;
+  if (already >= DECIDES_PER_TASK) return { ...decision, text: `${decision.text}\n${chief.name} has decided this ${already === 2 ? 'twice' : `${already} times`} already on this task, so it comes to you.` };
+  const deciding = store.newTask({ teamId: office.id, assigneeId: chief.id, kind: 'chat', createdBy: chief.id, title: `Decide: ${firstLine(decision.text)}`, brief: decision.text, repoId: null, capUsd: 1, decisionId: decision.id }, now);
+  tx.emit({ kind: 'task_changed', task: deciding, cause: 'created' });
+  tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: deciding.id, mode: 'route', employeeId: chief.id, reason: 'new' }, now) });
+  return { ...decision, deciderId: chief.id };
+}
+
+/** Puts a card someone was deciding on the user's desk, with a line saying why it is there. */
+export function handToUser(tx: Tx, decision: Decision, note: string): Decision {
+  const handed: Decision = { ...decision, deciderId: null, text: `${decision.text}\n${note}` };
+  tx.emit({ kind: 'decision_raised', decision: handed });
+  return handed;
+}
+
 export type RaiseInput = Pick<Decision, 'taskId' | 'kind' | 'text' | 'options'> & Partial<Pick<Decision, 'runId' | 'employeeId' | 'freeText' | 'subject'>>;
 
 /** Moves a task along its state table and records it. Returns the task as it now is. */
@@ -76,7 +116,7 @@ export function raise(tx: Tx, db: Db, now: Date, input: RaiseInput): Decision {
   if (open) return open;
   const task = input.taskId ? store.getTask(db, input.taskId) : undefined;
   if (task && canTransition(task, 'block')) move(tx, task, 'block', now);
-  const decision: Decision = {
+  const asked: Decision = {
     id: store.newId(),
     runId: null,
     employeeId: null,
@@ -86,6 +126,7 @@ export function raise(tx: Tx, db: Db, now: Date, input: RaiseInput): Decision {
     askedAt: now.toISOString(),
     answeredAt: null,
   };
+  const decision = delegate(tx, db, now, asked, task);
   tx.emit({ kind: 'decision_raised', decision });
   return decision;
 }
@@ -95,7 +136,8 @@ export function close(tx: Tx, decision: Decision, now: Date): void {
   tx.emit({ kind: 'decision_answered', decision: { ...decision, answer: { optionId: 'closed' }, answeredAt: now.toISOString() }, result: 'closed' });
 }
 
-export type Answer = { optionId: string; text?: string };
+/** `by` is the employee who answers on the user's behalf, and `why` its reason; both are absent when the user answers. */
+export type Answer = { optionId: string; text?: string; by?: string; why?: string };
 export type Answered = { result: 'applied' | 'ignored'; decision: Decision; effect?: Effect; option?: DecisionOption };
 
 export function answer(db: Db, now: Date, decisionId: string, given: Answer): Answered {

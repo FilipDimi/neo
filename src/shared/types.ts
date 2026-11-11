@@ -47,6 +47,8 @@ export const Company = z.object({
   chiefOfStaffId: id.nullable(),
   /** The admin: the one who changes the company's setup and the app itself from a conversation (Morpheus). Absent in rows written before there was one. */
   adminId: id.nullable().optional(),
+  /** Who is asked first when a card is raised: the user, or the chief of staff on the user's behalf. Absent means the user. */
+  decider: z.enum(['user', 'chief']).optional(),
   paused: z.object({ reason: z.enum(['usage_limit', 'health', 'user']), until: iso.nullable() }).nullable(),
 });
 export type Company = z.infer<typeof Company>;
@@ -105,6 +107,8 @@ export const Task = z.object({
   parentId: id.nullable(),
   /** A chat task is a message to the chief of staff; the board leaves it out. */
   kind: z.enum(['work', 'chat']),
+  /** On the chief of staff's small task of deciding a card for the user: the card. */
+  decisionId: id.nullable().optional(),
   /** 'user' or an employee id. */
   createdBy: z.string(),
   title: z.string().min(1),
@@ -199,7 +203,10 @@ export const Decision = z.object({
   /** What the card is about, for the engine: the refused call, the merge target, the health key. */
   subject: z.record(z.string(), z.unknown()).optional(),
   costSoFarUsd: z.number(),
-  answer: z.object({ optionId: z.string(), text: z.string().optional() }).nullable(),
+  /** The employee deciding this card on the user's behalf right now. While it is set, the card is not on the user's desk. */
+  deciderId: id.nullable().optional(),
+  /** `by` is the employee who answered on the user's behalf, and `why` its reason; absent when the user answered. */
+  answer: z.object({ optionId: z.string(), text: z.string().optional(), by: z.string().optional(), why: z.string().optional() }).nullable(),
   askedAt: iso,
   answeredAt: iso.nullable(),
 });

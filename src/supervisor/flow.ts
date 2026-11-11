@@ -22,12 +22,14 @@ import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import * as decisions from './decisions.ts';
 import { writtenFiles } from '../api/files.ts';
-import { buildFirstTurn, type Part } from './definition.ts';
+import { buildDecidingTurn, buildFirstTurn, type Part } from './definition.ts';
 import { reviewerFor } from './scheduler.ts';
 import { canTransition } from './taskState.ts';
 
 const ENGINE: Identity = { name: 'Virtual Startup', email: 'engine@virtual-startup.invalid' };
 const PATCH_CAP = 20_000;
+/** The chief of staff decides from the card and the reports; the patch is there to check them against, not to review again. */
+const DECIDING_PATCH_CAP = 12_000;
 const authored = (run: Run): boolean => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate';
 
 export type FlowHost = {
@@ -84,6 +86,7 @@ export class Flow {
 
   /** Makes sure the task has its folder, and for an integration merges the children first. */
   async prepare(task: Task, request: RunRequest): Promise<{ task: Partial<Task>; firstTurn?: string }> {
+    if (task.decisionId && !request.firstTurn) return { task: {}, firstTurn: await this.decidingTurn(task) };
     const site = this.site(task);
     if (!site) {
       // No repository, so nothing to merge: an integration is told where each finished part is instead.
@@ -109,6 +112,30 @@ export class Flow {
     const ready = { ...task, ...changes };
     const mergeState = await this.mergeChildren(ready);
     return { task: changes, firstTurn: buildFirstTurn({ task: ready, mode: 'integrate', team: site.team, repo: site.repo, teammates: [], remainingUsd: 0, material: { mergeState } }) };
+  }
+
+  /** What the chief of staff is shown to decide a card for the user: the card, the task it is about, and what stands behind the work. */
+  private async decidingTurn(deciding: Task): Promise<string> {
+    const card = store.getDecision(this.db, deciding.decisionId!)!;
+    const about = card.taskId ? store.getTask(this.db, card.taskId) : undefined;
+    const team = about ? store.getTeam(this.db, about.teamId) : undefined;
+    const site = about ? this.site(about) : null;
+    const last = about ? store.runsOf(this.db, about.id).filter(authored).at(-1) : undefined;
+    const has = site && about?.folder && fs.existsSync(about.folder);
+    const base = site && about ? this.baseOf(about, site.teamRepo) : null;
+    // A folder that cannot be read (never made, or cleared away) is no reason not to decide: the card still says what it says.
+    const diff = has && base ? await Promise.all([diffStat(site.folder, base), patch(site.folder, base, DECIDING_PATCH_CAP)]).catch(() => null) : null;
+    return buildDecidingTurn({
+      card,
+      about: about ?? null,
+      team: team ?? null,
+      repo: site?.repo ?? null,
+      folder: about ? (about.folder ?? path.join(this.host.paths.folders, about.id)) : null,
+      spentUsd: about ? store.spentOn(this.db, about.id) : 0,
+      author: last ? { name: store.getEmployee(this.db, last.employeeId)?.name ?? 'An employee', summary: last.summary, gateResults: last.gateResults } : null,
+      diffStat: diff?.[0].text ?? null,
+      patch: diff?.[1] ?? null,
+    });
   }
 
   /** The finished sub-tasks of a task that has no repository: whose they are, where their files are, what was reported. */

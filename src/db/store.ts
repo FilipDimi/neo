@@ -56,6 +56,9 @@ export function openDecisions(db: Db, taskId?: string): Decision[] {
   return found.sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 }
 
+/** The cards on the user's desk: open, and not with someone who is deciding them on the user's behalf. */
+export const forUser = (db: Db, taskId?: string): Decision[] => openDecisions(db, taskId).filter((decision) => !decision.deciderId);
+
 export const waitingMessages = (db: Db, toId: string) => rows<Message>(db, 'messages', "WHERE to_id = ? AND state = 'waiting' ORDER BY at, rowid", toId);
 export const recentMessages = (db: Db, limit: number) => rows<Message>(db, 'messages', 'ORDER BY at DESC, rowid DESC LIMIT ?', limit).reverse();
 

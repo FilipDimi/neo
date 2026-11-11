@@ -188,6 +188,7 @@ export class Supervisor {
       this.closeCapCardsOfEarlierDays();
       this.expireLeases();
       this.checkInvariant();
+      this.reclaimCards();
       await this.startRuns();
     } finally {
       this.ticking = false;
@@ -448,7 +449,8 @@ export class Supervisor {
       const prepared: Task = { ...current, ...ready.task };
       if (ready.firstTurn) request = { ...request, firstTurn: ready.firstTurn };
       // The chief of staff keeps one conversation going, as long as it is recent.
-      if (request.mode === 'route' && !request.resumeSessionId && employee.chatSessionId) {
+      // Deciding a card is not part of that conversation: it starts fresh, with the card in front of it.
+      if (request.mode === 'route' && !task.decisionId && !request.resumeSessionId && employee.chatSessionId) {
         const last = store.allRuns(this.db).filter((r) => r.employeeId === employee.id && r.mode === 'route' && r.endedAt).at(-1);
         if (last?.endedAt && this.now().getTime() - new Date(last.endedAt).getTime() < 2 * 3600_000) request = { ...request, resumeSessionId: employee.chatSessionId };
       }
@@ -851,6 +853,8 @@ export class Supervisor {
         const team = store.getTeam(this.db, created.teamId);
         return { ok: true, text: `Created "${created.title}" on ${team?.name ?? created.teamId}${created.assigneeId ? ` for ${this.nameOf(created.assigneeId)}` : '; its lead will brief it'}.` };
       }
+      case 'decide':
+        return this.onDecide(run, input);
       case 'propose_subtasks':
         return this.flow.onProposal(run, input);
       case 'submit_review':
@@ -932,6 +936,11 @@ export class Supervisor {
   private async afterRun(run: Run): Promise<void> {
     const task = store.getTask(this.db, run.taskId);
     if (!task || task.state === 'done' || task.state === 'failed') return;
+    if (task.decisionId && run.outcome !== 'done') {
+      // Deciding a card is not work to retry or to ask about. If it did not happen, the card is the user's, and that is all the user hears of it.
+      this.change((tx, now) => decisions.failTree(tx, this.db, now, store.getTask(this.db, task.id)!));
+      return this.reclaimCards();
+    }
     switch (run.outcome) {
       case 'done': {
         const employee = store.getEmployee(this.db, run.employeeId);
@@ -941,10 +950,12 @@ export class Supervisor {
           this.change((tx, now) => {
             const at = now.toISOString();
             tx.emit({ kind: 'message_sent', message: { id: store.newId(), fromId: employee.id, toId: 'user', taskId: task.id, text: run.summary ?? 'Done.', state: 'delivered', at, deliveredAt: at } });
-            tx.emit({ kind: 'employee_changed', employee: { ...store.getEmployee(this.db, employee.id)!, chatSessionId: run.sessionId } });
+            // Its conversation with the user carries on from where that was, not from a card it decided in between.
+            if (!task.decisionId) tx.emit({ kind: 'employee_changed', employee: { ...store.getEmployee(this.db, employee.id)!, chatSessionId: run.sessionId } });
           });
         }
-        return this.onRunDone(run, task);
+        await this.onRunDone(run, task);
+        return this.reclaimCards();
       }
       case 'failed':
       case 'expired':
@@ -959,6 +970,55 @@ export class Supervisor {
     }
   }
 
+  /** The chief of staff's answer to the card it was given: one of the card's own buttons, pressed for the user, or the card handed on. */
+  private onDecide(run: Run, input: unknown): ToolReply {
+    const { option, notes } = TOOL_INPUT.decide.parse(input);
+    const task = store.getTask(this.db, run.taskId);
+    const card = task?.decisionId ? store.getDecision(this.db, task.decisionId) : undefined;
+    if (!card) return { ok: false, text: 'This run has no card to decide.' };
+    if (card.answeredAt !== null || card.deciderId !== run.employeeId) return { ok: false, text: 'This card is already settled: it was answered, or it is on the user\'s desk. End your turn with a sentence to the user.' };
+    const why = notes.trim();
+    const buttons = card.options.filter(decisions.mayDecide);
+    if (option === decisions.ASK_USER) {
+      if (!why) return { ok: false, text: 'The notes are empty. Say there what the user must decide or do, and why nobody here can.' };
+      this.change((tx) => void decisions.handToUser(tx, card, `${this.nameOf(run.employeeId)} did not decide it for you: ${why}`));
+      return { ok: true, text: 'Recorded: the card is on the user\'s desk with your note. End your turn with one sentence to the user.' };
+    }
+    const chosen = buttons.find((button) => button.id === option);
+    if (!chosen) return { ok: false, text: `This card has no "${option}" for you to press. What you can answer: ${[...buttons.map((button) => button.id), decisions.ASK_USER].join(', ')}.` };
+    if (!why) return { ok: false, text: 'The notes are empty. They are the record of why, and for a send-back or an answer they are the words the employee gets. Write them.' };
+    // The notes are the answer itself only where the card takes words; a button that carries its own answer keeps it.
+    const worded = chosen.effect === 'send_back' || (chosen.effect === 'resume_with_answer' && typeof chosen.params?.text !== 'string');
+    try {
+      this.answer(card.id, { optionId: chosen.id, ...(worded ? { text: why } : {}), by: run.employeeId, why });
+    } catch (failure) {
+      return { ok: false, text: `That could not be done: ${failure instanceof Error ? failure.message : String(failure)}.` };
+    }
+    return { ok: true, text: `Recorded: "${chosen.label}". End your turn with one or two sentences to the user: what you decided and why.` };
+  }
+
+  /**
+   * A card someone was deciding for the user comes back to the user when that is over and the card
+   * is still open: the decider ended without answering, could not run, was stopped, or no longer works here.
+   */
+  private reclaimCards(): void {
+    const held = store.openDecisions(this.db).filter((card) => card.deciderId);
+    if (held.length === 0) return;
+    const tasks = store.listTasks(this.db);
+    for (const card of held) {
+      const decider = store.getEmployee(this.db, card.deciderId!);
+      const deciding = tasks.find((task) => task.decisionId === card.id);
+      const under = deciding && deciding.state !== 'done' && deciding.state !== 'failed';
+      // Blocked: a card of its own stands in the way of the deciding (a cap, a refused call). The user gets the card that matters instead.
+      if (decider && !decider.fired && under && deciding.state !== 'blocked') continue;
+      this.change((tx, now) => {
+        if (under) decisions.failTree(tx, this.db, now, deciding);
+        decisions.handToUser(tx, card, `${decider?.name ?? 'The chief of staff'} did not decide it for you.`);
+      });
+      if (under) for (const run of store.liveRuns(this.db).filter((live) => live.taskId === deciding.id)) this.endRunNow(run, 'stopped', 'task_stopped');
+    }
+  }
+
   /** A run finished its part. What happens next depends on its mode and its team: that is the flow. */
   protected async onRunDone(run: Run, task: Task): Promise<void> {
     await this.flow.onRunDone(run, task);
@@ -967,7 +1027,7 @@ export class Supervisor {
   private onRunFailed(run: Run, task: Task): void {
     const now = this.now();
     // A chat that could not be resumed starts fresh next time.
-    const chief = run.mode === 'route' ? store.getEmployee(this.db, run.employeeId) : undefined;
+    const chief = run.mode === 'route' && !task.decisionId ? store.getEmployee(this.db, run.employeeId) : undefined;
     if (chief?.chatSessionId) apply(this.db, (tx) => tx.emit({ kind: 'employee_changed', employee: { ...chief, chatSessionId: null } }), now);
     if (onFailure(run, task) === 'retry') {
       const firstTurn = run.sessionId ? 'Your last run was cut short. The files in your folder are as you left them. Carry on with the task.' : null;

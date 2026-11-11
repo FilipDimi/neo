@@ -5,7 +5,7 @@
  */
 import { skillSets } from '../shared/skills.ts';
 import { availableCapabilities, CAPABILITIES } from './blastRadius.ts';
-import type { Capability, Company, Employee, GateResult, Repo, RunMode, Task, Team } from '../shared/types.ts';
+import type { Capability, Company, Decision, DecisionOption, Employee, GateResult, Repo, RunMode, Task, Team } from '../shared/types.ts';
 
 const usd = (amount: number): string => `$${amount.toFixed(2)}`;
 
@@ -267,4 +267,76 @@ ${material.mergeState?.trim() || '(nothing to merge)'}
 
 Check that the whole fits together and meets the done-condition. If conflicts are listed, resolve them by editing the files (leave no conflict markers; do not run git). Then call mcp__engine__report_done: the engine commits and runs the gates on the whole.`;
   }
+}
+
+/** What pressing a button does, for someone who is about to press it on the user's behalf. */
+function buttonLine(option: DecisionOption): string {
+  const does: Partial<Record<DecisionOption['effect'], string>> = {
+    send_back: 'the work goes back to its author, and your notes are what it is told to fix',
+    accept: 'the work is taken as it is and carries on to the next step',
+    merge: 'the engine merges the branch',
+    complete: 'the task is done and its branch is kept, unmerged',
+    retry: 'the run is started again',
+    recheck: 'the engine looks again and carries on',
+    stop_task: 'the task ends for good, with everything under it',
+  };
+  const answer = option.effect === 'resume_with_answer' ? (typeof option.params?.text === 'string' ? 'the employee carries on with exactly this answer' : 'the employee carries on with your notes as the answer') : does[option.effect];
+  return `- ${option.id}: ${option.label}${answer ? ` (${answer})` : ''}`;
+}
+
+/**
+ * The chief of staff's first turn when it decides a card for the user. It is shown what the user
+ * would be shown and more: the card, its buttons, the task, and what stands behind the work.
+ */
+export function buildDecidingTurn(input: {
+  card: Decision;
+  about: Task | null;
+  team: Team | null;
+  repo: Repo | null;
+  folder: string | null;
+  spentUsd: number;
+  author: { name: string; summary: string | null; gateResults: GateResult[] } | null;
+  diffStat: string | null;
+  patch: string | null;
+}): string {
+  const { card, about, team } = input;
+  const gates = (about?.gates ?? []).map((name) => {
+    const gate = input.repo?.gates.find((g) => g.name === name);
+    return gate ? `${name} (\`${gate.command}\`)` : name;
+  });
+  return [
+    `A decision is waiting, and the user has asked that decisions someone in the company can make are made here and not brought to them. It is yours: decide it as the user would, on what is in front of you. Until you do, the task below stands still.`,
+
+    `## The card\n${card.text.trim()}`,
+
+    `## What you can answer\n${[...card.options.map(buttonLine), '- ask_user: the card goes to the user, with your notes saying what only they can decide or do'].join('\n')}`,
+
+    about
+      ? [
+          `## The task it is about\n"${about.title}", on the ${team?.name ?? about.teamId} team. It has spent ${usd(input.spentUsd)} of ${usd(about.capUsd)} and was sent back ${about.reviewRounds} time${about.reviewRounds === 1 ? '' : 's'}.`,
+          about.brief.trim(),
+          `Done when: ${about.doneCondition.trim() || 'the brief is fulfilled.'}`,
+          `Gates the engine runs on it: ${gates.join(', ') || 'none'}`,
+          input.folder ? `Its files are in ${input.folder}. To read one, name it by its full path: searching only works in your own folder.` : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+      : '',
+
+    input.author ? `## What ${input.author.name} last reported\n${input.author.summary?.trim() || '(no summary)'}\n\nGates, run by the engine:\n${input.author.gateResults.length > 0 ? gateLines(input.author.gateResults) : '(none ran)'}` : '',
+
+    input.diffStat?.trim() ? `## What changed\n${input.diffStat.trim()}${input.patch ? `\n\nThe patch${input.patch.endsWith('…') ? ' (cut short; read the files for the rest)' : ''}:\n\`\`\`diff\n${input.patch}\n\`\`\`` : ''}` : '',
+
+    `## How to decide
+- Read what you need, then call mcp__engine__decide once with one of the answers above. Your notes are the record of why. For a send-back or an answer of your own they are the exact words the employee gets, so say plainly what to do.
+- Nothing is accepted or merged with something known to be wrong in it. If a review found a fault, or a gate fails on the task's own files, send it back and say what to fix. Merge or accept only what a reviewer approved with its gates passing, or what you have read yourself and found right.
+- When a reviewer could not decide because something could not be checked, do not wave it through and do not send it round again to fail the same way: say what would check it, and who can make that possible.
+- The company rules bind you as they bind everyone. Where they say something is the user's alone, it is.
+- "ask_user" is for what nobody in the company can settle: money, access, a tool, something that has to be done at this Mac, or a choice about the product or the business that the rules and the brief leave open. Say exactly what the user must do or choose, in one or two sentences they can act on.
+- Stopping a task ends it for good. It is almost never the answer.
+
+Then end with one or two plain sentences to the user: what you decided and why.`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 }

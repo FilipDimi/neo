@@ -32,22 +32,25 @@ export function companyNow(db: Db, now: Date): string {
       const card = cards.find((c) => c.taskId === task.id);
       const what = run
         ? `${name(run.employeeId)} is ${run.mode === 'review' ? 'reviewing it' : run.mode === 'brief' ? 'splitting it' : 'working on it'}${run.activity ? ` ("${run.activity}")` : ''}, for ${ago(run.startedAt, now)}`
-        : card
-          ? `waiting on the user (${WHY[card.kind]}) for ${ago(card.askedAt, now)}`
-          : task.state === 'done'
-            ? `finished today by ${name(task.assigneeId)}${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}`
-            : task.state === 'failed'
-              ? 'stopped today'
-              : task.state === 'queued'
-                ? `waiting to start, for ${name(task.assigneeId ?? team.leadId)}`
-                : `nobody is on it right now (${name(task.assigneeId ?? team.leadId)} has it)`;
+        : card?.deciderId
+          ? `${name(card.deciderId)} is deciding it for the user, for ${ago(card.askedAt, now)}`
+          : card
+            ? `waiting on the user (${WHY[card.kind]}) for ${ago(card.askedAt, now)}`
+            : task.state === 'done'
+              ? `finished today by ${name(task.assigneeId)}${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}`
+              : task.state === 'failed'
+                ? 'stopped today'
+                : task.state === 'queued'
+                  ? `waiting to start, for ${name(task.assigneeId ?? team.leadId)}`
+                  : `nobody is on it right now (${name(task.assigneeId ?? team.leadId)} has it)`;
       lines.push(`- "${task.title}" (${task.state}): ${what}`);
     }
     if (mine.length > SHOWN_PER_TEAM) lines.push(`- and ${mine.length - SHOWN_PER_TEAM} more`);
   }
 
   lines.push(live.length === 0 ? 'Nobody is running right now.' : `Running right now: ${live.map((run) => name(run.employeeId)).join(', ')}.`);
-  lines.push(cards.length === 0 ? 'No decision is waiting for the user.' : `${cards.length} decision${cards.length === 1 ? ' is' : 's are'} waiting for the user.`);
+  const waiting = cards.filter((card) => !card.deciderId).length;
+  lines.push(waiting === 0 ? 'No decision is waiting for the user.' : `${waiting} decision${waiting === 1 ? ' is' : 's are'} waiting for the user.`);
   const spent = store.spendToday(db, now).company;
   lines.push(`Spent today: $${spent.toFixed(2)}${company && company.dailyCapUsd > 0 ? ` of $${company.dailyCapUsd.toFixed(2)}` : ''}.`);
   return lines.join('\n');

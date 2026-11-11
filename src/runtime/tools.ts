@@ -23,6 +23,8 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
   set_status: 'Say in a few plain words what you are doing right now (at most 60 characters), for the office view. Call it when you start and when your focus changes.',
   run_gate: 'Run one of this task\'s named gates in your folder and get its real exit code and output. Use it to check your work before you report.',
   create_task: 'Put a task on a team\'s board. Leave the assignee out for a led team, so its lead briefs the task; a self-managed team needs an assignee.',
+  decide:
+    'Answer the card you were given, on the user\'s behalf: name one of its buttons by id, or "ask_user" to hand it to the user. The notes say why; for a send-back or an answer they are the exact words the employee gets. Call it once.',
   ...ADMIN_DESCRIPTION,
 };
 

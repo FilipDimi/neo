@@ -2,7 +2,7 @@ import { act, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { subjectsOf, type EngineEvent, type EventRow } from '../../../src/shared/events.ts';
-import { company, employee, message, run, T0, task, team } from '../../../test/rows.ts';
+import { company, decision, employee, message, run, T0, task, team } from '../../../test/rows.ts';
 import { fromSnapshot } from '../store/reduce.ts';
 import { fakeApi, mount } from '../testing.tsx';
 import { TaskDrawer } from './TaskDrawer.tsx';
@@ -50,6 +50,22 @@ describe('TaskDrawer', () => {
     expect((await screen.findByText('Done.')).tagName).toBe('STRONG');
     expect(screen.getAllByRole('listitem').map((item) => item.innerHTML)).toEqual(['<code>NOTE.md</code>', '<code>README.md</code>']);
     expect(screen.getByText('▸ Bash ls **/*.md')).toBeTruthy();
+  });
+
+  it('says in the feed who decided a card and what, in their words', async () => {
+    const card = decision({ id: 'd1', kind: 'review', text: 'Priya could not decide on "Do the thing".', options: [{ id: 'send_back', label: 'Send back', effect: 'send_back' }, { id: 'accept', label: 'Accept as it is', effect: 'accept' }] });
+    const at = T0.toISOString();
+    const api = fakeApi(() =>
+      detail([
+        row(3, { kind: 'decision_answered', decision: { ...card, answer: { optionId: 'send_back', text: 'Make it one friendly line.', by: 'emp1', why: 'Make it one friendly line.' }, answeredAt: at }, result: 'applied' }),
+        row(4, { kind: 'decision_answered', decision: { ...card, id: 'd2', answer: { optionId: 'accept' }, answeredAt: at }, result: 'applied' }),
+        row(5, { kind: 'decision_answered', decision: { ...card, id: 'd3', answer: { optionId: 'closed' }, answeredAt: at }, result: 'closed' }),
+      ]),
+    );
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
+    expect(await screen.findByText('— Ada decided: Send back. Make it one friendly line.')).toBeTruthy();
+    expect(screen.getByText('— you decided: Accept as it is')).toBeTruthy();
+    expect(screen.queryByText(/closed/)).toBeNull();
   });
 
   it('shows the diff when asked', async () => {

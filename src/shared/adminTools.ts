@@ -50,6 +50,7 @@ export const ADMIN_INPUT = {
     concurrency: z.number().int().positive().optional(),
     rules: z.string().optional().describe('the whole new text of the rules every employee gets'),
     addRule: z.string().optional().describe('one line added at the end of the rules'),
+    decider: z.enum(['user', 'chief']).optional().describe("who is asked first when a card is raised. 'chief': the chief of staff answers it on the user's behalf and hands on only what nobody in the company can settle; money, tools, hiring and the machine always stay with the user. 'user': every card is the user's"),
   }),
   set_gates: z.object({ repo: z.string().min(1), gates: z.array(Gate) }),
 } satisfies Record<AdminTool, z.ZodType>;
@@ -62,6 +63,6 @@ export const ADMIN_DESCRIPTION: Record<AdminTool, string> = {
   hire: 'Hire someone onto a team: a name, one sentence for the role, a model, an optional effort, the tools and the skills.',
   update_employee: "Change someone's role, model, effort, tools or skills. It takes effect at their next run.",
   fire: 'Fire someone. Their memory is archived. A lead leaves their team without a lead.',
-  update_company: 'Change the company: the daily cap for all teams together, how many runs may happen at once, and the rules every employee gets.',
+  update_company: 'Change the company: the daily cap for all teams together, how many runs may happen at once, the rules every employee gets, and who decides cards first (the user, or the chief of staff on the user\'s behalf).',
   set_gates: "Replace a repository's gates: named commands the engine runs to check work. Gates that share a lock never run side by side.",
 };

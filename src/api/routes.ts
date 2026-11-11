@@ -292,7 +292,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
           .filter((decision) => decision.answeredAt !== null)
           .reverse()
           .slice(0, 200)
-      : store.openDecisions(db);
+      : store.forUser(db); // what waits for the user: a card the chief of staff is deciding is not one of them
     return { decisions: all };
   });
 

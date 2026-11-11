@@ -129,6 +129,7 @@ export function companySetup(ctx: HireCtx): string {
   const { sets, singles } = skillSets(ctx.skills.map((skill) => skill.id));
   return [
     `${company.name}. Daily cap ${usd(company.dailyCapUsd)}, ${company.concurrency} runs at once. Chief of staff: ${name(company.chiefOfStaffId)}. Admin: ${name(company.adminId)}.`,
+    company.decider === 'chief' ? `Decisions go to ${name(company.chiefOfStaffId)} first, who answers them for the user; money, tools, hiring and the machine stay with the user.` : 'Decisions come to the user.',
     `Teams:\n${teams.join('\n') || '(none)'}`,
     `Repositories:\n${repos.join('\n') || '(none)'}`,
     `Models: ${Object.entries(MODEL_LABELS).map(([id, label]) => `${label} (${id})`).join(', ')}. Efforts: ${Effort.options.join(', ')}, or the model's own.`,
@@ -193,12 +194,15 @@ export async function adminTool(ctx: HireCtx, name: string, raw: unknown): Promi
       const before = store.getCompany(db);
       if (!before) throw new Error('There is no company yet.');
       const rules = input.rules ?? (input.addRule ? `${before.rules.trimEnd()}\n${input.addRule.trim()}` : before.rules);
-      const after = Company.parse({ ...before, ...(input.dailyCapUsd !== undefined && { dailyCapUsd: input.dailyCapUsd }), ...(input.concurrency !== undefined && { concurrency: input.concurrency }), rules });
+      if (input.decider === 'chief' && !before.chiefOfStaffId) throw new Error('There is no chief of staff to decide for the user. Hire one first.');
+      const after = Company.parse({ ...before, ...(input.dailyCapUsd !== undefined && { dailyCapUsd: input.dailyCapUsd }), ...(input.concurrency !== undefined && { concurrency: input.concurrency }), ...(input.decider !== undefined && { decider: input.decider }), rules });
+      const chief = store.getEmployee(db, after.chiefOfStaffId ?? '')?.name ?? 'the chief of staff';
       apply(db, (tx) => tx.emit({ kind: 'company_changed', company: after }), at);
       const changed = [
         after.dailyCapUsd !== before.dailyCapUsd ? `daily cap ${usd(after.dailyCapUsd)} (was ${usd(before.dailyCapUsd)})` : '',
         after.concurrency !== before.concurrency ? `${after.concurrency} runs at once (was ${before.concurrency})` : '',
         after.rules !== before.rules ? 'the rules changed; every run from now on gets the new text' : '',
+        (after.decider ?? 'user') !== (before.decider ?? 'user') ? (after.decider === 'chief' ? `decisions go to ${chief} first (were the user's)` : `decisions come to the user (went to ${chief} first)`) : '',
       ].filter(Boolean);
       return changed.length > 0 ? `Company: ${changed.join('; ')}.` : 'Nothing changed: those are the values already set.';
     }

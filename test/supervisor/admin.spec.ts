@@ -65,6 +65,16 @@ describe("Morpheus's tools", () => {
     expect(store.getRepo(db, 'receipts')!.gates).toMatchObject([{ name: 'ios-branch', lock: 'xcode' }]);
   });
 
+  it('sets who decides cards first: the chief of staff on the user\'s behalf, or the user', async () => {
+    const { db, use } = setup();
+    expect(await use('company_setup', {})).toMatch(/Decisions come to the user\./);
+    expect(await use('update_company', { decider: 'chief' })).toMatch(/decisions go to .* first \(were the user's\)/);
+    expect(store.getCompany(db)!.decider).toBe('chief');
+    expect(await use('company_setup', {})).toMatch(/Decisions go to .* first, who answers them for the user; money, tools, hiring and the machine stay with the user\./);
+    expect(await use('update_company', { decider: 'chief' })).toMatch(/Nothing changed/);
+    expect(await use('update_company', { decider: 'user' })).toMatch(/decisions come to the user \(went to .* first\)/);
+  });
+
   it('removes a team and fires someone, and says who went', async () => {
     const { db, use } = setup();
     expect(await use('fire', { employee: 'api-engineer' })).toMatch(/Fired api-engineer/);

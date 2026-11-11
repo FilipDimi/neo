@@ -11,7 +11,9 @@ import { dayOf, type Store } from '../store/reduce.ts';
 const authored = (run: Run): boolean => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate';
 const isOpen = (decision: Decision): boolean => decision.answeredAt === null;
 
-export const openDecisions = (store: Store): Decision[] => [...store.decisions.values()].filter(isOpen);
+/** The cards on the user's desk. One the chief of staff is deciding on the user's behalf is open, and not here. */
+export const openDecisions = (store: Store): Decision[] => [...store.decisions.values()].filter((decision) => isOpen(decision) && !decision.deciderId);
+const beingDecided = (store: Store, taskId: string): Decision | undefined => [...store.decisions.values()].find((decision) => isOpen(decision) && decision.deciderId && decision.taskId === taskId);
 export const liveRuns = (store: Store): Run[] => [...store.runs.values()].filter((run) => run.outcome === 'running');
 export const runsOf = (store: Store, taskId: string): Run[] => [...store.runs.values()].filter((run) => run.taskId === taskId);
 const nameOf = (store: Store, id: string | null): string => (id === 'user' ? 'you' : ((id && store.employees.get(id)?.name) ?? 'nobody'));
@@ -114,6 +116,9 @@ function card(store: Store, task: Task, now: Date): BoardCard {
       line2 = parts(team?.name, worker, started ? ago(started, now) : undefined, spent);
     }
   }
+  // A card someone is deciding for the user: the task waits on them, and says so, in the colour of work that is being looked at.
+  const held = decisions.length === 0 && task.state === 'blocked' ? beingDecided(store, task.id) : undefined;
+  if (held) return { taskId: task.id, title: task.title, line2, line3: `${nameOf(store, held.deciderId ?? null)} is deciding · ${ago(held.askedAt, now)}`, attention: 'review', failed: false };
   const line3 = task.state === 'done' ? '' : cardLine(task, runs, decisions, now, children);
   return { taskId: task.id, title: task.title, line2, line3: line3 || null, attention: attention(task, live, decisions, now), failed: task.state === 'failed' };
 }

@@ -22,6 +22,10 @@ export const ENGINE_TOOLS_FOR: Record<RunMode, EngineTool[]> = {
   route: ['create_task', 'set_status'],
 };
 
+/** The chief of staff deciding a card for the user: it reads, then answers the card. */
+export const DECIDING_TOOLS: EngineTool[] = ['decide', 'set_status'];
+const DECIDING_TURNS = 40;
+
 /**
  * The environment of a session: the short list of `plainEnv`, so nothing that could redirect
  * billing and no token from the engine's shell gets through. A company set to run on an API key
@@ -86,16 +90,18 @@ export function buildJob(input: JobInput): WorkerJob {
     firstTurn: [first, messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
     model: employee.model,
     // A conversation is answered at the model's own effort, so that it stays quick. Work runs at the effort the employee was hired with.
-    ...(employee.effort && run.mode !== 'route' ? { effort: employee.effort } : {}),
+    // Deciding a card for the user is judgement, not small talk: it gets the effort too.
+    ...(employee.effort && (run.mode !== 'route' || task.decisionId) ? { effort: employee.effort } : {}),
     env: { ...withToolchains(sessionEnv(company)), BASH_DEFAULT_TIMEOUT_MS: bashTimeout, BASH_MAX_TIMEOUT_MS: bashTimeout },
     tools: shape.tools,
     // The admin's conversations change the setup: they get the setup tools, and no one else's do.
-    engineTools: admin && run.mode === 'route' ? [...ENGINE_TOOLS_FOR.route, ...ADMIN_TOOLS] : ENGINE_TOOLS_FOR[run.mode],
+    // A conversation about a card has one thing to do: answer it.
+    engineTools: task.decisionId ? DECIDING_TOOLS : admin && run.mode === 'route' ? [...ENGINE_TOOLS_FOR.route, ...ADMIN_TOOLS] : ENGINE_TOOLS_FOR[run.mode],
     skills: input.mounted.skills,
     plugins: input.mounted.plugins,
     additionalDirectories: shape.additionalDirectories,
     sandbox: shape.sandbox,
-    maxTurns: MAX_TURNS[run.mode],
+    maxTurns: task.decisionId ? DECIDING_TURNS : MAX_TURNS[run.mode],
     ...(input.maxBudgetUsd !== undefined ? { maxBudgetUsd: input.maxBudgetUsd } : {}),
     ...(request.resumeSessionId ? { resumeSessionId: request.resumeSessionId } : {}),
     ...(input.runtimeModule ? { runtimeModule: input.runtimeModule } : {}),

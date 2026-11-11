@@ -76,6 +76,20 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
   const prompt = s.input.prompt;
   const { title, dir } = taskOf(s);
   switch (s.mode) {
+    case 'decide': {
+      // The chief of staff decides a card for the user: the first button that moves the work on, or the user when the card says ASKME.
+      await s.engine('set_status', { text: 'deciding a card for you' });
+      await wait(2);
+      const buttons = [...prompt.matchAll(/^- ([a-z_0-9]+): (.+?)(?: \(|$)/gm)].map((found) => ({ id: found[1]!, label: found[2]! }));
+      const pick = prompt.includes('ASKME') ? undefined : buttons.find((button) => ['merge', 'choice1', 'answer', 'send_back', 'retry', 'recheck', 'accept'].includes(button.id));
+      if (!pick) {
+        await s.engine('decide', { option: 'ask_user', notes: 'This is a choice about the product that only you can make.' });
+        return void s.say('One decision needs you: it is a choice about the product, and it is on your desk.');
+      }
+      const notes = pick.id === 'merge' ? 'Reviewed and its gates passed.' : pick.id === 'send_back' ? 'Say what was checked and how, then report again.' : 'This is the reading that fits the brief.';
+      await s.engine('decide', { option: pick.id, notes });
+      return void s.say(`I decided one for you: **${pick.label}**. ${notes}`);
+    }
     case 'route': {
       await s.engine('set_status', { text: 'reading your message' });
       await wait();

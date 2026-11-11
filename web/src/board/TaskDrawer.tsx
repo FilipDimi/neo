@@ -23,6 +23,14 @@ function feedLine(row: EventRow, nameOf: (id: string) => string): string | null 
       return `— gate ${event.result.name}: ${event.result.exitCode === 0 ? 'passed' : `FAILED (exit ${event.result.exitCode})`}`;
     case 'decision_raised':
       return `— a decision was raised: ${event.decision.text}`;
+    case 'decision_answered': {
+      // Who settled it and how: the user, or whoever decided on the user's behalf, with their reason.
+      const { answer, options } = event.decision;
+      const pressed = options.find((option) => option.id === answer?.optionId);
+      if (event.result !== 'applied' || !answer || !pressed) return null;
+      const said = (answer.why ?? answer.text)?.trim();
+      return `— ${answer.by ? nameOf(answer.by) : 'you'} decided: ${pressed.label}${said ? `. ${said}` : ''}`;
+    }
     case 'run_event': {
       const inner = event.event;
       if (inner.kind === 'assistant_text') return inner.text;

@@ -47,6 +47,10 @@ The company can be worked from any Claude session on this Mac, and so from a pho
 
 The other nine are the setup tools: `company_setup` reads the whole setup, and `create_team`, `update_team`, `remove_team`, `hire`, `update_employee`, `fire`, `update_company` and `set_gates` change it at once. They take plain words (a team or a person by name, a model by its label, a set of skills by its name) and refuse in words that say what would work. They are the same nine the admin has inside the company (`src/supervisor/admin.ts`, reached over `POST /api/admin/<tool>`), where only the employee named as `adminId` is offered them, and only in a conversation.
 
+## Who decides a card
+
+A card is a decision the engine may not make itself. By default it is the user's. With `update_company { decider: 'chief' }` a card about a team's work goes to the chief of staff first: it becomes a small task of the chief's own (a conversation with one tool, `decide`), in which it is shown the card, its buttons, the task and what stands behind the work, and presses one button for the user or hands the card on with a note (`src/supervisor/decisions.ts`, `buildDecidingTurn` in `definition.ts`). A card that is being decided is not on the user's desk; it comes back there if the chief ends without answering, cannot run, or has already decided the same kind of card twice on that task. Money, tools, hiring and the machine are never decided for the user: cap, tool, capability, staffing, health and usage-limit cards stay theirs, and so does any card about the chief's own conversations.
+
 ## The admin, and who designs
 
 Morpheus is the admin, in two places. Inside the company he is an employee on the Admin team who changes the setup when asked on his page or through the `morpheus` tool. In the Claude app there is a pinned chat called `morpheus`, which does the same with the setup tools and is also where the app's own code is changed: on a branch, tested, and merged, pushed and released only on the user's word, with the company restarted when nobody is running. Code is not changed from inside the company.

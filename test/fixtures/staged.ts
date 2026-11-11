@@ -4,7 +4,8 @@ import path from 'node:path';
 import { fakeRuntime, type FakeRuntime, type Turn } from './fakeRuntime.ts';
 
 export type Scene = Turn & {
-  mode: 'brief' | 'work' | 'review' | 'integrate' | 'route';
+  /** 'decide' is the chief of staff's conversation about a card: a route run with the tool that answers it. */
+  mode: 'brief' | 'work' | 'review' | 'integrate' | 'route' | 'decide';
   who: string;
   cwd: string;
   /** True when this session picks up an earlier one (a send-back, an answer, a retry). */
@@ -17,6 +18,7 @@ function modeOf(turn: Turn): Scene['mode'] {
   const tools = turn.input.engineTools?.names ?? [];
   if (tools.includes('propose_subtasks')) return 'brief';
   if (tools.includes('submit_review')) return 'review';
+  if (tools.includes('decide')) return 'decide';
   if (tools.includes('create_task')) return 'route';
   return /Every sub-task of this task is finished|conflict/i.test(turn.input.prompt) ? 'integrate' : 'work';
 }

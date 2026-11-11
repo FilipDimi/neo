@@ -59,6 +59,19 @@ describe('deck', () => {
     expect(usage).toMatchObject({ team: null, taskId: null, local: ['not_now'] });
   });
 
+  it('leaves out a card the chief of staff is deciding for the user: it is not on the user\'s desk', () => {
+    const held = decision({ id: 'd-held', kind: 'review', deciderId: 'neo' });
+    const store = fromSnapshot(snapshot({ tasks: [task({ state: 'blocked', blockedFrom: 'review' })], employees: [employee(), employee({ id: 'neo', name: 'Neo' })], decisions: [held] }));
+    expect(deck(store, T0)).toEqual([]);
+    expect(header(store, T0).openDecisions).toBe(0);
+    // Its task says who has it, and is not coloured as waiting on the user.
+    expect(column(store, 'blocked', plus(T0, 120)).cards[0]).toMatchObject({ line3: 'Neo is deciding · 2 min', attention: 'review' });
+    // Handed on to the user, it is a card like any other.
+    const handed = fromSnapshot(snapshot({ tasks: [task({ state: 'blocked', blockedFrom: 'review' })], decisions: [{ ...held, deciderId: null }] }));
+    expect(deck(handed, T0).map((card) => card.id)).toEqual(['d-held']);
+    expect(column(handed, 'blocked').cards[0]).toMatchObject({ attention: 'waiting_on_you' });
+  });
+
   it('leaves answered cards out', () => {
     const { store, now } = storyAt('cards_answered');
     expect(deck(store, now).map((c) => c.kind).sort()).toEqual(['lease', 'merge']);
