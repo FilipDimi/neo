@@ -20,7 +20,8 @@ export function MessageBox({ value, onChange, className, ...rest }: Props) {
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     // Enter while a word is still being composed (Japanese, accents) chooses the word; it does not send.
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+    // Safari has already ended the composition by then and says so only by the key's number, 229.
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
   }

@@ -5,7 +5,7 @@
 import { reviewerFor } from '../../../src/supervisor/scheduler.ts';
 import type { Company, Decision, Employee, Run, Task, Team } from '../../../src/shared/types.ts';
 import { ago, attention, cardLine, countsCost, EARLIER_SHOWN, WHY, type Attention } from '../../../src/shared/view.ts';
-import { clock, initials, money } from '../format.ts';
+import { clock, initials, money, untilWhen } from '../format.ts';
 import { dayOf, type Store } from '../store/reduce.ts';
 
 const authored = (run: Run): boolean => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate';
@@ -25,7 +25,8 @@ export function gist(brief: string, max = 160): string {
   const opening = (brief.trim().split(/\n\s*\n/)[0] ?? '').replace(/\s+/g, ' ').replace(/^#+\s*/, '').trim();
   if (opening.length <= max) return opening;
   let out = '';
-  for (const sentence of opening.match(/[^.!?]+[.!?]+(?=\s|$)/g) ?? []) {
+  // Only the start is looked at for sentences: a brief that is one enormous paragraph must not be searched whole on every redraw.
+  for (const sentence of opening.slice(0, max * 3).match(/[^.!?]+[.!?]+(?=\s|$)/g) ?? []) {
     if ((out + sentence).length > max) break;
     out += sentence;
   }
@@ -83,7 +84,7 @@ export type HeaderView = { company: string; clock: string; seatsBusy: number; se
 
 export function header(store: Store, now: Date): HeaderView {
   const paused = store.company?.paused;
-  const until = paused?.until ? ` until ${new Date(paused.until).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : '';
+  const until = paused?.until ? ` until ${untilWhen(paused.until, now)}` : '';
   return {
     company: store.company?.name ?? '',
     clock: clock(now),
@@ -229,7 +230,7 @@ function person(store: Store, employee: Employee): Person {
 export function teamSummary(team: Team, company?: Pick<Company, 'costs'> | null): string {
   const targets = [...new Set(team.repos.map((repo) => repo.mergeTarget).filter((target): target is string => target !== null))];
   const limit = team.repos.length > 0 ? `may merge: ${targets.join(', ') || 'no'}` : `may publish: ${team.mayPublish ? 'yes' : 'no'}`;
-  return [team.selfManaged ? 'self-managed' : 'led', ...(countsCost(company) ? [`${money(team.dailyCapUsd, true)}/day`] : []), limit].join(' · ');
+  return [team.selfManaged ? 'self-managed' : 'led', ...(countsCost(company) ? [team.dailyCapUsd > 0 ? `${money(team.dailyCapUsd, true)}/day` : 'no daily cap'] : []), limit].join(' · ');
 }
 
 export function orgChart(store: Store, _now: Date): { chief: Person | null; teams: OrgTeam[] } {

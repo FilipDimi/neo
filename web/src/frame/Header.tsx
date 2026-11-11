@@ -46,7 +46,9 @@ export function Header() {
         <>
           <div className="rule" />
           <div className="muted">
-            Today <strong>{money(top.spentToday)}</strong> of {money(top.capToday, true)}
+            Today <strong>{money(top.spentToday)}</strong>
+            {/* A cap of nothing is no cap, to the engine: it is not shown as one. */}
+            {top.capToday > 0 && ` of ${money(top.capToday, true)}`}
           </div>
         </>
       )}

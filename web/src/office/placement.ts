@@ -23,7 +23,15 @@ export function wrap(text: string, perLine: number, lines = 2): string[] {
   const out: string[] = [];
   let line = '';
   for (const word of text.trim().split(/\s+/)) {
-    if (word.length > perLine) return [...out, cut(line ? `${line} ${word}` : word, perLine)].slice(0, lines);
+    if (word.length > perLine) {
+      // A word longer than a line is the only thing ever cut. It goes on a line of its own where there is one, so the
+      // words before it stay whole; where there is none, the line before it ends the bubble.
+      if (!line) return [...out, cut(word, perLine)];
+      if (out.length < lines - 1) return [...out, line, cut(word, perLine)];
+      let last = line;
+      while (`${last}…`.length > perLine && last.includes(' ')) last = last.slice(0, last.lastIndexOf(' '));
+      return [...out, `${last}…`];
+    }
     if (!line || `${line} ${word}`.length <= perLine) {
       line = line ? `${line} ${word}` : word;
       continue;

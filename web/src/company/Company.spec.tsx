@@ -352,9 +352,26 @@ describe('Setup', () => {
     await userEvent.type(screen.getByLabelText('Gate name'), 'tests');
     await userEvent.type(screen.getByLabelText('Gate command'), 'cargo test');
     await userEvent.click(screen.getByRole('button', { name: 'Create the company' }));
-    await waitFor(() => expect(api.calls).toHaveLength(2));
-    expect(api.calls[0]).toEqual(['POST', '/api/setup', { name: 'Receipts Inc.', chiefName: 'Neo', rules: 'Nothing invented.' }]);
-    expect(api.calls[1]).toEqual(['POST', '/api/repos', { path: '/code/receipt', gates: [{ name: 'tests', command: 'cargo test', timeoutMinutes: 15, lock: null }] }]);
+    await waitFor(() => expect(api.calls).toHaveLength(1));
+    // One call: the engine checks the repository before it makes the company, so a path it cannot use leaves nothing behind.
+    expect(api.calls[0]).toEqual(['POST', '/api/setup', { name: 'Receipts Inc.', chiefName: 'Neo', rules: 'Nothing invented.', repo: { path: '/code/receipt', gates: [{ name: 'tests', command: 'cargo test', timeoutMinutes: 15, lock: null }] } }]);
+  });
+
+  it('shows why a repository could not be used and keeps the form, and says so when a gate is half filled in', async () => {
+    const api = fakeApi(() => {
+      throw new Error('/code/nope: the folder is missing.');
+    });
+    mount(<Setup />, { store: { ...store, company: null }, now: T0, api });
+    await userEvent.type(screen.getByLabelText('Company name'), 'Acme');
+    await userEvent.type(screen.getByLabelText('Repository path'), '/code/nope');
+    await userEvent.type(screen.getByLabelText('Gate command'), 'npm test');
+    await userEvent.click(screen.getByRole('button', { name: 'Create the company' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/gate needs both a name and a command/);
+    expect(api.calls).toHaveLength(0);
+    await userEvent.type(screen.getByLabelText('Gate name'), 'tests');
+    await userEvent.click(screen.getByRole('button', { name: 'Create the company' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('the folder is missing');
+    expect((screen.getByLabelText('Repository path') as HTMLInputElement).value).toBe('/code/nope');
   });
 
   it('creates a company with no repository when none is given', async () => {

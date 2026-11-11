@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Scrim } from '../frame/Scrim.tsx';
 import { money } from '../format.ts';
 import { countsCost } from '../../../src/shared/view.ts';
 import { board, spendToday } from '../model/select.ts';
@@ -50,9 +51,9 @@ export function Board() {
         {priced && <div>{`Spend today by team: ${spend.byTeam.map((team) => `${team.name} ${money(team.usd)}`).join(' · ') || 'nothing yet'}`}</div>}
       </footer>
       {adding && (
-        <div className="scrim" onClick={(event) => event.target === event.currentTarget && setAdding(false)}>
+        <Scrim onClose={() => setAdding(false)}>
           <NewTask onDone={() => setAdding(false)} />
-        </div>
+        </Scrim>
       )}
     </div>
   );

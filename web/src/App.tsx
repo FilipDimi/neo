@@ -147,8 +147,9 @@ function Shell() {
             <ChatLine />
           </div>
         )}
-        {task && <TaskDrawer taskId={task.id} tab={task.tab} onClose={() => setTask(null)} />}
-        {person && <PersonPage employeeId={person} onClose={() => setPerson(null)} />}
+        {/* Keyed: a drawer opened on another task or person starts afresh, with nothing typed or shown for the one before. */}
+        {task && <TaskDrawer key={task.id} taskId={task.id} tab={task.tab} onClose={() => setTask(null)} />}
+        {person && <PersonPage key={person} employeeId={person} onClose={() => setPerson(null)} />}
       </div>
     </UiContext>
   );

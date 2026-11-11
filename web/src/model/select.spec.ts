@@ -8,6 +8,25 @@ const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({ version: 1, comp
 const column = (store: ReturnType<typeof fromSnapshot>, key: string, now = T0) => board(store, now).find((c) => c.key === key)!;
 const sum = (numbers: number[]) => numbers.reduce((a, b) => a + b, 0);
 
+describe('what the screen never chokes on or misstates', () => {
+  it('takes the gist of a brief that is one enormous paragraph without a pause anyone would notice', () => {
+    const began = performance.now();
+    expect(gist('word '.repeat(12_000)).length).toBeLessThanOrEqual(161);
+    expect(performance.now() - began).toBeLessThan(250);
+  });
+
+  it('says the day a pause ends on when that is not today', () => {
+    const { store, now } = storyAt('parts_running');
+    const pausedUntil = (until: Date) => header({ ...store, company: { ...store.company!, paused: { reason: 'usage_limit', until: until.toISOString() } } }, now).paused;
+    expect(pausedUntil(new Date(now.getTime() + 3_600_000))).toMatch(/usage limit until \d\d:\d\d$/);
+    expect(pausedUntil(new Date(now.getTime() + 3 * 86_400_000))).toMatch(/usage limit until Thu \d\d:\d\d$/);
+  });
+
+  it('does not call no cap a cap of nothing', () => {
+    expect(teamSummary(team({ dailyCapUsd: 0 }), { costs: 'on' })).toBe('led · no daily cap · may publish: no');
+  });
+});
+
 describe('header', () => {
   it("counts seats busy from live runs against the company's concurrency", () => {
     const { store, now } = storyAt('parts_running');

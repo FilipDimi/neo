@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useApi } from '../app/context.ts';
 import { useNow, useStore } from '../store/store.ts';
 import { MessageBox } from './MessageBox.tsx';
@@ -14,6 +14,7 @@ export function ChatLine() {
   const now = useNow();
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const sending = useRef(false);
   const chief = useStore((store) => (store.company?.chiefOfStaffId ? store.employees.get(store.company.chiefOfStaffId) : undefined));
   const reply = useStore((store) => [...store.messages.values()].filter((message) => message.toId === 'user').sort((a, b) => a.at.localeCompare(b.at)).at(-1));
   const fresh = reply && now.getTime() - new Date(reply.at).getTime() < Math.max(REPLY_SHOWN_MS, reply.text.length * MS_PER_LETTER);
@@ -25,14 +26,17 @@ export function ChatLine() {
   async function send(event: FormEvent): Promise<void> {
     event.preventDefault();
     const line = text.trim();
-    if (!line || !ready) return;
+    if (!line || !ready || sending.current) return;
+    sending.current = true;
     setError(null);
     try {
       await api.post('/api/chat', { text: line });
-      setText('');
+      // Only what was sent is cleared: words typed while it was on its way stay.
+      setText((now) => (now.trim() === line ? '' : now));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure)); // the text stays, to send again
     }
+    sending.current = false;
   }
 
   return (

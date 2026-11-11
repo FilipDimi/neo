@@ -15,11 +15,15 @@ export function Setup({ onDone }: { onDone?: () => void }) {
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
+    const gate = { name: gateName.trim(), command: gateCommand.trim() };
+    if (Boolean(gate.name) !== Boolean(gate.command)) return setError('A gate needs both a name and a command. Fill in the other, or clear both.');
+    if (gate.name && !repoPath.trim()) return setError('A gate checks work in a repository. Give the repository path, or clear the gate.');
     setBusy(true);
     setError(null);
     try {
-      await api.post('/api/setup', { name: name.trim(), ...(chiefName.trim() ? { chiefName: chiefName.trim() } : {}), ...(rules.trim() ? { rules: rules.trim() } : {}) });
-      if (repoPath.trim()) await api.post('/api/repos', { path: repoPath.trim(), gates: gateName.trim() && gateCommand.trim() ? [{ name: gateName.trim(), command: gateCommand.trim(), timeoutMinutes: 15, lock: null }] : [] });
+      // One request: the engine checks the repository before it makes the company, so a path it cannot use is said here, with the form still open.
+      const repo = repoPath.trim() ? { repo: { path: repoPath.trim(), gates: gate.name ? [{ ...gate, timeoutMinutes: 15, lock: null }] : [] } } : {};
+      await api.post('/api/setup', { name: name.trim(), ...(chiefName.trim() ? { chiefName: chiefName.trim() } : {}), ...(rules.trim() ? { rules: rules.trim() } : {}), ...repo });
       onDone?.();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));

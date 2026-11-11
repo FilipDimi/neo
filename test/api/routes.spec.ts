@@ -128,6 +128,17 @@ describe('tasks and the snapshot', () => {
     expect(snapshot.runs.map((r: { id: string }) => r.id)).toEqual(['r-old']);
   });
 
+  it('sends every part of a task that is shown, however long ago the part finished', async () => {
+    const { call, w } = await fresh();
+    const lastWeek = plus(T0, -7 * 86_400).toISOString();
+    apply(w.db, (tx) => {
+      tx.emit({ kind: 'task_changed', task: task({ id: 'whole', title: 'The whole', state: 'running' }), cause: 'created' });
+      for (let i = 0; i < 8; i++) tx.emit({ kind: 'task_changed', task: task({ id: `part${i}`, parentId: 'whole', title: `Part ${i}`, state: 'done', updatedAt: lastWeek }), cause: 'created' });
+    });
+    const snapshot = (await call('GET', '/api/snapshot')).json;
+    expect(snapshot.tasks.filter((entry: { parentId: string | null }) => entry.parentId === 'whole')).toHaveLength(8);
+  });
+
   it('lists what a task without a repository wrote, with the text of small files, and follows no link out of the folder', async () => {
     const { call, w } = await fresh();
     const { json } = await call('POST', '/api/tasks', { teamId: 'team1', assigneeId: 'emp1', title: 'T', brief: 'B' });

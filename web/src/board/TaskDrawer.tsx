@@ -77,6 +77,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   const [error, setError] = useState<string | null>(null);
   const feed = useRef<HTMLDivElement>(null);
   const following = useRef(true);
+  const sending = useRef(false);
   const nameOf = (id: string | null) => (id === 'user' ? 'you' : ((id && employees.get(id)?.name) ?? 'nobody'));
   const fail = (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure));
 
@@ -111,19 +112,26 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
 
   if (!task) return null;
   const briefSaid = !task.summary?.trim() && seen?.summary === task.brief.trim();
-  const recipient = nameOf(live?.employeeId ?? task.assigneeId ?? team?.leadId ?? null);
+  // Whom the engine delivers to: the task's assignee, or its team's lead. Not whoever happens to be running on it (a reviewer, say).
+  const recipient = nameOf(task.assigneeId ?? team?.leadId ?? null);
+  const reached = sent ? nameOf(sent.toId) : recipient;
   const delivered = sent ? (messages.get(sent.id)?.state ?? sent.state) : null;
 
   async function send(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (!text.trim()) return;
+    const line = text.trim();
+    if (!line || sending.current) return;
+    sending.current = true;
+    setError(null);
     try {
-      const reply = await api.post<{ message: Message }>(`/api/tasks/${taskId}/message`, { text: text.trim() });
+      const reply = await api.post<{ message: Message }>(`/api/tasks/${taskId}/message`, { text: line });
       setSent(reply.message);
-      setText('');
+      // Only what was sent is cleared: words typed while it was on its way stay.
+      setText((now) => (now.trim() === line ? '' : now));
     } catch (failure) {
       fail(failure);
     }
+    sending.current = false;
   }
 
   const lines = (detail?.events ?? []).flatMap((row) => {
@@ -284,7 +292,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
           Send
         </button>
       </form>
-      {delivered && <p className="muted">{delivered === 'delivered' ? `Your message was delivered to ${recipient}.` : `Your message is waiting for ${recipient}'s next turn.`}</p>}
+      {delivered && <p className="muted">{delivered === 'delivered' ? `Your message was delivered to ${reached}.` : `Your message is waiting for ${reached}'s next turn.`}</p>}
 
       <footer>
         {live && (

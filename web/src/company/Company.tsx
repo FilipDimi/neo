@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Scrim } from '../frame/Scrim.tsx';
 import './company.css';
 import { HireForm } from './HireForm.tsx';
 import { OrgChart } from './OrgChart.tsx';
@@ -12,9 +13,9 @@ export function Company() {
       <OrgChart onNewTeam={() => setTeamForm({})} onEditTeam={(teamId) => setTeamForm({ teamId })} />
       <HireForm onNewTeam={() => setTeamForm({})} />
       {teamForm && (
-        <div className="scrim" onClick={(event) => event.target === event.currentTarget && setTeamForm(null)}>
+        <Scrim onClose={() => setTeamForm(null)}>
           <TeamForm teamId={teamForm.teamId} onDone={() => setTeamForm(null)} />
-        </div>
+        </Scrim>
       )}
     </div>
   );

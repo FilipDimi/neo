@@ -8,10 +8,21 @@ import './prose.css';
  * the text is ever treated as HTML.
  */
 export function Prose({ text, className }: { text: string; className?: string }) {
-  return <div className={className ? `prose ${className}` : 'prose'}>{blocks(text.replace(/\r\n?/g, '\n').split('\n'))}</div>;
+  const name = className ? `prose ${className}` : 'prose';
+  // What someone wrote is never a reason for the page to go blank: text that cannot be laid out is shown as it was typed.
+  let laid: ReactNode[];
+  try {
+    laid = blocks(text.replace(/\r\n?/g, '\n').split('\n'));
+  } catch {
+    laid = [<p key="plain">{text}</p>];
+  }
+  return <div className={name}>{laid}</div>;
 }
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+// Three backticks open a block only when the line has no backtick after them: "```npm test``` passed" is a sentence with code in it.
+const FENCE = /^ {0,3}(`{3,}(?![^\n]*`)|~{3,})/;
+/** How deep quotes and lists are followed. Past this the text is shown as it was typed: nobody writes that deep, and a page must not fall over on one that does. */
+const DEPTH = 8;
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
 const RULE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])\s+(.*)$/;
@@ -33,7 +44,7 @@ const tableAt = (lines: string[], at: number): boolean => {
 /** Whether a line begins something other than a paragraph, so a paragraph before it ends there. */
 const startsBlock = (lines: string[], at: number): boolean => [FENCE, HEADING, RULE, ITEM, QUOTE].some((shape) => shape.test(lines[at]!)) || tableAt(lines, at);
 
-function blocks(lines: string[]): ReactNode[] {
+function blocks(lines: string[], depth = 0): ReactNode[] {
   const out: ReactNode[] = [];
   let at = 0;
   while (at < lines.length) {
@@ -72,10 +83,10 @@ function blocks(lines: string[]): ReactNode[] {
       continue;
     }
 
-    if (QUOTE.test(line)) {
+    if (QUOTE.test(line) && depth < DEPTH) {
       const quoted: string[] = [];
       for (; at < lines.length && QUOTE.test(lines[at]!); at++) quoted.push(QUOTE.exec(lines[at]!)![1]!);
-      out.push(<blockquote key={key}>{blocks(quoted)}</blockquote>);
+      out.push(<blockquote key={key}>{blocks(quoted, depth + 1)}</blockquote>);
       continue;
     }
 
@@ -159,7 +170,7 @@ function blocks(lines: string[]): ReactNode[] {
                     .map((part) => part.trim())
                     .join('\n'),
                 )}
-                {blocks(body.slice(own))}
+                {blocks(body.slice(own), depth + 1)}
               </li>
             );
           })}

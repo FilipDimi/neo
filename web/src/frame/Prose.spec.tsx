@@ -56,4 +56,18 @@ describe('Prose', () => {
   it('shows marks that never close as they were typed', () => {
     expect(html('a ** b and `c and [d](e')).toBe('<p>a ** b and `c and [d](e</p>');
   });
+
+  it('reads code in three backticks on one line as code in a sentence, not as the start of a block', () => {
+    const { container } = render(<Prose text={'```npm test``` passed\nAll good.\n\nSecond paragraph.'} />);
+    expect(container.querySelector('pre')).toBeNull();
+    expect(container.textContent).toContain('npm test');
+    expect(container.textContent).toContain('passed');
+    expect([...container.querySelectorAll('p')].map((p) => p.textContent)).toContain('Second paragraph.');
+  });
+
+  it('shows text it cannot lay out as plain text rather than taking the page down', () => {
+    const deep = `${'>'.repeat(6000)} said`;
+    const { container } = render(<Prose text={deep} />);
+    expect(container.textContent).toContain('said');
+  });
 });

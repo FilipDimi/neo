@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useApi } from '../app/context.ts';
 import { countsCost } from '../../../src/shared/view.ts';
 import { useStore } from '../store/store.ts';
@@ -21,6 +21,7 @@ export function NewTask({ onDone }: { onDone(): void }) {
   const [gates, setGates] = useState<string[]>([]);
   const [cap, setCap] = useState('2');
   const [error, setError] = useState<string | null>(null);
+  const sending = useRef(false);
 
   const team = choices.find((candidate) => candidate.id === teamId);
   const members = people.filter((employee) => employee.teamId === teamId);
@@ -36,6 +37,8 @@ export function NewTask({ onDone }: { onDone(): void }) {
     event.preventDefault();
     if (!team) return setError('Choose a team.');
     if (team.selfManaged && !assigneeId) return setError(`${team.name} is self-managed, so this task needs an assignee.`);
+    if (sending.current) return;
+    sending.current = true;
     setError(null);
     try {
       await api.post('/api/tasks', { teamId, title: title.trim(), brief: brief.trim(), doneCondition: doneCondition.trim(), priority: Number(priority), assigneeId: assigneeId || null, repoId: repo?.id ?? null, gates, capUsd: Number(cap) });
@@ -43,6 +46,7 @@ export function NewTask({ onDone }: { onDone(): void }) {
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     }
+    sending.current = false;
   }
 
   return (

@@ -66,7 +66,10 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
     event.preventDefault();
     if (!draft) return;
     try {
-      await api.patch(`/api/employees/${employeeId}`, { role: draft.role.trim(), model: draft.model, effort: draft.effort || null, skills: draft.skills, capabilities: draft.capabilities });
+      // A tool the team no longer allows has no box to untick here, and the engine refuses it: it is left out, as hiring does.
+      const kept = options ? draft.capabilities.filter((capability) => (options.availableByTeam[employee!.teamId] ?? []).includes(capability)) : draft.capabilities;
+      await api.patch(`/api/employees/${employeeId}`, { role: draft.role.trim(), model: draft.model, effort: draft.effort || null, skills: draft.skills, capabilities: kept });
+      setError(null);
       setDraft(null);
     } catch (failure) {
       fail(failure);
@@ -222,6 +225,12 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
             ))}
           </select>
 
+          {/* Why a save was refused, beside the button that was pressed. */}
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
           <div className="chips">
             <button type="submit" className="pill small on" disabled={noTools || !draft.role.trim()}>
               Save
@@ -247,7 +256,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
           </div>
         ))}
       </section>
-      {error && (
+      {error && !draft && (
         <p className="error" role="alert">
           {error}
         </p>

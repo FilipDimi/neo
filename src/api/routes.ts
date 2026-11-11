@@ -112,7 +112,11 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
       .filter((task) => task.kind === 'work' && over(task) && task.updatedAt < since)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id))
       .slice(0, EARLIER_SHOWN);
-    const tasks = [...all.filter((task) => !over(task) || task.updatedAt >= since), ...earlier].filter((task) => atWork.has(task.teamId));
+    const listed = [...all.filter((task) => !over(task) || task.updatedAt >= since), ...earlier].filter((task) => atWork.has(task.teamId));
+    // A task that is shown is shown with all its parts, however long ago they finished: the board counts them ("4 of 6
+    // sub-tasks done"), and a count made from only today's would be wrong after every reload.
+    const parents = new Set(listed.map((task) => task.id));
+    const tasks = [...listed, ...all.filter((task) => task.parentId !== null && parents.has(task.parentId) && !parents.has(task.id))];
     const shown = new Set(tasks.map((task) => task.id));
     const spend = store.spendToday(db, at);
     return {

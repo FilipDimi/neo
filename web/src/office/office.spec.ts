@@ -73,6 +73,10 @@ describe('placement', () => {
     expect(wrap('Building the results list of the search page from the board and its empty state', 28)).toEqual(['Building the results list of', 'the search page from the…']);
     // A word longer than a line is the one thing that is cut.
     expect(wrap(`${'x'.repeat(40)} tail`, 28)).toEqual([`${'x'.repeat(27)}…`]);
+    // A word too long for a line goes on a line of its own: the words before it are kept whole, and both lines are used.
+    expect(wrap('Writing implementation of the login page', 12)).toEqual(['Writing', 'implementat…']);
+    expect(wrap('fix the test internationalization now', 12)).toEqual(['fix the test', 'internation…']);
+    expect(wrap('one two three four internationalization', 12)).toEqual(['one two', 'three four…']);
   });
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { skillSets, type SkillSet } from '../../../src/shared/skills.ts';
 import type { Capability, ModelTier } from '../../../src/shared/types.ts';
 import { useApi } from '../app/context.ts';
@@ -20,6 +20,15 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
   const [options, setOptions] = useState<HireOptions | null>(null);
   const [name, setName] = useState('');
   const [teamId, setTeamId] = useState('');
+  // "New team…" was chosen: the team that appears next is the one this hire is for, not the first on the list.
+  const awaited = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const made = awaited.current && teams.find((candidate) => !awaited.current!.has(candidate.id));
+    if (!made) return;
+    awaited.current = null;
+    setTeamId(made.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teams.length]);
   const [role, setRole] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
@@ -41,12 +50,15 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
       },
       (failure) => setError(failure instanceof Error ? failure.message : String(failure)),
     );
+    // What each team may be given depends on the team's own limits, so it is read again when those change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teams.length]);
+  }, [teams.map((candidate) => `${candidate.id}:${candidate.mayPush}:${candidate.maySend}`).join(',')]);
 
   const team = teams.find((candidate) => candidate.id === teamId) ?? teams[0];
   const currentLead = team?.leadId ? employees.get(team.leadId) : undefined;
   const leadTaken = Boolean(team?.selfManaged || (currentLead && !currentLead.fired));
+  // Lead is chosen only where it can be: on a team that has a lead already, the next hire is a member, and is shown as one.
+  const asLead = lead && !leadTaken;
   const available = (team && options?.availableByTeam[team.id]) || [];
   if (!options) return <div className="hire muted">{error ?? 'Loading…'}</div>;
   const noTools = capabilities.filter((capability) => available.includes(capability)).length === 0;
@@ -79,7 +91,7 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
     setError(null);
     setHired(null);
     try {
-      await api.post('/api/employees', { name: name.trim(), teamId: team.id, role: role.trim(), model, effort: effort || null, lead: lead && !leadTaken, skills, capabilities: capabilities.filter((capability) => available.includes(capability)) });
+      await api.post('/api/employees', { name: name.trim(), teamId: team.id, role: role.trim(), model, effort: effort || null, lead: asLead, skills, capabilities: capabilities.filter((capability) => available.includes(capability)) });
       setHired(name.trim());
       setName('');
     } catch (failure) {
@@ -101,7 +113,7 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
         </label>
         <label>
           Team
-          <select className="field" value={team?.id ?? ''} onChange={(event) => (event.target.value === NEW_TEAM ? onNewTeam() : setTeamId(event.target.value))}>
+          <select className="field" value={team?.id ?? ''} onChange={(event) => (event.target.value === NEW_TEAM ? (awaited.current = new Set(teams.map((candidate) => candidate.id)), onNewTeam()) : setTeamId(event.target.value))}>
             {teams.map((candidate) => (
               <option key={candidate.id} value={candidate.id}>
                 {candidate.name}
@@ -138,12 +150,12 @@ export function HireForm({ onNewTeam }: { onNewTeam(): void }) {
         </label>
         <fieldset className="kind">
           <legend>Kind</legend>
-          <label className={`choice${!lead ? ' on' : ''}`}>
-            <input type="radio" name="kind" checked={!lead} onChange={() => setLead(false)} />
+          <label className={`choice${!asLead ? ' on' : ''}`}>
+            <input type="radio" name="kind" checked={!asLead} onChange={() => setLead(false)} />
             Member
           </label>
-          <label className={`choice${lead ? ' on' : ''}`} title={leadTaken ? (team?.selfManaged ? 'A self-managed team has no lead.' : `${currentLead?.name} leads this team.`) : undefined}>
-            <input type="radio" name="kind" checked={lead && !leadTaken} disabled={leadTaken} onChange={() => setLead(true)} />
+          <label className={`choice${asLead ? ' on' : ''}`} title={leadTaken ? (team?.selfManaged ? 'A self-managed team has no lead.' : `${currentLead?.name} leads this team.`) : undefined}>
+            <input type="radio" name="kind" checked={asLead} disabled={leadTaken} onChange={() => setLead(true)} />
             Lead
           </label>
         </fieldset>

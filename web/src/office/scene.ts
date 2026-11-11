@@ -4,7 +4,7 @@
  * never touches this file, and this file never touches the engine.
  */
 import { countsCost, longestSilence } from '../../../src/shared/view.ts';
-import { ago, initials, money } from '../format.ts';
+import { ago, initials, money, untilWhen } from '../format.ts';
 import { board, liveRuns, openDecisions, spendToday } from '../model/select.ts';
 import type { Store } from '../store/reduce.ts';
 import { CHIEF, FLOOR, KITCHEN, MEETING, PALETTE, rugs, seats, SKIN, STUCK, WALL, type Rect } from './layout.ts';
@@ -56,7 +56,7 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
   add(node('rug:kitchen', 'rug', KITCHEN, { label: 'Kitchen', style: 'room', fill: '#1A1A1C', edge: '#242426', labelColor: '#6F6F78' }));
   add(node('counter', 'counter', { x: 1140, y: 506, w: 190, h: 130 }));
   const paused = store.company?.paused;
-  const until = paused?.until ? ` until ${new Date(paused.until).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : '';
+  const until = paused?.until ? ` until ${untilWhen(paused.until, now)}` : '';
   const everyoneAtDesk = [...placed.values()].every((p) => p.where === 'desk');
   const kitchenLine = paused ? `paused: ${paused.reason === 'usage_limit' ? "the plan's usage limit" : paused.reason === 'health' ? 'the machine needs attention' : 'by you'}${until}` : everyoneAtDesk ? 'nobody here · everyone is at a desk' : 'nobody here';
   add(node('kitchen-line', 'label', { x: 1130, y: 640, w: 210, h: 14 }, { text: kitchenLine, color: paused ? '#F2C76B' : '#6F6F78', size: 10 }));

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -46,5 +46,12 @@ describe('MessageBox', () => {
     expect(box.style.height).toBe('60px');
     await userEvent.clear(box);
     expect(box.style.height).toBe('20px');
+  });
+
+  it('does not send on the Enter that chooses a word being composed, which Safari reports as key 229', () => {
+    const sent: string[] = [];
+    render(<Form onSend={(text) => sent.push(text)} />);
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter', keyCode: 229 });
+    expect(sent).toEqual([]);
   });
 });
