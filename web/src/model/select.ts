@@ -3,8 +3,8 @@
  * are both made from these, so they cannot disagree.
  */
 import { reviewerFor } from '../../../src/supervisor/scheduler.ts';
-import type { Decision, Employee, Run, Task, Team } from '../../../src/shared/types.ts';
-import { ago, attention, cardLine, EARLIER_SHOWN, WHY, type Attention } from '../../../src/shared/view.ts';
+import type { Company, Decision, Employee, Run, Task, Team } from '../../../src/shared/types.ts';
+import { ago, attention, cardLine, countsCost, EARLIER_SHOWN, WHY, type Attention } from '../../../src/shared/view.ts';
 import { clock, initials, money } from '../format.ts';
 import { dayOf, type Store } from '../store/reduce.ts';
 
@@ -71,7 +71,7 @@ export function glance(store: Store, taskId: string, _now: Date): Glance | null 
   const gates = runs.findLast((run) => run.gateResults.length > 0)?.gateResults ?? [];
   if (gates.length > 0) lines.push(`Gates last time: ${gates.map((gate) => `${gate.name} ${gate.exitCode === 0 ? 'passed' : 'failed'}`).join(', ')}.`);
 
-  if (runs.length > 0) lines.push(`${money(runs.reduce((sum, run) => sum + run.costUsd, 0))} of ${money(task.capUsd)} spent over ${count(runs.length, 'run')}.`);
+  if (runs.length > 0) lines.push(countsCost(store.company) ? `${money(runs.reduce((sum, run) => sum + run.costUsd, 0))} of ${money(task.capUsd)} spent over ${count(runs.length, 'run')}.` : `${count(runs.length, 'run')} so far.`);
 
   const reported = runs.findLast((run) => authored(run) && run.outcome !== 'running' && Boolean(run.summary?.trim()));
   return { summary: task.summary?.trim() || gist(task.brief), lines, report: reported ? { by: who(reported.employeeId), text: reported.summary!.trim() } : null };
@@ -79,7 +79,7 @@ export function glance(store: Store, taskId: string, _now: Date): Glance | null 
 
 // ---------- the header ----------
 
-export type HeaderView = { company: string; clock: string; seatsBusy: number; seats: number; spentToday: number; capToday: number; openDecisions: number; paused: string | null };
+export type HeaderView = { company: string; clock: string; seatsBusy: number; seats: number; /** False where cost is not counted: then no spend is shown. */ priced: boolean; spentToday: number; capToday: number; openDecisions: number; paused: string | null };
 
 export function header(store: Store, now: Date): HeaderView {
   const paused = store.company?.paused;
@@ -89,6 +89,7 @@ export function header(store: Store, now: Date): HeaderView {
     clock: clock(now),
     seatsBusy: liveRuns(store).length,
     seats: store.company?.concurrency ?? 0,
+    priced: countsCost(store.company),
     spentToday: spendToday(store, now).company,
     capToday: store.company?.dailyCapUsd ?? 0,
     openDecisions: openDecisions(store).length,
@@ -146,14 +147,16 @@ function card(store: Store, task: Task, now: Date): BoardCard {
   const live = runs.find((run) => run.outcome === 'running');
   const decisions = openDecisions(store).filter((decision) => decision.taskId === task.id);
   const team = store.teams.get(task.teamId);
-  const spent = money(runs.reduce((sum, run) => sum + run.costUsd, 0));
+  // Where cost is not counted, a card says nothing about it.
+  const priced = countsCost(store.company);
+  const spent = priced && money(runs.reduce((sum, run) => sum + run.costUsd, 0));
   const worker = nameOf(store, live?.employeeId ?? runs.filter(authored).at(-1)?.employeeId ?? task.assigneeId ?? team?.leadId ?? null);
   const parts = (...items: (string | false | undefined)[]) => items.filter(Boolean).join(' · ');
   const children = [...store.tasks.values()].filter((child) => child.parentId === task.id);
   let line2: string;
   switch (task.state) {
     case 'queued':
-      line2 = parts(team?.name, `from ${nameOf(store, task.createdBy)}`, `P${task.priority}`, `cap ${money(task.capUsd, true)}`);
+      line2 = parts(team?.name, `from ${nameOf(store, task.createdBy)}`, `P${task.priority}`, priced && `cap ${money(task.capUsd, true)}`);
       break;
     case 'review': {
       const author = runs.filter(authored).at(-1)?.employeeId ?? task.assigneeId;
@@ -223,10 +226,10 @@ function person(store: Store, employee: Employee): Person {
   return { id: employee.id, name: employee.name, tag: employee.name.length <= 3 ? employee.name : initials(employee.name), role: employee.role, status: personStatus(store, employee.id) };
 }
 
-export function teamSummary(team: Team): string {
+export function teamSummary(team: Team, company?: Pick<Company, 'costs'> | null): string {
   const targets = [...new Set(team.repos.map((repo) => repo.mergeTarget).filter((target): target is string => target !== null))];
   const limit = team.repos.length > 0 ? `may merge: ${targets.join(', ') || 'no'}` : `may publish: ${team.mayPublish ? 'yes' : 'no'}`;
-  return `${team.selfManaged ? 'self-managed' : 'led'} · ${money(team.dailyCapUsd, true)}/day · ${limit}`;
+  return [team.selfManaged ? 'self-managed' : 'led', ...(countsCost(company) ? [`${money(team.dailyCapUsd, true)}/day`] : []), limit].join(' · ');
 }
 
 export function orgChart(store: Store, _now: Date): { chief: Person | null; teams: OrgTeam[] } {
@@ -240,7 +243,7 @@ export function orgChart(store: Store, _now: Date): { chief: Person | null; team
       return {
         id: team.id,
         name: team.name,
-        summary: teamSummary(team),
+        summary: teamSummary(team, store.company),
         lead: lead ? person(store, lead) : null,
         members: staff.filter((employee) => employee.teamId === team.id && employee.id !== team.leadId && employee.id !== chief?.id).map((employee) => person(store, employee)),
       };

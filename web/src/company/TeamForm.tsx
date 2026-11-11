@@ -5,6 +5,7 @@ import { useStore } from '../store/store.ts';
 
 /** What xcodebuild must be able to write besides the task folder (measured in the spike). The engine resolves the two $ names. */
 import { XCODE_BUILD_FOLDERS } from '../../../src/shared/teams.ts';
+import { countsCost } from '../../../src/shared/view.ts';
 
 export { XCODE_BUILD_FOLDERS };
 
@@ -22,6 +23,7 @@ export function TeamForm({ teamId, onDone }: { teamId?: string | undefined; onDo
   const api = useApi();
   const existing = useStore((store) => (teamId ? store.teams.get(teamId) : undefined), [teamId]);
   const repos = useStore((store) => [...store.repos.values()]);
+  const priced = useStore((store) => countsCost(store.company));
   const [name, setName] = useState(existing?.name ?? '');
   const [purpose, setPurpose] = useState(existing?.purpose ?? '');
   const [selfManaged, setSelfManaged] = useState(existing?.selfManaged ?? false);
@@ -90,10 +92,12 @@ export function TeamForm({ teamId, onDone }: { teamId?: string | undefined; onDo
         </label>
       </fieldset>
       <div className="row">
-        <label>
-          Spend per day
-          <input className="field" type="number" min="0" step="1" required value={dailyCapUsd} onChange={(event) => setDailyCapUsd(event.target.value)} />
-        </label>
+        {priced && (
+          <label>
+            Spend per day
+            <input className="field" type="number" min="0" step="1" required value={dailyCapUsd} onChange={(event) => setDailyCapUsd(event.target.value)} />
+          </label>
+        )}
         <label>
           Lease, in minutes
           <input className="field" type="number" min="1" step="1" required value={leaseMinutes} onChange={(event) => setLeaseMinutes(event.target.value)} />

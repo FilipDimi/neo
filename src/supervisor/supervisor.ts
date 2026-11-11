@@ -18,6 +18,7 @@ import { ADMIN_TOOLS } from '../shared/adminTools.ts';
 import { XCODE_BUILD_FOLDERS } from '../shared/teams.ts';
 import { adminTool } from './admin.ts';
 import { availableCapabilities, CAPABILITIES, commandLimits, envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
+import { countsCost } from '../shared/view.ts';
 import { budgetFor, costOf, isUsageLimit } from './budget.ts';
 import * as decisions from './decisions.ts';
 import type { TeamView } from './definition.ts';
@@ -375,7 +376,7 @@ export class Supervisor {
    */
   private sayWhichCapStoppedWork(spend: store.Spend): void {
     const company = store.getCompany(this.db);
-    if (!company || company.paused) return;
+    if (!company || company.paused || !countsCost(company)) return;
     const waiting = store.openRequests(this.db).map((request) => store.getTask(this.db, request.taskId)).filter((task): task is Task => task !== undefined && task.state !== 'blocked' && task.state !== 'done' && task.state !== 'failed');
     if (waiting.length === 0) return;
     const now = this.now();
@@ -427,8 +428,8 @@ export class Supervisor {
     const employee = store.getEmployee(this.db, request.employeeId)!;
     const company = store.getCompany(this.db)!;
     try {
-      // A task that has spent its cap does not start another run: the user decides.
-      const budget = budgetFor(task, store.spentOn(this.db, task.id));
+      // A task that has spent its cap does not start another run: the user decides. Where cost is not counted there is no cap to spend.
+      const budget = countsCost(company) ? budgetFor(task, store.spentOn(this.db, task.id)) : undefined;
       if (budget === 'exhausted') {
         this.change((tx) => tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: task.id }));
         return this.raiseCap(task, store.runsOf(this.db, task.id).at(-1));
@@ -472,9 +473,9 @@ export class Supervisor {
         teammates: everyone.filter((e) => e.teamId === team.id),
         teams,
         board: request.mode === 'route' ? companyNow(this.db, now) : undefined,
-        remainingUsd: Math.max(0, task.capUsd - store.spentOn(this.db, task.id)),
+        remainingUsd: countsCost(company) ? Math.max(0, task.capUsd - store.spentOn(this.db, task.id)) : Infinity,
         envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)),
-        maxBudgetUsd: budget,
+        ...(budget !== undefined ? { maxBudgetUsd: budget } : {}),
         mounted,
         messages,
         nameOf: (id) => this.nameOf(id),
@@ -618,6 +619,7 @@ export class Supervisor {
   private closeCapCardsOfEarlierDays(): void {
     const today = dayKey(this.now());
     const company = store.getCompany(this.db);
+    if (company && !countsCost(company)) return this.clearCapCards();
     const stale = store.openDecisions(this.db).filter((card) => {
       const key = card.kind === 'cap' && typeof card.subject?.key === 'string' ? card.subject.key.split(':') : [];
       if (key[0] !== 'daily') return false;
@@ -625,6 +627,18 @@ export class Supervisor {
       return key[2] !== today || String(capNow) !== key[3];
     });
     if (stale.length > 0) this.change((tx, now) => stale.forEach((card) => decisions.close(tx, card, now)));
+  }
+
+  /**
+   * Cost has stopped being counted while cards about it were open. A daily cap's card asks about nothing now. A task's
+   * own cap card holds a task still: it is answered the way that lets the task carry on, and nothing caps it after that.
+   */
+  private clearCapCards(): void {
+    for (const card of store.openDecisions(this.db).filter((open) => open.kind === 'cap')) {
+      const carryOn = card.taskId ? card.options.find((option) => option.effect === 'raise_cap') : undefined;
+      if (carryOn) this.answer(card.id, { optionId: carryOn.id });
+      else this.change((tx, now) => decisions.close(tx, card, now));
+    }
   }
 
   private liftPauseIfDue(): void {

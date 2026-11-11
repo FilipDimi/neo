@@ -3,7 +3,10 @@
  * web app both use these, so a card's colour and its status line mean one thing everywhere.
  * Shared with the web app: no Node imports here.
  */
-import type { Decision, Run, Task } from './types.ts';
+import type { Company, Decision, Run, Task } from './types.ts';
+
+/** True where cost is counted: caps stop work and spend is shown. The engine and the screen both ask this, and nothing else decides it. */
+export const countsCost = (company: Pick<Company, 'costs'> | null | undefined): boolean => company?.costs !== 'off';
 
 /** What a card's colour stands for. The client picks the colour. */
 export type Attention = 'none' | 'working' | 'review' | 'waiting_on_you' | 'silent' | 'over_budget';

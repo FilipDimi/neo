@@ -223,7 +223,7 @@ End with one or two plain sentences to the user: what you created and for whom, 
 
 You are briefing this task. First look at what it touches: read enough of the code or the documents to know what the work really is. Then choose one:
 
-1. Split it. This is the answer for anything bigger than one small change, and always for work that is open-ended: a review, an audit, "find and fix", "improve". Name the concrete pieces you found and call mcp__engine__propose_subtasks with one sub-task per piece. Each needs an assignee from the list below, a summary (one or two plain sentences on what it delivers, for someone who will never read the brief), a brief that stands on its own (say what you found and exactly what to change), the files or folders it owns, a done-condition someone can check, and its gates. No two sub-tasks may own the same file or folder${task.ownership.length > 0 ? `, and each must stay inside what this task owns (${task.ownership.join(', ')})` : ''}. The caps together may not exceed ${usd(input.remainingUsd)}, which is what this task has left.${gateNames.length > 0 ? ` Gates you can name: ${gateNames.join(', ')}. A sub-task's gates run on that sub-task's work alone, before the other parts are there: give it only gates that can pass with that one part done, or none.${task.gates.length > 0 ? ` The gates of this task (${task.gates.join(', ')}) are run on the whole when you put the parts together.` : ''}` : ''}
+1. Split it. This is the answer for anything bigger than one small change, and always for work that is open-ended: a review, an audit, "find and fix", "improve". Name the concrete pieces you found and call mcp__engine__propose_subtasks with one sub-task per piece. Each needs an assignee from the list below, a summary (one or two plain sentences on what it delivers, for someone who will never read the brief), a brief that stands on its own (say what you found and exactly what to change), the files or folders it owns, a done-condition someone can check, and its gates. No two sub-tasks may own the same file or folder${task.ownership.length > 0 ? `, and each must stay inside what this task owns (${task.ownership.join(', ')})` : ''}.${Number.isFinite(input.remainingUsd) ? ` The caps together may not exceed ${usd(input.remainingUsd)}, which is what this task has left.` : ' Cost is not counted in this company: give each sub-task a cap of 1 and think no more about it.'}${gateNames.length > 0 ? ` Gates you can name: ${gateNames.join(', ')}. A sub-task's gates run on that sub-task's work alone, before the other parts are there: give it only gates that can pass with that one part done, or none.${task.gates.length > 0 ? ` The gates of this task (${task.gates.join(', ')}) are run on the whole when you put the parts together.` : ''}` : ''}
 2. Do it yourself, but only when it is one small change you can finish and check in this run, and the brief does not ask you to split or assign it. Then do the work and call mcp__engine__report_done. A teammate reviews it.
 
 If the brief says who should do what, or asks for a split, that is an instruction: split.
@@ -313,7 +313,8 @@ export function buildDecidingTurn(input: {
   team: Team | null;
   repo: Repo | null;
   folder: string | null;
-  spentUsd: number;
+  /** Null where cost is not counted: then it is not part of the decision. */
+  spentUsd: number | null;
   author: { name: string; summary: string | null; gateResults: GateResult[] } | null;
   diffStat: string | null;
   patch: string | null;
@@ -334,7 +335,7 @@ export function buildDecidingTurn(input: {
 
     about
       ? [
-          `## The task it is about\n"${about.title}", on the ${team?.name ?? about.teamId} team. It has spent ${usd(input.spentUsd)} of ${usd(about.capUsd)} and was sent back ${about.reviewRounds} time${about.reviewRounds === 1 ? '' : 's'}.`,
+          `## The task it is about\n"${about.title}", on the ${team?.name ?? about.teamId} team. It ${input.spentUsd === null ? '' : `has spent ${usd(input.spentUsd)} of ${usd(about.capUsd)} and `}was sent back ${about.reviewRounds} time${about.reviewRounds === 1 ? '' : 's'}.`,
           about.brief.trim(),
           `Done when: ${about.doneCondition.trim() || 'the brief is fulfilled.'}`,
           `Gates the engine runs on it: ${gates.join(', ') || 'none'}`,

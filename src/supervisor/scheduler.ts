@@ -4,6 +4,7 @@
  * a retry) is a request; nothing starts a run any other way.
  */
 import type { Company, Employee, RunMode, RunRequest, Task, Team } from '../shared/types.ts';
+import { countsCost } from '../shared/view.ts';
 
 export type PickInput = {
   requests: RunRequest[];
@@ -53,7 +54,8 @@ export function pickNext(input: PickInput): Pick {
   const { company, tasks, teams, employees } = input;
   if (company.paused) return null;
   if (input.runningCount >= company.concurrency) return null;
-  if (company.dailyCapUsd > 0 && input.spend.company >= company.dailyCapUsd) return null;
+  const capped = countsCost(company);
+  if (capped && company.dailyCapUsd > 0 && input.spend.company >= company.dailyCapUsd) return null;
 
   const ordered = [...input.requests].sort((a, b) => {
     const ta = tasks.get(a.taskId);
@@ -69,7 +71,7 @@ export function pickNext(input: PickInput): Pick {
     const employee = employees.get(request.employeeId);
     if (!employee || employee.fired) return { problem: 'fired', request };
     const team = teams.get(task.teamId);
-    if (team && team.dailyCapUsd > 0 && (input.spend.byTeam.get(team.id) ?? 0) >= team.dailyCapUsd) continue;
+    if (capped && team && team.dailyCapUsd > 0 && (input.spend.byTeam.get(team.id) ?? 0) >= team.dailyCapUsd) continue;
     if (input.runningEmployeeIds.has(employee.id) || input.runningTaskIds.has(task.id)) continue;
     if (task.repoId && input.blockedRepoIds.has(task.repoId)) continue;
     return { request };

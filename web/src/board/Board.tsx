@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { money } from '../format.ts';
+import { countsCost } from '../../../src/shared/view.ts';
 import { board, spendToday } from '../model/select.ts';
 import { useNow, useStore } from '../store/store.ts';
 import './board.css';
@@ -11,6 +12,7 @@ export function Board() {
   const now = useNow();
   const columns = useStore((store) => board(store, now), [now]);
   const spend = useStore((store) => spendToday(store, now), [now]);
+  const priced = useStore((store) => countsCost(store.company));
   const [adding, setAdding] = useState(false);
   return (
     <div className="board-view">
@@ -45,7 +47,7 @@ export function Board() {
           <span style={{ color: 'var(--silent)' }}>silent past its lease</span>
         </div>
         <div className="grow" />
-        <div>{`Spend today by team: ${spend.byTeam.map((team) => `${team.name} ${money(team.usd)}`).join(' · ') || 'nothing yet'}`}</div>
+        {priced && <div>{`Spend today by team: ${spend.byTeam.map((team) => `${team.name} ${money(team.usd)}`).join(' · ') || 'nothing yet'}`}</div>}
       </footer>
       {adding && (
         <div className="scrim" onClick={(event) => event.target === event.currentTarget && setAdding(false)}>

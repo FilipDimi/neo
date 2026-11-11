@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { apply } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
+import { companyNow } from '../../src/supervisor/companyNow.ts';
 import type { ToSupervisor } from '../../src/worker/protocol.ts';
 import { exit, scripted } from '../fixtures/scriptedLink.ts';
 import { employee, plus, run, T0, team, world, type World } from '../helpers.ts';
@@ -265,5 +266,70 @@ describe('daily caps', () => {
     await w.sup.settle();
     await w.sup.tick();
     expect(store.openDecisions(w.db)).toEqual([]);
+  });
+});
+
+describe('a company where cost is not counted', () => {
+  // On a subscription the figures are list prices, not a bill: the plan's own limit is what stops work, and nothing else should.
+  it('stops no task at its cap and gives no run a budget', async () => {
+    const fake = scripted();
+    const w = (open = world(fake.spawn, { company: { costs: 'off' } }));
+    const task = newTask(w);
+    apply(w.db, (tx) => tx.emit({ kind: 'run_ended', run: run({ id: 'earlier', taskId: task.id, outcome: 'done', costUsd: 5 }), teamId: 'team1' }));
+    await w.sup.tick();
+    expect(fake.workers).toHaveLength(1);
+    expect(fake.workers[0]!.job.maxBudgetUsd).toBeUndefined();
+    expect(store.openDecisions(w.db)).toEqual([]);
+  });
+
+  it('stops nothing at a daily cap, the company\'s or a team\'s, and raises no card about one', async () => {
+    const fake = scripted((worker) => {
+      worker.say(started);
+      worker.say(usage(3));
+      worker.say({ t: 'tool', askId: 'done', name: 'report_done', input: { summary: 'Done.' } });
+      worker.say(exit('done'));
+    });
+    const w = (open = world(fake.spawn, { company: { costs: 'off', dailyCapUsd: 1 }, teams: [team({ selfManaged: true, dailyCapUsd: 0.5 })] }));
+    newTask(w, { title: 'The first' });
+    await w.sup.tick();
+    await w.sup.settle();
+    newTask(w, { title: 'The second', assigneeId: 'emp2' });
+    await w.sup.tick();
+    await w.sup.settle();
+    expect(fake.workers).toHaveLength(2);
+    expect(store.openDecisions(w.db)).toEqual([]);
+  });
+
+  it('clears the cap cards that are open when cost stops being counted, and the work behind them carries on', async () => {
+    const fake = scripted((worker) => {
+      if (fake.workers.length > 1) return;
+      worker.say(started);
+      worker.say(usage(1.2));
+      worker.say({ t: 'tool', askId: 'done', name: 'report_done', input: { summary: 'Done.' } });
+      worker.say(exit('done'));
+    });
+    const w = (open = world(fake.spawn, { company: { dailyCapUsd: 1 } }));
+    // One task has spent its own cap; then a run spends the company's day; then a third task waits behind that.
+    const stopped = newTask(w, { title: 'Over its own cap', assigneeId: 'emp2' });
+    apply(w.db, (tx) => tx.emit({ kind: 'run_ended', run: run({ id: 'earlier', taskId: stopped.id, employeeId: 'emp2', outcome: 'done', costUsd: 2 }), teamId: 'team1' }));
+    await w.sup.tick();
+    newTask(w, { title: 'The first' });
+    await w.sup.tick();
+    await w.sup.settle();
+    const waiting = newTask(w, { title: 'Behind the daily cap', assigneeId: 'emp2' });
+    await w.sup.tick();
+    expect(store.openDecisions(w.db).map((card) => [card.kind, card.taskId])).toEqual([['cap', stopped.id], ['cap', null]]);
+    expect(fake.workers).toHaveLength(1);
+    apply(w.db, (tx) => tx.emit({ kind: 'company_changed', company: { ...store.getCompany(w.db)!, costs: 'off' } }));
+    await w.sup.tick();
+    await w.sup.tick();
+    expect(store.openDecisions(w.db)).toEqual([]);
+    expect(store.getTask(w.db, stopped.id)!.state).not.toBe('blocked');
+    // Both carry on, one after the other: they are the same employee's.
+    expect(store.liveRuns(w.db).map((live) => live.taskId)).toHaveLength(1);
+    expect([stopped.id, waiting.id]).toContain(store.liveRuns(w.db)[0]!.taskId);
+    expect(store.openRequests(w.db)).toHaveLength(1);
+    // And what the chief of staff is told about the company no longer has a spend line in it.
+    expect(companyNow(w.db, w.clock.now())).not.toMatch(/Spent|\$/);
   });
 });

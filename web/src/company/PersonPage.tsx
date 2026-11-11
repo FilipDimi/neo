@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { Capability, Employee, Message, Run } from '../../../src/shared/types.ts';
 import { useApi } from '../app/context.ts';
+import { countsCost } from '../../../src/shared/view.ts';
 import { money } from '../format.ts';
 import { MessageBox } from '../frame/MessageBox.tsx';
 import { Prose } from '../frame/Prose.tsx';
@@ -21,6 +22,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
   const team = useStore((store) => (employee ? store.teams.get(employee.teamId) : undefined), [employee?.teamId]);
   const status = useStore((store) => personStatus(store, employeeId), [employeeId]);
   const tasks = useStore((store) => store.tasks);
+  const priced = useStore((store) => countsCost(store.company));
   // What was said between the user and this person, most recent last.
   const talk = useStore(
     (store) =>
@@ -125,7 +127,8 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
             </button>
           </p>
           <p className="muted">
-            {employee.model} · {employee.effort ? `${employee.effort} effort` : "the model's own effort"} · {money(detail?.spentToday ?? 0)} today
+            {employee.model} · {employee.effort ? `${employee.effort} effort` : "the model's own effort"}
+            {priced ? ` · ${money(detail?.spentToday ?? 0)} today` : ''}
           </p>
           <p className="muted">Tools: {employee.capabilities.map((capability) => CAPABILITY_LABEL[capability] ?? capability).join(', ') || 'none'}</p>
           <p className="muted">Skills: {skillsInBrief(employee.skills) || 'none'}</p>
@@ -239,7 +242,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
         {(detail?.runs ?? []).length === 0 && <p className="muted">No runs yet.</p>}
         {[...(detail?.runs ?? [])].reverse().map((run) => (
           <div key={run.id} className="run">
-            <span>{`${run.mode} · ${run.outcome} · ${money(run.costUsd)}`}</span>
+            <span>{`${run.mode} · ${run.outcome}${priced ? ` · ${money(run.costUsd)}` : ''}`}</span>
             <span className="muted">{tasks.get(run.taskId)?.title ?? ''}</span>
           </div>
         ))}

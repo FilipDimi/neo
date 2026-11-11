@@ -16,6 +16,14 @@ describe('Header', () => {
     expect(screen.getByRole('button', { name: 'Open the decision deck, 4 waiting' }).textContent).toBe('4 decisions');
   });
 
+  it('says nothing about spend in a company where cost is not counted', () => {
+    const { store, now } = storyAt('cards_open');
+    mount(<Header />, { store: { ...store, company: { ...store.company!, costs: 'off' } }, now });
+    expect(screen.getByText(/seats busy$/)).toBeTruthy();
+    expect(screen.queryByText(/Today/)).toBeNull();
+    expect(document.body.textContent).not.toContain('$');
+  });
+
   it('the decisions button opens the deck, and the pills switch the view', async () => {
     const { store, now } = storyAt('cards_open');
     const ui = fakeUi('board');

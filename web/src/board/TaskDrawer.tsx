@@ -5,6 +5,7 @@ import { useApi, useUi, type TaskTab } from '../app/context.ts';
 import { money } from '../format.ts';
 import { MessageBox } from '../frame/MessageBox.tsx';
 import { Prose } from '../frame/Prose.tsx';
+import { countsCost } from '../../../src/shared/view.ts';
 import { glance, liveRuns } from '../model/select.ts';
 import { useStore } from '../store/store.ts';
 
@@ -59,6 +60,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   const children = useStore((store) => [...store.tasks.values()].filter((child) => child.parentId === taskId), [taskId]);
   const runs = useStore((store) => [...store.runs.values()].filter((run) => run.taskId === taskId), [taskId]);
   const employees = useStore((store) => store.employees);
+  const priced = useStore((store) => countsCost(store.company));
   const seen = useStore((store) => glance(store, taskId, new Date(0)), [taskId]);
   const team = useStore((store) => (task ? store.teams.get(task.teamId) : undefined), [task?.teamId]);
   const live = useStore((store) => liveRuns(store).find((run) => run.taskId === taskId), [taskId]);
@@ -200,7 +202,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
           <section>
           {runs.map((run) => (
             <div key={run.id} className="run">
-              <span>{`${run.mode} · ${nameOf(run.employeeId)} · ${run.outcome}${run.reason ? ` (${run.reason})` : ''} · ${money(run.costUsd)}`}</span>
+              <span>{`${run.mode} · ${nameOf(run.employeeId)} · ${run.outcome}${run.reason ? ` (${run.reason})` : ''}${priced ? ` · ${money(run.costUsd)}` : ''}`}</span>
               {run.gateResults.map((gate, index) => (
                 <span key={index} className={gate.exitCode === 0 ? 'gate ok' : 'gate bad'} title={gate.output}>
                   {gate.name} {gate.exitCode === 0 ? 'passed' : 'failed'}

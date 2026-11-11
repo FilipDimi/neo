@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { ADMIN_DESCRIPTION, ADMIN_INPUT, ADMIN_TOOLS } from '../shared/adminTools.ts';
 import type { Decision, Employee, Message, Run, Task, Team } from '../shared/types.ts';
+import { countsCost } from '../shared/view.ts';
 
 export type Call = <T>(method: 'GET' | 'POST', route: string, body?: unknown) => Promise<T>;
 export type Ctx = {
@@ -32,7 +33,7 @@ Setup: company_setup reads the whole setup (teams, people, models, caps, rules, 
 Ask the user before answer_card unless they named the card and the button themselves: a card is a decision that is theirs (a merge, a raised cap, a tool handed to an employee). Ask before new_task unless they asked for that task. chat and message cost a little and can start work; use now, tasks and cards for plain questions about what is going on, which cost nothing.
 An employee's reply can take from a few seconds to a few minutes. When a tool says no reply has come yet, tell the user so and call replies later; do not send the message again.`;
 
-type Snapshot = { company: { name: string; chiefOfStaffId: string | null; adminId?: string | null } | null; teams: Team[]; employees: Employee[]; tasks: Task[]; runs: Run[]; decisions: Decision[]; messages: Message[] };
+type Snapshot = { company: { name: string; chiefOfStaffId: string | null; adminId?: string | null; costs?: 'on' | 'off' } | null; teams: Team[]; employees: Employee[]; tasks: Task[]; runs: Run[]; decisions: Decision[]; messages: Message[] };
 
 /** A problem that is the caller's to fix, said in words it can act on. */
 class Refused extends Error {}
@@ -162,12 +163,13 @@ export const TOOLS: Tool[] = [
     description: 'The tasks on the boards: what is open, and what finished today. Costs nothing.',
     input: {},
     run: async (_args, ctx) => {
-      const { tasks, teams, employees, runs } = await ctx.call<Snapshot>('GET', '/api/snapshot');
+      const { company, tasks, teams, employees, runs } = await ctx.call<Snapshot>('GET', '/api/snapshot');
+      const priced = countsCost(company);
       const work = tasks.filter((task) => task.kind === 'work');
       if (work.length === 0) return 'There is no task on any board.';
       const cost = (taskId: string) => runs.filter((run) => run.taskId === taskId).reduce((sum, run) => sum + run.costUsd, 0);
       return work
-        .map((task) => `${task.id}  "${task.title}"  ${teams.find((team) => team.id === task.teamId)?.name ?? task.teamId} · ${task.state}${task.assigneeId ? ` · ${employees.find((employee) => employee.id === task.assigneeId)?.name ?? task.assigneeId}` : ''} · ${usd(cost(task.id))}`)
+        .map((task) => `${task.id}  "${task.title}"  ${teams.find((team) => team.id === task.teamId)?.name ?? task.teamId} · ${task.state}${task.assigneeId ? ` · ${employees.find((employee) => employee.id === task.assigneeId)?.name ?? task.assigneeId}` : ''}${priced ? ` · ${usd(cost(task.id))}` : ''}`)
         .join('\n');
     },
   },
@@ -176,7 +178,8 @@ export const TOOLS: Tool[] = [
     description: 'One task in full: its brief, where it stands, each run with who did it and what they reported, its sub-tasks, and any card waiting on it. Costs nothing.',
     input: { id: z.string().min(1).describe('The task\'s id, from tasks.') },
     run: async (args, ctx) => {
-      const { employees } = await ctx.call<Snapshot>('GET', '/api/snapshot');
+      const { company, employees } = await ctx.call<Snapshot>('GET', '/api/snapshot');
+      const priced = countsCost(company);
       const name = (id: string) => employees.find((employee) => employee.id === id)?.name ?? id;
       const { task, children, runs, decisions } = await ctx.call<{ task: Task; children: Task[]; runs: Run[]; decisions: Decision[] }>('GET', `/api/tasks/${encodeURIComponent(text(args.id))}`);
       return [
@@ -184,7 +187,7 @@ export const TOOLS: Tool[] = [
         task.brief.trim(),
         task.doneCondition.trim() ? `Done when: ${task.doneCondition.trim()}` : '',
         children.length > 0 ? `Sub-tasks:\n${children.map((child) => `- ${child.id} "${child.title}" (${child.state})`).join('\n')}` : '',
-        runs.length > 0 ? `Runs:\n${runs.map((run) => `- ${run.mode} by ${name(run.employeeId)}: ${run.outcome}${run.reason ? ` (${run.reason})` : ''}, ${usd(run.costUsd)}${run.summary ? `\n  ${run.summary.trim().replace(/\n/g, '\n  ')}` : ''}`).join('\n')}` : 'No run yet.',
+        runs.length > 0 ? `Runs:\n${runs.map((run) => `- ${run.mode} by ${name(run.employeeId)}: ${run.outcome}${run.reason ? ` (${run.reason})` : ''}${priced ? `, ${usd(run.costUsd)}` : ''}${run.summary ? `\n  ${run.summary.trim().replace(/\n/g, '\n  ')}` : ''}`).join('\n')}` : 'No run yet.',
         decisions.length > 0 ? `Waiting on you:\n${decisions.map((card) => `- card ${card.id}: ${card.text}`).join('\n')}` : '',
       ]
         .filter(Boolean)

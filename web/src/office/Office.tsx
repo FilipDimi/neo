@@ -103,7 +103,7 @@ export function Office() {
       <div className="office-strip" data-testid="office-strip">
         <div className="company">{top.company}</div>
         <div className="muted">
-          {top.clock} · {top.seatsBusy} of {top.seats} seats busy · {money(top.spentToday)} today
+          {top.clock} · {top.seatsBusy} of {top.seats} seats busy{top.priced ? ` · ${money(top.spentToday)} today` : ''}
         </div>
         {top.paused && <div className="paused">{top.paused}</div>}
       </div>

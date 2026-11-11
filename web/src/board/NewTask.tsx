@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useApi } from '../app/context.ts';
+import { countsCost } from '../../../src/shared/view.ts';
 import { useStore } from '../store/store.ts';
 
 /** A task typed straight onto the board. On a led team the lead briefs it unless someone is chosen. */
@@ -8,6 +9,7 @@ export function NewTask({ onDone }: { onDone(): void }) {
   const teams = useStore((store) => [...store.teams.values()]);
   const people = useStore((store) => [...store.employees.values()].filter((employee) => !employee.fired));
   const repos = useStore((store) => store.repos);
+  const priced = useStore((store) => countsCost(store.company));
   const chiefTeam = useStore((store) => (store.company?.chiefOfStaffId ? store.employees.get(store.company.chiefOfStaffId)?.teamId : undefined));
   const choices = teams.filter((team) => team.id !== chiefTeam);
   const [teamId, setTeamId] = useState(choices[0]?.id ?? '');
@@ -88,10 +90,12 @@ export function NewTask({ onDone }: { onDone(): void }) {
             <option value="3">P3</option>
           </select>
         </label>
-        <label>
-          Cap
-          <input className="field" type="number" min="0.1" step="0.1" required value={cap} onChange={(event) => setCap(event.target.value)} />
-        </label>
+        {priced && (
+          <label>
+            Cap
+            <input className="field" type="number" min="0.1" step="0.1" required value={cap} onChange={(event) => setCap(event.target.value)} />
+          </label>
+        )}
       </div>
       {repo && repo.gates.length > 0 && (
         <fieldset>

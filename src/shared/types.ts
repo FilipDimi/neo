@@ -47,6 +47,12 @@ export const Company = z.object({
   chiefOfStaffId: id.nullable(),
   /** The admin: the one who changes the company's setup and the app itself from a conversation (Morpheus). Absent in rows written before there was one. */
   adminId: id.nullable().optional(),
+  /**
+   * Whether cost counts here. 'off' is for a company on a subscription, where the figures are list prices and not a
+   * bill: no cap stops work, no card asks about one, and no spend is shown. The plan's own limit still pauses the
+   * company. Absent means 'on'.
+   */
+  costs: z.enum(['on', 'off']).optional(),
   /** Who is asked first when a card is raised: the user, or the chief of staff on the user's behalf. Absent means the user. */
   decider: z.enum(['user', 'chief']).optional(),
   paused: z.object({ reason: z.enum(['usage_limit', 'health', 'user']), until: iso.nullable() }).nullable(),

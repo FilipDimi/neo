@@ -5,7 +5,7 @@
  */
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
-import { ago, WHY } from '../shared/view.ts';
+import { ago, countsCost, WHY } from '../shared/view.ts';
 
 const SHOWN_PER_TEAM = 12;
 
@@ -51,6 +51,8 @@ export function companyNow(db: Db, now: Date): string {
   lines.push(live.length === 0 ? 'Nobody is running right now.' : `Running right now: ${live.map((run) => name(run.employeeId)).join(', ')}.`);
   const waiting = cards.filter((card) => !card.deciderId).length;
   lines.push(waiting === 0 ? 'No decision is waiting for the user.' : `${waiting} decision${waiting === 1 ? ' is' : 's are'} waiting for the user.`);
+  // Where cost is not counted it is not said either: the figure would be a list price nobody pays.
+  if (!countsCost(company)) return lines.join('\n');
   const spent = store.spendToday(db, now).company;
   lines.push(`Spent today: $${spent.toFixed(2)}${company && company.dailyCapUsd > 0 ? ` of $${company.dailyCapUsd.toFixed(2)}` : ''}.`);
   return lines.join('\n');

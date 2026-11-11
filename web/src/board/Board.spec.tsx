@@ -64,6 +64,14 @@ describe('Board', () => {
     expect(screen.getByText('+ 3 more')).toBeTruthy();
   });
 
+  it('leaves the spend out of its footer in a company where cost is not counted', () => {
+    const { store, now } = storyAt('cards_answered');
+    mount(<Board />, { store: { ...store, company: { ...store.company!, costs: 'off' } }, now });
+    expect(screen.getByText(/silent past its lease/)).toBeTruthy();
+    expect(screen.queryByText(/Spend today/)).toBeNull();
+    expect(document.body.textContent).not.toContain('$');
+  });
+
   it('shows the legend and the spend by team in its footer', () => {
     const { store, now } = storyAt('cards_answered');
     mount(<Board />, { store, now });

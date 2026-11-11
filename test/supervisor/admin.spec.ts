@@ -75,6 +75,17 @@ describe("Morpheus's tools", () => {
     expect(await use('update_company', { decider: 'user' })).toMatch(/decisions come to the user \(went to .* first\)/);
   });
 
+  it('can stop counting cost: nothing is stopped for it, and the setup no longer speaks of caps', async () => {
+    const { db, ctx, use } = setup();
+    expect(await use('update_company', { costs: 'off' })).toMatch(/cost is no longer counted: no cap stops work, and no spend is shown/);
+    expect(store.getCompany(db)!.costs).toBe('off');
+    const text = companySetup(ctx);
+    expect(text).not.toMatch(/\$\d/);
+    expect(text).toMatch(/Cost is not counted: nothing is stopped for it and it is not shown\./);
+    expect(await use('update_company', { costs: 'on' })).toMatch(/cost is counted again/);
+    expect(companySetup(ctx)).toMatch(/Daily cap \$10/);
+  });
+
   it('removes a team and fires someone, and says who went', async () => {
     const { db, use } = setup();
     expect(await use('fire', { employee: 'api-engineer' })).toMatch(/Fired api-engineer/);

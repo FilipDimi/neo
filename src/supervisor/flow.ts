@@ -18,6 +18,7 @@ import { isMerged, landOn, mergeInto } from '../git/merge.ts';
 import { outside } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
 import type { Decision, Employee, Finding, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
+import { countsCost } from '../shared/view.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import * as decisions from './decisions.ts';
@@ -132,7 +133,7 @@ export class Flow {
       team: team ?? null,
       repo: site?.repo ?? null,
       folder: about ? (about.folder ?? path.join(this.host.paths.folders, about.id)) : null,
-      spentUsd: about ? store.spentOn(this.db, about.id) : 0,
+      spentUsd: about && countsCost(store.getCompany(this.db)) ? store.spentOn(this.db, about.id) : null,
       author: last ? { name: store.getEmployee(this.db, last.employeeId)?.name ?? 'An employee', summary: last.summary, gateResults: last.gateResults } : null,
       diffStat: diff?.[0].text ?? null,
       patch: diff?.[1] ?? null,
@@ -179,7 +180,7 @@ export class Flow {
     const parent = store.getTask(this.db, run.taskId)!;
     const team = store.getTeam(this.db, parent.teamId)!;
     const repo = (parent.repoId && store.getRepo(this.db, parent.repoId)) || null;
-    const checked = validateProposal({ parent, team, employees: store.allEmployees(this.db), repo, remainingUsd: parent.capUsd - store.spentOn(this.db, parent.id), subtasks });
+    const checked = validateProposal({ parent, team, employees: store.allEmployees(this.db), repo, remainingUsd: countsCost(store.getCompany(this.db)) ? parent.capUsd - store.spentOn(this.db, parent.id) : Infinity, subtasks });
     if (!checked.ok) {
       const refusals = (this.refusedProposals.get(run.id) ?? 0) + 1;
       this.refusedProposals.set(run.id, refusals);

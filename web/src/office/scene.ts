@@ -3,7 +3,7 @@
  * The drawing layer turns each node into pixels and knows nothing else; replacing the artwork
  * never touches this file, and this file never touches the engine.
  */
-import { longestSilence } from '../../../src/shared/view.ts';
+import { countsCost, longestSilence } from '../../../src/shared/view.ts';
 import { ago, initials, money } from '../format.ts';
 import { board, liveRuns, openDecisions, spendToday } from '../model/select.ts';
 import type { Store } from '../store/reduce.ts';
@@ -147,7 +147,7 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
   const things = decisions.length === 0 ? 'Nothing on your desk.' : `${WORDS[decisions.length] ?? decisions.length} thing${decisions.length === 1 ? '' : 's'} on your desk.`;
   const sentence = [
     silence ? `Longest silence on the floor ${ago(new Date(now.getTime() - silence.seconds * 1000).toISOString(), now)} against a ${silence.leaseMinutes}-minute lease.` : 'Nobody is running right now.',
-    `Spend today ${money(spend.company)} of ${money(store.company?.dailyCapUsd ?? 0, true)}${spend.byTeam.length > 0 ? `: ${spend.byTeam.map((team) => `${team.name} ${money(team.usd)}`).join(', ')}` : ''}.`,
+    countsCost(store.company) ? `Spend today ${money(spend.company)} of ${money(store.company?.dailyCapUsd ?? 0, true)}${spend.byTeam.length > 0 ? `: ${spend.byTeam.map((team) => `${team.name} ${money(team.usd)}`).join(', ')}` : ''}.` : '',
     failed > 0 ? `${failed} task${failed === 1 ? '' : 's'} failed today.` : '',
     things,
   ]

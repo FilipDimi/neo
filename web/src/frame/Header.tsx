@@ -42,10 +42,14 @@ export function Header() {
       {top.paused && <div className="paused">{top.paused}</div>}
       <div className="grow" />
       <ViewPills />
-      <div className="rule" />
-      <div className="muted">
-        Today <strong>{money(top.spentToday)}</strong> of {money(top.capToday, true)}
-      </div>
+      {top.priced && (
+        <>
+          <div className="rule" />
+          <div className="muted">
+            Today <strong>{money(top.spentToday)}</strong> of {money(top.capToday, true)}
+          </div>
+        </>
+      )}
       <DecisionsButton label={(count) => `${count} decision${count === 1 ? '' : 's'}`} />
     </header>
   );

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { company, decision, employee, plus, run, T0, task, team } from '../../../test/rows.ts';
 import { storyAt, taskTitled } from '../fixtures/story.ts';
 import { fromSnapshot, type Snapshot } from '../store/reduce.ts';
-import { board, deck, gist, glance, header, orgChart, spendToday } from './select.ts';
+import { board, deck, gist, glance, header, orgChart, spendToday, teamSummary } from './select.ts';
 
 const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({ version: 1, company: company(), repos: [], teams: [team()], employees: [employee()], tasks: [], runs: [], requests: [], decisions: [], messages: [], health: null, planUsage: null, spend: { company: 0, byTeam: {}, byEmployee: {} }, lastEventId: 1, now: T0.toISOString(), ...over });
 const column = (store: ReturnType<typeof fromSnapshot>, key: string, now = T0) => board(store, now).find((c) => c.key === key)!;
@@ -226,5 +226,24 @@ describe('a task at a glance', () => {
     const work = run({ id: 'w', outcome: 'done', endedAt: T0.toISOString(), summary: 'Added.' });
     const review = run({ id: 'r', mode: 'review', employeeId: 'lead', outcome: 'done', reason: 'sent_back', endedAt: T0.toISOString(), findings: [{ severity: 'blocking', file: 'a', title: 'x', why: '', fix: '' }, { severity: 'blocking', file: 'b', title: 'y', why: '', fix: '' }, { severity: 'minor', file: 'c', title: 'z', why: '', fix: '' }] });
     expect(at({ tasks: [task({ state: 'running', assigneeId: 'emp1', reviewRounds: 1 })], runs: [work, review] }).lines).toContain('Sent back once: Priya found 2 things that must be fixed.');
+  });
+});
+
+describe('a company where cost is not counted', () => {
+  const quiet = (over: Partial<Snapshot>) => fromSnapshot(snapshot({ company: company({ costs: 'off' }), ...over }));
+
+  it('shows no money anywhere: not in the header, on a card, in a task at a glance, or beside a team', () => {
+    const done = run({ outcome: 'done', endedAt: T0.toISOString(), costUsd: 1.5, summary: 'Added.' });
+    const store = quiet({ tasks: [task({ state: 'done', assigneeId: 'emp1', updatedAt: T0.toISOString() }), task({ id: 'q', state: 'queued', createdBy: 'user' })], runs: [done] });
+    expect(header(store, T0).priced).toBe(false);
+    const cards = board(store, T0).flatMap((column) => column.cards);
+    expect(cards.map((card) => `${card.line2} ${card.line3 ?? ''}`).join(' ')).not.toMatch(/\$|cap /);
+    expect(glance(store, 'task1', T0)!.lines).toEqual(['Done.', '1 run so far.']);
+    expect(teamSummary(team(), store.company)).toBe('led · may publish: no');
+    // Counted, all of it is there as before.
+    const counted = fromSnapshot(snapshot({ tasks: [task({ state: 'done', assigneeId: 'emp1', updatedAt: T0.toISOString() })], runs: [done] }));
+    expect(header(counted, T0).priced).toBe(true);
+    expect(glance(counted, 'task1', T0)!.lines).toEqual(['Done.', '$1.50 of $2.00 spent over 1 run.']);
+    expect(teamSummary(team(), counted.company)).toBe('led · $20/day · may publish: no');
   });
 });
