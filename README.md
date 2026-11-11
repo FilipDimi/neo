@@ -43,7 +43,17 @@ The company in `~/.virtual-startup` runs from a release, a copy of one commit un
 
 ## Tools for a Claude session
 
-The company can be worked from any Claude session on this Mac, and so from a phone through one: `src/mcp/` is a small server with ten tools. `now`, `tasks`, `task`, `cards` and `replies` read and cost nothing. `chat` talks to the chief of staff and `message` to one employee by name; both wait for the reply. `answer_card` presses a button on a card and `new_task` puts work on a team; a session is told to ask first for both. `start` starts the company when it is not running, as a process of its own that outlives the session.
+The company can be worked from any Claude session on this Mac, and so from a phone through one: `src/mcp/` is a small server with twenty tools. `now`, `tasks`, `task`, `cards` and `replies` read and cost nothing. `chat` talks to the chief of staff, `morpheus` to the admin and `message` to one employee by name; all three wait for the reply. `answer_card` presses a button on a card and `new_task` puts work on a team; a session is told to ask first for both. `start` starts the company when it is not running, as a process of its own that outlives the session.
+
+The other nine are the setup tools: `company_setup` reads the whole setup, and `create_team`, `update_team`, `remove_team`, `hire`, `update_employee`, `fire`, `update_company` and `set_gates` change it at once. They take plain words (a team or a person by name, a model by its label, a set of skills by its name) and refuse in words that say what would work. They are the same nine the admin has inside the company (`src/supervisor/admin.ts`, reached over `POST /api/admin/<tool>`), where only the employee named as `adminId` is offered them, and only in a conversation.
+
+## The admin, and who designs
+
+Morpheus is the admin, in two places. Inside the company he is an employee on the Admin team who changes the setup when asked on his page or through the `morpheus` tool. In the Claude app there is a pinned chat called `morpheus`, which does the same with the setup tools and is also where the app's own code is changed: on a branch, tested, and merged, pushed and released only on the user's word, with the company restarted when nobody is running. Code is not changed from inside the company.
+
+The design team is two more pinned chats, `designer-1` and `designer-2`. They are not employees of the engine, because only a session of the Claude desktop app is offered the tools that edit a design canvas (`CLAUDE_CODE_ENTRYPOINT=claude-desktop`; measured). They work on the canvas itself, keep a copy of every board under `design-kit/` (ignored by git) for the people who build, and hand finished work to a team with `new_task`. The engine neither runs nor budgets them.
+
+A team can be removed (`Team.removed`): its people are fired, it leaves every list and the screen, and it is refused while it has unfinished work. A team that builds with Xcode (`buildsWithXcode`, shown by its build folders) gets gates that can run `xcodebuild`: Swift's and Xcode's own sandboxes are switched off inside the gate's, and the test manager's socket, a pseudo-terminal and signals to the test runner are allowed (`src/git/gates.ts`).
 
 The tools hold nothing and decide nothing: each is a call to the engine's own API on this machine, with the same token the screen uses. A session opened in this folder is offered them through `.mcp.json`. To have them in every session, as jarvis is, registered under the chief of staff's name so that "ask Neo" finds them:
 

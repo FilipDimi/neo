@@ -25,7 +25,7 @@ export type Tool = { name: string; description: string; input: z.ZodRawShape; ru
 export const INSTRUCTIONS = `This is the user's line to their chief of staff (Neo, unless they renamed it) and the company it runs. When the user says "ask Neo", "tell Neo" or names the company, use chat: Neo knows every board and turns a request into tasks on the right team. These tools reach a company of AI employees that runs on this Mac: teams with boards of tasks, a chief of staff who answers questions and turns requests into tasks, and cards for the decisions that are the user's alone. The same company is on screen at http://127.0.0.1:4317.
 
 Read: now (every board, who is running, cards waiting, spend today), tasks, task (one task with its runs), cards, replies (what employees last said to the user).
-Talk: chat (the chief of staff: questions about the company, and requests it turns into tasks on the right team), morpheus (the admin: changes to teams, people, models, caps, rules and gates, and bugs or features for the app itself), message (one employee by name: answered as a conversation; work that is asked for goes on that employee's own team's board).
+Talk: chat (the chief of staff: questions about the company, and requests it turns into tasks on the right team), morpheus (the admin, as an employee: questions about the setup, and changes to teams, people, models, caps, rules and gates said in plain words), message (one employee by name: answered as a conversation; work that is asked for goes on that employee's own team's board).
 Act: answer_card (presses one button of a card), new_task (puts a task straight on a team's board), start (starts the company when a tool says it is not running).
 Setup: company_setup reads the whole setup (teams, people, models, caps, rules, gates); create_team, update_team, remove_team, hire, update_employee, fire, update_company and set_gates change it at once. Use a setup tool only when the user asked for that change, and read company_setup first.
 
@@ -94,7 +94,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'morpheus',
-    description: "Says something to Morpheus, the admin of this company app, and waits for the reply. Morpheus changes the setup at once (teams, people, models, efforts, tools, skills, caps, rules, gates) and turns a bug or a feature for the app into a task on his own board.",
+    description: "Says something to Morpheus, the admin of this company app, and waits for the reply. Morpheus changes the setup at once (teams, people, models, efforts, tools, skills, caps, rules, gates). He does not change the app's code: a bug or a feature for the app goes to the morpheus chat in the Claude app.",
     input: { text: z.string().min(1).describe('What to say, in the user\'s own words where they gave them.') },
     run: async (args, ctx) => {
       const { company, employees } = await ctx.call<Snapshot>('GET', '/api/snapshot');
