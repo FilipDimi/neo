@@ -137,6 +137,21 @@ export type Task = z.infer<typeof Task>;
 export const GateResult = z.object({ name: z.string(), command: z.string(), exitCode: z.number(), output: z.string(), durationMs: z.number() });
 export type GateResult = z.infer<typeof GateResult>;
 
+/**
+ * One thing a reviewer found. Blocking means it must be fixed before the work lands; minor is worth
+ * knowing and holds nothing up. Each says where, why it matters and what would fix it, so its author
+ * can act on it and the next review can check it.
+ */
+export const Finding = z.object({
+  severity: z.enum(['blocking', 'minor']),
+  file: z.string(),
+  line: z.number().int().positive().nullable().optional(),
+  title: z.string().min(1),
+  why: z.string(),
+  fix: z.string(),
+});
+export type Finding = z.infer<typeof Finding>;
+
 export const Run = z.object({
   id,
   taskId: id,
@@ -163,6 +178,8 @@ export const Run = z.object({
   commit: z.string().nullable(),
   diffLines: z.number().nullable(),
   gateResults: z.array(GateResult),
+  /** On a review: what the reviewer found. Absent on runs from before reviews gave findings. */
+  findings: z.array(Finding).optional(),
 });
 export type Run = z.infer<typeof Run>;
 

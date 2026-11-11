@@ -81,7 +81,7 @@ export class Supervisor {
   /** Workers of live runs, by run id. A run with no entry here is over as far as this process knows. */
   private readonly links = new Map<string, WorkerLink>();
   /** How a run will be recorded when its worker exits, when the supervisor already knows (a question, a refusal). */
-  private readonly planned = new Map<string, { outcome: RunOutcome; reason: string }>();
+  private readonly planned = new Map<string, { outcome: RunOutcome; reason: string; record?: Partial<Run> }>();
   private readonly reports = new Map<string, string>();
   /** Engine work in flight per task (commits, gates, merges): such a task is not idle. */
   private readonly busy = new Map<string, number>();
@@ -118,7 +118,7 @@ export class Supervisor {
       gateLimits: (folder, team) => this.gateLimits(folder, team),
       ...(options.gateHeartbeatMs !== undefined ? { gateHeartbeatMs: options.gateHeartbeatMs } : {}),
       engineWork: (taskId, work) => this.engineWork(taskId, work),
-      planRunEnd: (runId, outcome, reason) => void this.planned.set(runId, { outcome, reason }),
+      planRunEnd: (runId, outcome, reason, record) => void this.planned.set(runId, { outcome, reason, ...(record && { record }) }),
     });
   }
 
@@ -166,7 +166,7 @@ export class Supervisor {
       // A run whose end was already decided (a verdict given, a question asked, a call refused) is written down as it
       // would have ended: the next start would otherwise call it lost and forget what it had said.
       const planned = this.planned.get(runId);
-      if (planned) decided.push(() => this.finishRun(runId, planned.outcome, planned.reason, { summary: this.reports.get(runId) ?? run.summary }));
+      if (planned) decided.push(() => this.finishRun(runId, planned.outcome, planned.reason, { ...planned.record, summary: this.reports.get(runId) ?? run.summary }));
       else this.chargeUnfinishedTurn(run);
     }
     this.links.clear();
@@ -543,7 +543,7 @@ export class Supervisor {
         const planned = this.planned.get(runId);
         // The SDK stopped the session at the run's budget: not a failure to retry, a cap for the user to decide on.
         const outcome = planned?.outcome ?? (message.reason === 'error_max_budget_usd' ? 'over_budget' : message.outcome);
-        return this.finishRun(runId, outcome, planned?.reason ?? message.reason, { sessionId: message.sessionId ?? run.sessionId, summary: this.reports.get(runId) ?? message.summary });
+        return this.finishRun(runId, outcome, planned?.reason ?? message.reason, { ...planned?.record, sessionId: message.sessionId ?? run.sessionId, summary: this.reports.get(runId) ?? message.summary });
       }
     }
   }
@@ -987,6 +987,9 @@ export class Supervisor {
     const chosen = buttons.find((button) => button.id === option);
     if (!chosen) return { ok: false, text: `This card has no "${option}" for you to press. What you can answer: ${[...buttons.map((button) => button.id), decisions.ASK_USER].join(', ')}.` };
     if (!why) return { ok: false, text: 'The notes are empty. They are the record of why, and for a send-back or an answer they are the words the employee gets. Write them.' };
+    // Nobody waves work through for the user with something blocking still in it: that is the user's own to do, if anyone's.
+    const open = card.taskId && (chosen.effect === 'accept' || chosen.effect === 'merge') && card.kind !== 'ownership' ? this.flow.openFindings(card.taskId) : null;
+    if (open) return { ok: false, text: `Not that: the last review, by ${open.by}, left ${open.findings.length === 1 ? 'a blocking finding' : `${open.findings.length} blocking findings`} in this work, and nothing lands with one in it. Send it back with what to fix, or use ${decisions.ASK_USER} and say why it cannot be fixed.` };
     // The notes are the answer itself only where the card takes words; a button that carries its own answer keeps it.
     const worded = chosen.effect === 'send_back' || (chosen.effect === 'resume_with_answer' && typeof chosen.params?.text !== 'string');
     try {

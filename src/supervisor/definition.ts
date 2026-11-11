@@ -5,7 +5,7 @@
  */
 import { skillSets } from '../shared/skills.ts';
 import { availableCapabilities, CAPABILITIES } from './blastRadius.ts';
-import type { Capability, Company, Decision, DecisionOption, Employee, GateResult, Repo, RunMode, Task, Team } from '../shared/types.ts';
+import type { Capability, Company, Decision, DecisionOption, Employee, Finding, GateResult, Repo, RunMode, Task, Team } from '../shared/types.ts';
 
 const usd = (amount: number): string => `$${amount.toFixed(2)}`;
 
@@ -110,7 +110,17 @@ function toolLines(employee: Employee, team: Team, mode: RunMode): string {
 export type Part = { title: string; by: string; folder: string; summary: string | null; files: string[]; more: number };
 /** A question a member stopped with, on its way to the lead. */
 export type Question = { from: string; text: string; choices: string[] };
-export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; notes?: string; mergeState?: string; parts?: Part[]; question?: Question };
+/** What an earlier review of the same work found, for the review that follows it. */
+export type Previous = { by: string; findings: Finding[] };
+/** A task its lead split, put together again: who did that, and the parts, each reviewed on its own already. */
+export type Whole = { by: string; parts: { title: string; by: string }[] };
+export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; notes?: string; mergeState?: string; parts?: Part[]; question?: Question; previous?: Previous; whole?: Whole };
+
+/** Findings as numbered lines: severity, where, what, why, and what would fix it. The number is how its author answers it. */
+export function findingLines(findings: Finding[]): string {
+  const sentence = (text: string): string => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+  return findings.map((finding, index) => `${index + 1}. [${finding.severity}] ${finding.file}${finding.line ? `:${finding.line}` : ''}: ${sentence(finding.title)}${finding.why.trim() ? ` ${sentence(finding.why)}` : ''}${finding.fix.trim() ? ` Fix: ${sentence(finding.fix)}` : ''}`).join('\n');
+}
 export type TeamView = { team: Team; lead: Employee | null; members: Employee[] };
 
 export function gateLines(results: GateResult[]): string {
@@ -240,7 +250,15 @@ Only if the answer needs something only the user has (a decision about the produ
       return `${header}
 
 You are reviewing this work, not doing it. The changed files are in your folder; read them.
-
+${
+  material.whole
+    ? `\nThis is the whole task, put together by ${material.whole.by} from these sub-tasks, each of which was reviewed and approved on its own:\n${material.whole.parts.map((part) => `- "${part.title}", by ${part.by}`).join('\n')}\nDo not review the parts again. Review how they fit: what one part assumes of another, what fell between them, what was changed in putting them together, and whether the whole meets the done-condition.\n`
+    : ''
+}${
+  material.previous
+    ? `\nThis work was sent back before. What ${material.previous.by} found then:\n${findingLines(material.previous.findings)}\nCheck each one against the files as they are now and against what the author reports below: it is fixed, or the author says why it was left and is right to. One that is still open and still right is blocking. Check too that the fixes broke nothing.\n`
+    : ''
+}
 What the author reported:
 ${material.summary?.trim() || '(no summary)'}
 
@@ -250,7 +268,8 @@ ${material.diffStat?.trim() || '(no diff)'}
 Gates, run by the engine:
 ${material.gateResults && material.gateResults.length > 0 ? gateLines(material.gateResults) : '(none)'}
 ${stillFailing(material.gateResults)}${material.patch ? `\nThe patch${material.patch.endsWith('…') ? ' (cut short; read the files for the rest)' : ''}:\n\`\`\`diff\n${material.patch}\n\`\`\`\n` : ''}
-Check the work against the brief and the done-condition. Then call mcp__engine__submit_review with "approve", or "send_back" with notes the author can act on, or "escalate" if a person has to decide.`;
+Check the work against the brief and the done-condition, as someone who has to sign it off. Give what you find as findings, each with its file, the line if there is one, what is wrong, why it matters and what would fix it. Mark a finding blocking when it must be fixed before this lands: a bug, something the brief or the done-condition asks for that is missing, a company rule broken, a risk to data or security. Mark it minor when it is worth knowing and should hold nothing up.
+Then call mcp__engine__submit_review: "approve" when nothing is blocking, "send_back" when something is, or "escalate" if someone above you has to decide.`;
     case 'integrate':
       // No repository: nothing was merged anywhere. Each part is still where its author left it.
       if (material.parts)
@@ -298,6 +317,8 @@ export function buildDecidingTurn(input: {
   author: { name: string; summary: string | null; gateResults: GateResult[] } | null;
   diffStat: string | null;
   patch: string | null;
+  /** What the last review marked blocking and did not see fixed. */
+  open: Previous | null;
 }): string {
   const { card, about, team } = input;
   const gates = (about?.gates ?? []).map((name) => {
@@ -324,6 +345,8 @@ export function buildDecidingTurn(input: {
       : '',
 
     input.author ? `## What ${input.author.name} last reported\n${input.author.summary?.trim() || '(no summary)'}\n\nGates, run by the engine:\n${input.author.gateResults.length > 0 ? gateLines(input.author.gateResults) : '(none ran)'}` : '',
+
+    input.open ? `## What is still open in it\nThe last review, by ${input.open.by}, did not approve this work and found:\n${findingLines(input.open.findings)}\nWork with any of these in it cannot be accepted or merged by you. Send it back, or hand the card to the user.` : '',
 
     input.diffStat?.trim() ? `## What changed\n${input.diffStat.trim()}${input.patch ? `\n\nThe patch${input.patch.endsWith('…') ? ' (cut short; read the files for the rest)' : ''}:\n\`\`\`diff\n${input.patch}\n\`\`\`` : ''}` : '',
 

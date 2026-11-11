@@ -4,7 +4,7 @@
 import { z } from 'zod';
 import type { RuntimeEvent, ToolCall } from '../shared/runtime.ts';
 import { ADMIN_INPUT, ADMIN_TOOLS } from '../shared/adminTools.ts';
-import { Capability, Effort, RunMode } from '../shared/types.ts';
+import { Capability, Effort, Finding, RunMode } from '../shared/types.ts';
 
 export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', 'decide', ...ADMIN_TOOLS] as const;
 export const EngineTool = z.enum(ENGINE_TOOLS);
@@ -82,7 +82,7 @@ export const TOOL_INPUT = {
       .min(1),
   }),
   report_done: z.object({ summary: z.string().min(1) }),
-  submit_review: z.object({ verdict: z.enum(['approve', 'send_back', 'escalate']), notes: z.string() }),
+  submit_review: z.object({ verdict: z.enum(['approve', 'send_back', 'escalate']), notes: z.string(), findings: z.array(Finding).max(40).optional() }),
   request_decision: z.object({ question: z.string().min(1), options: z.array(z.string()).max(4) }),
   set_status: z.object({ text: z.string().min(1).max(60) }),
   run_gate: z.object({ name: z.string().min(1) }),

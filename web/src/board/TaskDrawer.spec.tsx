@@ -68,6 +68,16 @@ describe('TaskDrawer', () => {
     expect(screen.queryByText(/closed/)).toBeNull();
   });
 
+  it("lists what a review found under its run, the blocking ones marked", async () => {
+    const review = run({ id: 'run2', mode: 'review', outcome: 'done', reason: 'sent_back', endedAt: T0.toISOString(), findings: [{ severity: 'blocking', file: 'NOTE.md', line: 3, title: 'The note contradicts the brief', why: 'It says the opposite.', fix: 'Rewrite line 3.' }, { severity: 'minor', file: 'NOTE.md', title: 'A typo', why: '', fix: 'Fix it.' }] });
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: fromSnapshot({ ...base, tasks: [theTask], runs: [live, review] }), now: T0, api: fakeApi(() => detail([])) });
+    const found = await screen.findAllByRole('listitem');
+    expect(found.map((item) => [item.getAttribute('data-severity'), item.textContent])).toEqual([
+      ['blocking', 'blocking NOTE.md:3: The note contradicts the brief. It says the opposite. Fix: Rewrite line 3.'],
+      ['minor', 'minor NOTE.md: A typo. Fix: Fix it.'],
+    ]);
+  });
+
   it('shows the diff when asked', async () => {
     const api = fakeApi((_method, path) => (path.endsWith('/diff') ? { stat: ' NOTE.md | 1 +', patch: '+a note', lines: 1 } : detail([])));
     mount(<TaskDrawer taskId="task1" tab="diff" onClose={() => {}} />, { store: store(), now: T0, api });

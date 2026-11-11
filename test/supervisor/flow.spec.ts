@@ -287,7 +287,8 @@ describe('work and review', () => {
     const reviews: string[] = [];
     const setup = ledWorld(async (s) => {
       if (s.mode === 'brief') return void (await s.engine('propose_subtasks', halves));
-      if (s.mode === 'review') reviews.push(s.input.prompt);
+      // The reviews of the two halves. The whole, put together, is reviewed too: that one is not about a failing gate.
+      if (s.mode === 'review' && !s.input.prompt.includes('This is the whole task')) reviews.push(s.input.prompt);
       if (s.mode === 'work' && s.resumed) {
         sentBack.push(s.input.prompt);
         return void (await s.engine('report_done', { summary: 'My file is there. The gate also needs the other half, which is not mine.' }));
@@ -313,7 +314,7 @@ describe('work and review', () => {
     }
     // Nobody had to be asked, and on the whole the gate is held as ever: here it passes.
     expect(store.openDecisions(setup.w.db)).toEqual([]);
-    expect(store.runsOf(setup.w.db, parent.id).at(-1)).toMatchObject({ mode: 'integrate', gateResults: [{ name: 'both', exitCode: 0 }] });
+    expect(store.runsOf(setup.w.db, parent.id).findLast((run) => run.mode === 'integrate')).toMatchObject({ gateResults: [{ name: 'both', exitCode: 0 }] });
     expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
   });
 
@@ -439,7 +440,8 @@ describe('work and review', () => {
     const parent = parentTask(setup.w, { assigneeId: 'lead' });
     await drain(setup);
     expect(store.listTasks(setup.w.db, { parentId: parent.id }).map((child) => [child.title, child.assigneeId, child.state])).toEqual([['Greeting', 'emp1', 'done'], ['Farewell', 'emp2', 'done']]);
-    expect(store.runsOf(setup.w.db, parent.id).map((run) => [run.mode, run.employeeId])).toEqual([['brief', 'lead'], ['integrate', 'lead']]);
+    // The lead split it and put it together; a teammate reviewed the whole.
+    expect(store.runsOf(setup.w.db, parent.id).map((run) => [run.mode, run.employeeId])).toEqual([['brief', 'lead'], ['integrate', 'lead'], ['review', 'emp1']]);
     expect(store.getTask(setup.w.db, parent.id)!.state).toBe('done');
   });
 
@@ -690,7 +692,7 @@ describe('integration and landing', () => {
     const children = store.listTasks(setup.w.db, { parentId: parent.id });
     expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
     expect(children.map((c) => c.state)).toEqual(['done', 'done']);
-    expect(store.runsOf(setup.w.db, parent.id).map((r) => r.mode)).toEqual(['brief', 'integrate']);
+    expect(store.runsOf(setup.w.db, parent.id).map((r) => r.mode)).toEqual(['brief', 'integrate', 'review']);
     expect(fileAt(setup.repoPath!, 'team', 'GREETING.md')).toBe('from Ada');
     expect(fileAt(setup.repoPath!, 'team', 'FAREWELL.md')).toBe('from Grace');
     expect(refOf(setup.repoPath!, 'main')).toBe(mainBefore);
@@ -839,8 +841,8 @@ describe('integration and landing', () => {
     const [card] = store.openDecisions(setup.w.db);
     expect(card).toMatchObject({ kind: 'merge', taskId: parent.id });
     expect(card!.text).toContain('team');
-    // Each part was reviewed. How the lead put them together was not, and the card does not pretend it was.
-    expect(card!.text).toMatch(/\? Its 2 sub-tasks were each approved by a reviewer, nobody reviewed how they were put together, gates green \(greeting, farewell\);/);
+    // Each part was reviewed, and so was how the lead put them together: the card says who stands behind the whole.
+    expect(card!.text).toMatch(/\? Its 2 sub-tasks were each approved by a reviewer and the whole by Ada, gates green \(greeting, farewell\);/);
     expect(card!.options.map((o) => o.label)).toEqual(['Merge', 'Keep the branch', 'Stop it']);
     expect(fileAt(setup.repoPath!, 'team', 'GREETING.md')).toBeNull();
     setup.w.sup.answer(card!.id, { optionId: 'merge' });

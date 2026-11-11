@@ -17,12 +17,12 @@ import type { Identity } from '../git/git.ts';
 import { isMerged, landOn, mergeInto } from '../git/merge.ts';
 import { outside } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
-import type { Decision, Employee, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
+import type { Decision, Employee, Finding, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import * as decisions from './decisions.ts';
 import { writtenFiles } from '../api/files.ts';
-import { buildDecidingTurn, buildFirstTurn, type Part } from './definition.ts';
+import { buildDecidingTurn, buildFirstTurn, findingLines, type Part } from './definition.ts';
 import { reviewerFor } from './scheduler.ts';
 import { canTransition } from './taskState.ts';
 
@@ -44,7 +44,8 @@ export type FlowHost = {
   /** Runs a piece of engine work for a task; while it runs the task is not idle. */
   engineWork(taskId: string, work: () => Promise<void>): void;
   /** How a live run will be recorded when its worker exits. */
-  planRunEnd(runId: string, outcome: RunOutcome, reason: string): void;
+  /** `record` is kept with the run when it ends: a review's findings. */
+  planRunEnd(runId: string, outcome: RunOutcome, reason: string, record?: Partial<Run>): void;
 };
 
 /** A review's verdict as it is written on its run. */
@@ -135,6 +136,7 @@ export class Flow {
       author: last ? { name: store.getEmployee(this.db, last.employeeId)?.name ?? 'An employee', summary: last.summary, gateResults: last.gateResults } : null,
       diffStat: diff?.[0].text ?? null,
       patch: diff?.[1] ?? null,
+      open: about ? this.openFindings(about.id) : null,
     });
   }
 
@@ -251,16 +253,28 @@ export class Flow {
   }
 
   onReview(run: Run, input: unknown): ToolReply {
-    const { verdict, notes } = TOOL_INPUT.submit_review.parse(input);
+    const { verdict, notes, findings = [] } = TOOL_INPUT.submit_review.parse(input);
     const task = store.getTask(this.db, run.taskId)!;
     const asker = this.asked(task.id);
     if (asker) return this.onAnswer(run, task, asker, verdict, notes);
     const reviewer = store.getEmployee(this.db, run.employeeId)?.name ?? 'The reviewer';
+    // A verdict has to agree with what was found: nothing lands with something blocking in it, and nothing goes back with nothing to fix.
+    const blocking = findings.filter((finding) => finding.severity === 'blocking');
+    if (verdict === 'approve' && blocking.length > 0) return { ok: false, text: `You approved, and listed ${blocking.length === 1 ? 'a finding' : `${blocking.length} findings`} as blocking. If it must be fixed before this lands, send the work back. If it need not be, mark it minor.` };
+    if (verdict === 'send_back' && blocking.length === 0 && findings.length > 0) return { ok: false, text: 'You sent this back with nothing blocking in it. If one of your findings must be fixed before this lands, mark it blocking. If none must, approve.' };
+    if (verdict === 'send_back' && findings.length === 0 && !notes.trim()) return { ok: false, text: 'You sent this back without saying what to fix. Give each thing as a finding: its file, what is wrong, why it matters and what would fix it.' };
     // The verdict stays with the run: what a merge card says about the work is read from it, never from the fact that a review happened.
     this.verdicts.set(run.id, VERDICT[verdict]);
-    this.host.planRunEnd(run.id, 'done', VERDICT[verdict]);
+    this.host.planRunEnd(run.id, 'done', VERDICT[verdict], { findings });
     if (verdict === 'approve') this.host.engineWork(task.id, () => this.finish(task.id));
-    else if (verdict === 'send_back') this.sendBack(task, `Your work was reviewed by ${reviewer} and sent back:\n\n${notes.trim() || '(no notes)'}\n\nFix it, then call mcp__engine__report_done again.`, `${reviewer} has sent "${task.title}" back`);
+    else if (verdict === 'send_back')
+      this.sendBack(
+        task,
+        `Your work was reviewed by ${reviewer} and sent back:\n\n${notes.trim() || '(no notes)'}${
+          findings.length > 0 ? `\n\nWhat ${reviewer} found:\n${findingLines(findings)}\n\nWork through them in order. Fix each one; if you are sure one is wrong, leave it and say why. In your report, answer each by its number: what you changed, or why you left it. The next review checks every one.` : ''
+        }\n\nFix it, then call mcp__engine__report_done again.`,
+        `${reviewer} has sent "${task.title}" back`,
+      );
     else
       this.change((tx, now) =>
         decisions.raise(tx, this.db, now, { taskId: task.id, runId: run.id, employeeId: run.employeeId, kind: 'review', text: `${reviewer} could not decide on "${task.title}": ${notes.trim() || '(no notes)'}`, freeText: true, options: decisions.optionsFor('review') }),
@@ -329,7 +343,8 @@ export class Flow {
     // A split is not a way around what the task owns: what the parts changed between them, and what the lead changed putting them together, is held to it.
     if (checkOwnership && !this.ownershipHolds(run, await this.changed(task), task, true)) return;
     if (!(await this.gatesPass(run.id, task))) return;
-    return this.finish(task.id);
+    // Each part was reviewed on its own; how they were put together was not. That is reviewed too before anything lands.
+    return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
   }
 
   /** Commits the run's work. False when it could not be committed as it is and has gone back to its author. */
@@ -488,10 +503,16 @@ export class Flow {
     if (!reviewer || reviewer.fired) return this.finish(task.id);
     const site = this.site(task);
     const base = site ? this.baseOf(task, site.teamRepo) : null;
+    // What the last review of this work found: this one checks each of those, not only the work as it now is.
+    const before = store.runsOf(this.db, task.id).findLast((earlier) => earlier.mode === 'review' && earlier.reason === VERDICT.send_back && (earlier.findings?.length ?? 0) > 0);
+    const parts = store.listTasks(this.db, { parentId: task.id }).filter((child) => child.state === 'done');
+    const nameOf = (id: string | null | undefined): string => (id && store.getEmployee(this.db, id)?.name) || 'someone';
     const material = {
       summary: run.summary,
       gateResults: run.gateResults,
       ...(site && base ? { diffStat: (await diffStat(site.folder, base)).text, patch: await patch(site.folder, base, PATCH_CAP) } : {}),
+      ...(before ? { previous: { by: nameOf(before.employeeId), findings: before.findings! } } : {}),
+      ...(parts.length > 0 ? { whole: { by: nameOf(run.employeeId), parts: parts.map((child) => ({ title: child.title, by: nameOf(store.runsOf(this.db, child.id).findLast(authored)?.employeeId ?? child.assigneeId) })) } } : {}),
     };
     const firstTurn = buildFirstTurn({ task, mode: 'review', team, repo: site?.repo ?? null, teammates: [], remainingUsd: 0, material });
     this.change((tx, now) => {
@@ -521,12 +542,23 @@ export class Flow {
     return { verdict, by: store.getEmployee(this.db, review.employeeId)?.name ?? 'the reviewer' };
   }
 
+  /** What the last review of this work found and marked blocking, when that review did not approve: these are still open. */
+  openFindings(taskId: string): { by: string; findings: Finding[] } | null {
+    const runs = store.runsOf(this.db, taskId);
+    const review = runs.slice(runs.findLastIndex(authored) + 1).findLast((run) => run.mode === 'review');
+    const blocking = review && review.reason !== VERDICT.approve ? (review.findings ?? []).filter((finding) => finding.severity === 'blocking') : [];
+    return review && blocking.length > 0 ? { by: store.getEmployee(this.db, review.employeeId)?.name ?? 'the reviewer', findings: blocking } : null;
+  }
+
   /** In words for a merge card: who approved this work, or that nobody did. Only an approval counts as one. */
   private standing(task: Task, green: string, gateCount: number): string {
     const parts = store.listTasks(this.db, { parentId: task.id }).filter((child) => child.state === 'done');
     if (parts.length > 0) {
       const approved = parts.filter((child) => this.lastReview(child.id)?.verdict === VERDICT.approve).length;
       const each = approved < parts.length ? `${approved} of its ${parts.length} sub-tasks were approved by a reviewer` : parts.length === 1 ? 'its one sub-task was approved by a reviewer' : `its ${parts.length} sub-tasks were each approved by a reviewer`;
+      const whole = this.lastReview(task.id);
+      if (whole?.verdict === VERDICT.approve) return `${each} and the whole by ${whole.by}, ${green}`;
+      if (whole) return `${each}, ${whole.by} ${whole.verdict === VERDICT.send_back ? 'sent the whole back' : 'could not decide on the whole'} and it was accepted as it is, ${green}`;
       return `${each}, nobody reviewed how they were put together, ${green}`;
     }
     const review = this.lastReview(task.id);

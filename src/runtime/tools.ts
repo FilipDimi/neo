@@ -15,7 +15,7 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
   report_done:
     'Report that your work on this task is finished, with a short summary of what you did. The engine then commits your files and runs the gates itself. Call it exactly once, when the work is really done, then stop.',
   submit_review:
-    'Give your verdict on the work you were asked to review: "approve", "send_back" with notes the author can act on, or "escalate" when a person has to decide. Then stop.',
+    'Give your verdict on the work you were asked to review, with what you found: each finding names its file, the line if there is one, what is wrong, why it matters and what would fix it, and is "blocking" (must be fixed before this lands) or "minor" (worth knowing, holds nothing up). "approve" when nothing is blocking; "send_back" when something is; "escalate" when someone above you has to decide. Then stop.',
   request_decision:
     'Ask the user to decide something you may not decide yourself, or that you were refused. Give the question and up to four options. Your run stops here; you are resumed with the answer. An answer is only words: it cannot give you a tool or lift a limit, so never offer an option that says it will. For a missing tool there is mcp__engine__request_tools.',
   request_tools:

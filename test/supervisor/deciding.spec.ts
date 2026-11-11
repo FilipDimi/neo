@@ -175,6 +175,31 @@ describe('cards go to the chief of staff first', () => {
     expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
   });
 
+  it('does not let Neo accept work whose last review left something blocking in it', async () => {
+    const curt = { severity: 'blocking', file: 'GREETING.md', line: 1, title: 'One curt word', why: 'It is the first thing a reader sees.', fix: 'Write a sentence.' };
+    const replies: { ok: boolean; text: string }[] = [];
+    let prompt = '';
+    const setup = company(
+      work(
+        (s) => s.engine('submit_review', { verdict: 'send_back', notes: 'Not yet.', findings: [curt] }),
+        async (s) => {
+          prompt = s.input.prompt;
+          replies.push(await s.engine('decide', { option: 'accept', notes: 'Good enough.' }));
+          replies.push(await s.engine('decide', { option: 'ask_user', notes: 'Three rounds and the greeting is still one word. Send it back again, or stop?' }));
+          s.say('This one needs you.');
+        },
+      ),
+      { maxReviewRounds: 1 },
+    );
+    greet(setup.w);
+    await drain(setup);
+    // The card came because the work was sent back more often than the team allows. Neo sees what is still open in it.
+    expect(prompt).toContain('1. [blocking] GREETING.md:1: One curt word.');
+    expect(replies.map((reply) => reply.ok)).toEqual([false, true]);
+    expect(replies[0]!.text).toMatch(/blocking/);
+    expect(store.forUser(setup.w.db)).toMatchObject([{ kind: 'review' }]);
+  });
+
   it('stops deciding the same thing over and over: the third card of a kind on one task is the user\'s', async () => {
     let decided = 0;
     const setup = company(

@@ -8,6 +8,8 @@ import { Prose } from '../frame/Prose.tsx';
 import { liveRuns } from '../model/select.ts';
 import { useStore } from '../store/store.ts';
 
+const sentence = (text: string): string => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+
 type Detail = { task: Task; children: Task[]; runs: Run[]; events: EventRow[]; decisions: Decision[] };
 type Diff = { stat: string; patch: string; lines: number };
 
@@ -176,6 +178,16 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
                   {gate.name} {gate.exitCode === 0 ? 'passed' : 'failed'}
                 </span>
               ))}
+              {/* What a review found, in the reviewer's order: the numbers are the ones its author answers by. */}
+              {run.findings && run.findings.length > 0 && (
+                <ol className="findings">
+                  {run.findings.map((finding, index) => (
+                    <li key={index} data-severity={finding.severity}>
+                      <b>{finding.severity}</b> {`${finding.file}${finding.line ? `:${finding.line}` : ''}: ${sentence(finding.title)}${finding.why.trim() ? ` ${sentence(finding.why)}` : ''}${finding.fix.trim() ? ` Fix: ${sentence(finding.fix)}` : ''}`}
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
           ))}
         </section>

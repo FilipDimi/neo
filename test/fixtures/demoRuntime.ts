@@ -169,7 +169,14 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
       await s.engine('set_status', { text: `reviewing ${title.slice(0, 40)}` });
       await wait(1.5);
       if (prompt.includes('REDO') && firstTime(sentBack, `redo ${title}`)) {
-        return void (await s.engine('submit_review', { verdict: 'send_back', notes: 'Close, but say who it is for in the first line.' }));
+        return void (await s.engine('submit_review', {
+          verdict: 'send_back',
+          notes: 'Close. Two things, one of which has to change.',
+          findings: [
+            { severity: 'blocking', file: `${dir}${slug(title)}.md`, line: 1, title: 'The first line does not say who it is for', why: 'The brief asks for it, and a reader decides there whether to go on', fix: 'Open with the reader and what they get' },
+            { severity: 'minor', file: `${dir}${slug(title)}.md`, title: 'Two sentences say the same thing', why: 'It reads longer than it is', fix: 'Drop the second' },
+          ],
+        }));
       }
       return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
     }
