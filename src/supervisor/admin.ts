@@ -3,6 +3,8 @@
  * screen makes through the API, with the same checks, and answers in a line of plain words that
  * says what changed. A refusal is an Error whose message says what to do instead.
  */
+import os from 'node:os';
+import path from 'node:path';
 import { z } from 'zod';
 import { apply } from '../db/apply.ts';
 import type { Db } from '../db/open.ts';
@@ -15,6 +17,7 @@ import { countsCost } from '../shared/view.ts';
 import { ADMIN_INPUT, type AdminTool } from '../shared/adminTools.ts';
 import { Capability, Company, Effort, Team, TeamRepo, type Employee, type Gate, type Repo } from '../shared/types.ts';
 import { CAPABILITIES } from './blastRadius.ts';
+import { repoProblem } from './health.ts';
 import { edit, fire, hire, removeTeam, type HireCtx } from './hiring.ts';
 import { TEAM_DEFAULTS } from './setup.ts';
 
@@ -67,6 +70,18 @@ function findSkills(ctx: HireCtx, wanted: string[]): string[] {
       }),
     ),
   ];
+}
+
+/**
+ * A repository as it is registered: by the path the engine will find it at ("~" is the shell's word for home, and a
+ * path is kept without a slash at its end), once, and only if work can be done in it.
+ */
+export async function checkRepo(db: Db, given: Repo): Promise<Repo> {
+  const repo = { ...given, path: path.resolve(given.path.trim().replace(/^~(?=$|\/)/, os.homedir())) };
+  if (store.allRepos(db).some((other) => other.id !== repo.id && other.path === repo.path)) throw new Error(`${repo.path} is already registered.`);
+  const problem = await repoProblem(repo.path);
+  if (problem && !/progress|lock/.test(problem)) throw new Error(`${repo.path}: ${problem}.`);
+  return repo;
 }
 
 /** A gate that unfinished work names stays, under its name: taken away or renamed, that work would have nothing to pass. */
@@ -223,6 +238,12 @@ export async function adminTool(ctx: HireCtx, name: string, raw: unknown): Promi
         (after.decider ?? 'user') !== (before.decider ?? 'user') ? (after.decider === 'chief' ? `decisions go to ${chief} first (were the user's)` : `decisions come to the user (went to ${chief} first)`) : '',
       ].filter(Boolean);
       return changed.length > 0 ? `Company: ${changed.join('; ')}.` : 'Nothing changed: those are the values already set.';
+    }
+    case 'add_repository': {
+      const input = ADMIN_INPUT.add_repository.parse(raw);
+      const repo = await checkRepo(db, { id: store.newId(), path: input.path, gates: input.gates ?? [] });
+      apply(db, (tx) => tx.emit({ kind: 'repo_changed', repo }), at);
+      return `Registered ${repo.path} (id ${repo.id}) with ${repo.gates.length === 0 ? 'no gates yet' : `the gate${repo.gates.length === 1 ? '' : 's'} ${repo.gates.map((gate) => gate.name).join(', ')}`}. Give it to a team with update_team (repo and baseBranch).`;
     }
     case 'set_gates': {
       const input = ADMIN_INPUT.set_gates.parse(raw);

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { apply } from '../../src/db/apply.ts';
 import { paths } from '../../src/db/dataDir.ts';
@@ -105,6 +106,17 @@ describe("Morpheus's tools", () => {
   });
 
   it('lists every tool it offers', () => {
-    expect(ADMIN_TOOLS).toEqual(['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'set_gates']);
+    expect(ADMIN_TOOLS).toEqual(['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'add_repository', 'set_gates']);
+  });
+
+  it('registers a repository after the company was set up, so a team can be given it', async () => {
+    const { db, use } = setup();
+    const second = gitRepo();
+    await expect(use('add_repository', { path: `${second}/nope` })).rejects.toThrow(/missing/);
+    await expect(use('add_repository', { path: path.dirname(second) })).rejects.toThrow(/not a git repository/);
+    expect(await use('add_repository', { path: `${second}/`, gates: [{ name: 'tests', command: 'npm test', timeoutMinutes: 10, lock: null }] })).toMatch(/Registered .* with the gate tests/);
+    expect(store.allRepos(db).map((entry) => entry.path)).toContain(second);
+    await expect(use('add_repository', { path: second })).rejects.toThrow(/already registered/);
+    expect(await use('update_team', { team: 'Rust', repo: second, baseBranch: 'team' })).toMatch(/Rust/);
   });
 });

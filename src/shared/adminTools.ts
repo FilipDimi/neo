@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { Capability, Effort, Gate } from './types.ts';
 
-export const ADMIN_TOOLS = ['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'set_gates'] as const;
+export const ADMIN_TOOLS = ['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'add_repository', 'set_gates'] as const;
 export type AdminTool = (typeof ADMIN_TOOLS)[number];
 
 const teamFields = {
@@ -53,6 +53,7 @@ export const ADMIN_INPUT = {
     costs: z.enum(['on', 'off']).optional().describe("'off': cost is not counted. No task cap or daily cap stops work, no card asks about one, and no spend is shown anywhere. For a company on a subscription, where the figures are list prices and not a bill; the plan's own usage limit still pauses the company. 'on': caps stop work and spend is shown"),
     decider: z.enum(['user', 'chief']).optional().describe("who is asked first when a card is raised. 'chief': the chief of staff answers it on the user's behalf and hands on only what nobody in the company can settle; money, tools, hiring and the machine always stay with the user. 'user': every card is the user's"),
   }),
+  add_repository: z.object({ path: z.string().min(1).describe('the folder of a git repository on this machine'), gates: z.array(Gate).optional() }),
   set_gates: z.object({ repo: z.string().min(1), gates: z.array(Gate) }),
 } satisfies Record<AdminTool, z.ZodType>;
 
@@ -65,5 +66,6 @@ export const ADMIN_DESCRIPTION: Record<AdminTool, string> = {
   update_employee: "Change someone's role, model, effort, tools or skills. It takes effect at their next run.",
   fire: 'Fire someone. Their memory is archived. A lead leaves their team without a lead.',
   update_company: 'Change the company: the daily cap for all teams together, how many runs may happen at once, the rules every employee gets, whether cost is counted at all, and who decides cards first (the user, or the chief of staff on the user\'s behalf).',
+  add_repository: 'Register a git repository on this machine, so teams can be given it to work in (update_team, with a base branch). Gates can be given now or set later.',
   set_gates: "Replace a repository's gates: named commands the engine runs to check work. Gates that share a lock never run side by side.",
 };

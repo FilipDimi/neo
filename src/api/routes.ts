@@ -3,8 +3,6 @@
  * supervisor or the same write path it uses. The shape of what a screen needs was designed with
  * the screen plan in front of it (docs/superpowers/plans/2026-11-09-virtual-startup-screen.md).
  */
-import os from 'node:os';
-import path from 'node:path';
 import { screenId } from './webBuild.ts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -23,10 +21,9 @@ import { EFFORT_LABELS, MODEL_LABELS } from '../shared/prices.ts';
 import { Capability, Company, Effort, Gate, ModelTier, Repo, Service, type Task, Team, TeamRepo } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.ts';
 import { ADMIN_TOOLS } from '../shared/adminTools.ts';
-import { adminTool, checkGates, checkTeam } from '../supervisor/admin.ts';
+import { adminTool, checkGates, checkRepo, checkTeam } from '../supervisor/admin.ts';
 import { chat, messageEmployee } from '../supervisor/chat.ts';
 import { companyNow } from '../supervisor/companyNow.ts';
-import { repoProblem } from '../supervisor/health.ts';
 import { edit, fire, hire, type HireCtx, removeTeam } from '../supervisor/hiring.ts';
 import { readIndex } from '../supervisor/memory.ts';
 import { AlreadySetUp, setupCompany, TEAM_DEFAULTS } from '../supervisor/setup.ts';
@@ -173,12 +170,11 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
   });
 
   async function checkedRepo(given: Repo): Promise<Repo> {
-    // The folder as the engine will find it: "~" is the shell's word for home, and a path is kept without a slash at its end.
-    const repo = { ...given, path: path.resolve(given.path.replace(/^~(?=$|\/)/, os.homedir())) };
-    if (store.allRepos(db).some((other) => other.id !== repo.id && other.path === repo.path)) throw new HttpError(400, `${repo.path} is already registered.`);
-    const problem = await repoProblem(repo.path);
-    if (problem && !/progress|lock/.test(problem)) throw new HttpError(400, `${repo.path}: ${problem}.`);
-    return repo;
+    try {
+      return await checkRepo(db, given);
+    } catch (failure) {
+      throw new HttpError(400, (failure as Error).message);
+    }
   }
 
   app.post('/api/repos', async (request) => {
