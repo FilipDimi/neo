@@ -37,6 +37,16 @@ describe('listSkills', () => {
     expect(offered).not.toContain('user:ship-it');
   });
 
+  it('still lists the skills beside a link that leads nowhere, and reads a description from a file with Windows line ends', () => {
+    const mine = tempDir();
+    const empty = tempDir();
+    fs.mkdirSync(path.join(mine, 'notes'));
+    fs.writeFileSync(path.join(mine, 'notes', 'SKILL.md'), '---\r\nname: notes\r\ndescription: Keeps notes.\r\n---\r\nBody\r\n');
+    fs.symlinkSync(path.join(mine, 'gone-away'), path.join(mine, 'broken'));
+    const offered = listSkills({ userSkills: mine, pluginCache: empty, companySkills: empty });
+    expect(offered.find((skill) => skill.id.endsWith('notes'))).toMatchObject({ description: 'Keeps notes.' });
+  });
+
   it('does not offer deep-research: only a person can start that skill, so an employee given it can only stop', () => {
     const empty = tempDir();
     const offered = listSkills({ userSkills: empty, pluginCache: empty, companySkills: empty }).map((skill) => skill.id);

@@ -4,7 +4,7 @@
  * checkout that has uncommitted changes.
  */
 import { assertOwnGitDir, git, must, type Identity } from './git.ts';
-import { publish } from './folder.ts';
+import { checkoutOf, publish } from './folder.ts';
 
 const names = (text: string): string[] => text.split('\n').filter(Boolean).sort();
 
@@ -27,13 +27,6 @@ export async function mergeInto(dir: string, otherBranch: string, engine: Identi
 }
 
 export type Landing = { result: 'landed'; mergedTarget: boolean } | { result: 'conflict'; conflicts: string[] } | { result: 'gates_failed' } | { result: 'checkout_dirty'; where: string } | { result: 'target_moved' };
-
-/** The worktree of the user's repository that has a branch checked out, if any. */
-async function checkoutOf(repoPath: string, branch: string): Promise<string | null> {
-  const blocks = (await must(repoPath, ['worktree', 'list', '--porcelain'])).split('\n\n');
-  const block = blocks.find((b) => b.split('\n').includes(`branch refs/heads/${branch}`));
-  return block ? block.split('\n')[0]!.replace(/^worktree /, '') : null;
-}
 
 /**
  * Lands the task branch on a target branch of the user's repository.

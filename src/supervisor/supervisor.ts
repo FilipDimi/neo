@@ -13,6 +13,7 @@ import { listSkills, mountSkills, type SkillDirs, type SkillRef } from '../runti
 import type { RuntimeEvent } from '../shared/runtime.ts';
 import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task, Team } from '../shared/types.ts';
 import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
+import { unusable } from '../git/ownership.ts';
 import { GateQueue, type GateLimits } from '../git/gates.ts';
 import { ADMIN_TOOLS } from '../shared/adminTools.ts';
 import { XCODE_BUILD_FOLDERS } from '../shared/teams.ts';
@@ -212,6 +213,8 @@ export class Supervisor {
     if (repoId && (!repo || !team.repos.some((r) => r.repoId === repoId))) throw new Error(`the team ${team.name} does not work in repository ${repoId}`);
     const unknownGate = (input.gates ?? []).find((name) => !repo?.gates.some((gate) => gate.name === name));
     if (unknownGate) throw new Error(`no gate named "${unknownGate}" in this task's repository`);
+    const vague = unusable(input.ownership ?? []);
+    if (vague.length > 0) throw new Error(`${vague.map((entry) => `"${entry}"`).join(', ')} names no file or folder a task can own. Name files or folders by their path from the top of the repository, such as src/api or README.md`);
 
     const now = this.now();
     const task = store.newTask({ createdBy: 'user', ...input, repoId }, now);

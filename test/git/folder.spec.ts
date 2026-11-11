@@ -116,4 +116,26 @@ describe('engine commits', () => {
     expect(cut.length).toBeLessThanOrEqual(41);
     expect(cut.endsWith('…')).toBe(true);
   });
+
+  it("publishes a branch the user has checked out to try the work, by moving that checkout forward", async () => {
+    const repo = gitRepo();
+    const dir = await folderFor(repo);
+    fs.writeFileSync(path.join(dir, 'NOTE.md'), 'a note\n');
+    await commitAll(dir, ada, 'Add the note');
+    await publish(repo, dir, 'task/x-aaaaaa');
+    gitIn(repo, 'checkout', '-q', 'task/x-aaaaaa');
+    // Nothing new: publishing again is nothing to do, not a refusal.
+    await publish(repo, dir, 'task/x-aaaaaa');
+    fs.writeFileSync(path.join(dir, 'NOTE.md'), 'a longer note\n');
+    const second = await commitAll(dir, ada, 'Lengthen');
+    await publish(repo, dir, 'task/x-aaaaaa');
+    expect(refOf(repo, 'task/x-aaaaaa')).toBe(second);
+    expect(fs.readFileSync(path.join(repo, 'NOTE.md'), 'utf8')).toBe('a longer note\n');
+    // Uncommitted work in that checkout is never moved under: the refusal says where and what to do.
+    fs.writeFileSync(path.join(repo, 'NOTE.md'), 'my own edit\n');
+    fs.writeFileSync(path.join(dir, 'NOTE.md'), 'the longest note\n');
+    await commitAll(dir, ada, 'Lengthen again');
+    await expect(publish(repo, dir, 'task/x-aaaaaa')).rejects.toThrow(/checked out in .* with changes that are not committed/);
+    expect(refOf(repo, 'task/x-aaaaaa')).toBe(second);
+  });
 });

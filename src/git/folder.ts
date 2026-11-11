@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Task } from '../shared/types.ts';
-import { assertOwnGitDir, forgetGitSettings, must, recordGitSettings } from './git.ts';
+import { assertOwnGitDir, forgetGitSettings, git, must, recordGitSettings } from './git.ts';
 
 export function branchName(task: Pick<Task, 'id' | 'title'>): string {
   const slug = task.title
@@ -33,10 +33,30 @@ export async function createFolder(input: { repoPath: string; dir: string; branc
   recordGitSettings(input.dir);
 }
 
-/** Copies the task branch into the user's repository, so it outlives the folder. Never touches a checkout. */
+/** The worktree of the user's repository that has a branch checked out, if any. */
+export async function checkoutOf(repoPath: string, branch: string): Promise<string | null> {
+  const blocks = (await must(repoPath, ['worktree', 'list', '--porcelain'])).split('\n\n');
+  const block = blocks.find((b) => b.split('\n').includes(`branch refs/heads/${branch}`));
+  return block ? block.split('\n')[0]!.replace(/^worktree /, '') : null;
+}
+
+/**
+ * Copies the task branch into the user's repository, so it outlives the folder. A checkout of another branch is never
+ * touched. Someone who has checked out the task's own branch, to try the work, is moved forward with it, since git
+ * moves no branch under a checkout; uncommitted changes there are never moved under, and the refusal says so.
+ */
 export async function publish(repoPath: string, dir: string, branch: string): Promise<void> {
   assertOwnGitDir(dir);
-  await must(repoPath, ['fetch', '-q', dir, `+refs/heads/${branch}:refs/heads/${branch}`]);
+  const ours = await must(dir, ['rev-parse', `refs/heads/${branch}`]);
+  const theirs = await git(repoPath, ['rev-parse', '-q', '--verify', `refs/heads/${branch}`]);
+  if (theirs.code === 0 && theirs.out.trim() === ours) return;
+  const checkout = await checkoutOf(repoPath, branch);
+  if (checkout === null) return void (await must(repoPath, ['fetch', '-q', dir, `+refs/heads/${branch}:refs/heads/${branch}`]));
+  const free = `Commit or discard them, or check out another branch there, then try again`;
+  if ((await must(checkout, ['status', '--porcelain', '--untracked-files=no'])) !== '') throw new Error(`the branch ${branch} is checked out in ${checkout} with changes that are not committed. ${free}`);
+  await must(repoPath, ['fetch', '-q', dir, `refs/heads/${branch}`]);
+  const forwarded = await git(checkout, ['merge', '-q', '--ff-only', ours]);
+  if (forwarded.code !== 0) throw new Error(`the branch ${branch} is checked out in ${checkout} and could not be moved forward there (${forwarded.out.trim().split('\n')[0]}). Check out another branch there, then try again`);
 }
 
 /** Removes the folder only. The branch stays until it is merged or discarded. */

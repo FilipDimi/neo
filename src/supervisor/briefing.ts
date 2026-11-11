@@ -1,13 +1,13 @@
 /**
  * A lead's proposal to split a task, checked before any sub-task exists. Pure.
  */
-import { outside, overlaps } from '../git/ownership.ts';
+import { outside, overlaps, unusable } from '../git/ownership.ts';
 import type { Employee, Repo, Task, Team } from '../shared/types.ts';
 import type { SubtaskProposal } from '../worker/protocol.ts';
 
 export const MAX_SUBTASKS = 8;
 
-export type ProposalReason = { code: 'empty' | 'too_many' | 'overlap' | 'unknown_assignee' | 'assignee_not_in_team' | 'assignee_fired' | 'missing_done_condition' | 'unknown_gate' | 'caps_exceed_parent' | 'parent_is_a_child' | 'outside_parent'; text: string };
+export type ProposalReason = { code: 'unusable_ownership' | 'empty' | 'too_many' | 'overlap' | 'unknown_assignee' | 'assignee_not_in_team' | 'assignee_fired' | 'missing_done_condition' | 'unknown_gate' | 'caps_exceed_parent' | 'parent_is_a_child' | 'outside_parent'; text: string };
 
 export function validateProposal(input: { parent: Task; team: Team; employees: Employee[]; repo: Repo | null; remainingUsd: number; subtasks: SubtaskProposal[] }): { ok: true } | { ok: false; reasons: ProposalReason[] } {
   const { parent, team, subtasks } = input;
@@ -25,6 +25,8 @@ export function validateProposal(input: { parent: Task; team: Team; employees: E
     else if (assignee.teamId !== team.id) add('assignee_not_in_team', `"${sub.title}": ${assignee.name} is not on your team.`);
     else if (assignee.fired) add('assignee_fired', `"${sub.title}": ${assignee.name} no longer works here.`);
     if (!sub.doneCondition.trim()) add('missing_done_condition', `"${sub.title}" has no done-condition.`);
+    const vague = unusable(sub.ownership);
+    if (vague.length > 0) add('unusable_ownership', `"${sub.title}" owns ${vague.map((entry) => `"${entry}"`).join(', ')}, which names no file or folder. Name files or folders by their path from the top of the repository, such as src/api or README.md; patterns are not understood.`);
     // A part cannot own more than the whole: splitting a task is not a way to reach files the task was not given.
     if (parent.ownership.length > 0 && (sub.ownership.length === 0 || outside(sub.ownership, parent.ownership).length > 0)) {
       add('outside_parent', `"${sub.title}" owns ${sub.ownership.join(', ') || 'everything'}, but the task you are splitting owns only ${parent.ownership.join(', ')}. Give each sub-task files inside that.`);

@@ -212,6 +212,13 @@ describe('gates', () => {
     expect(result.durationMs).toBeLessThan(5000);
   });
 
+  it('ends when its command ends, with that result, whatever the command left running', async () => {
+    const result = await runGate(gate('server', 'sleep 30 & echo tests passed'), tempDir());
+    expect(result).toMatchObject({ exitCode: 0, output: expect.stringContaining('tests passed') });
+    expect(result.output).not.toContain('timed out');
+    expect(result.durationMs).toBeLessThan(8000);
+  });
+
   it('runs gates in order and stops at the first failure', async () => {
     const seen: string[] = [];
     const results = await new GateQueue().run([gate('one', 'true'), gate('two', 'false'), gate('three', 'true')], tempDir(), { onStart: (g) => seen.push(`start ${g.name}`), onFinish: (r) => seen.push(`${r.name} ${r.exitCode}`) });

@@ -13,7 +13,7 @@ import { skillSets, skillsInBrief } from '../shared/skills.ts';
 import { XCODE_BUILD_FOLDERS } from '../shared/teams.ts';
 import { countsCost } from '../shared/view.ts';
 import { ADMIN_INPUT, type AdminTool } from '../shared/adminTools.ts';
-import { Capability, Company, Effort, Team, TeamRepo, type Employee, type Repo } from '../shared/types.ts';
+import { Capability, Company, Effort, Team, TeamRepo, type Employee, type Gate, type Repo } from '../shared/types.ts';
 import { CAPABILITIES } from './blastRadius.ts';
 import { edit, fire, hire, removeTeam, type HireCtx } from './hiring.ts';
 import { TEAM_DEFAULTS } from './setup.ts';
@@ -67,6 +67,14 @@ function findSkills(ctx: HireCtx, wanted: string[]): string[] {
       }),
     ),
   ];
+}
+
+/** A gate that unfinished work names stays, under its name: taken away or renamed, that work would have nothing to pass. */
+export function checkGates(db: Db, repo: Repo, gates: Gate[]): void {
+  const names = new Set(gates.map((gate) => gate.name));
+  const open = store.listTasks(db).filter((task) => task.repoId === repo.id && task.state !== 'done' && task.state !== 'failed');
+  const held = open.flatMap((task) => task.gates.filter((name) => !names.has(name)).map((name) => `"${task.title}" names the gate "${name}"`));
+  if (held.length > 0) throw new Error(`Unfinished work still names a gate this would take away: ${[...new Set(held)].join('; ')}. Keep the gate under that name until the work is done, or stop the work first.`);
 }
 
 /** A team may only name repositories that are registered and branches that exist in them. */
@@ -219,6 +227,7 @@ export async function adminTool(ctx: HireCtx, name: string, raw: unknown): Promi
     case 'set_gates': {
       const input = ADMIN_INPUT.set_gates.parse(raw);
       const repo = findRepo(db, input.repo);
+      checkGates(db, repo, input.gates);
       apply(db, (tx) => tx.emit({ kind: 'repo_changed', repo: { ...repo, gates: input.gates } }), at);
       return `Gates of ${repo.path}: ${input.gates.map((gate) => `${gate.name} (${gate.timeoutMinutes} min${gate.lock ? `, lock ${gate.lock}` : ''})`).join(', ') || 'none'}.`;
     }

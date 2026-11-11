@@ -30,18 +30,28 @@ function frontMatter(file: string): { name?: string; description?: string; perso
   } catch {
     return {};
   }
-  const block = /^---\n([\s\S]*?)\n---/.exec(text)?.[1] ?? '';
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? '';
   const field = (key: string) => new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(block)?.[1]?.trim().replace(/^["']|["']$/g, '');
   // A skill marked like this is refused to a model: only a person may start it.
   return { name: field('name'), description: field('description'), personOnly: field('disable-model-invocation') === 'true' };
 }
 
 const dirsIn = (dir: string): string[] => {
+  let names: string[];
   try {
-    return fs.readdirSync(dir).filter((name) => !name.startsWith('.') && fs.statSync(path.join(dir, name)).isDirectory());
+    names = fs.readdirSync(dir);
   } catch {
     return [];
   }
+  return names.filter((name) => {
+    if (name.startsWith('.')) return false;
+    try {
+      return fs.statSync(path.join(dir, name)).isDirectory();
+    } catch {
+      // A link that leads nowhere, or an entry that cannot be read: it is not a skill, and the ones beside it still are.
+      return false;
+    }
+  });
 };
 
 function skillsIn(dir: string, prefix: string, source: SkillRef['source'], mountPath?: string): SkillRef[] {

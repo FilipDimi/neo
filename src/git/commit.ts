@@ -55,6 +55,18 @@ export async function commitAll(dir: string, author: Identity, message: string, 
   return must(dir, ['rev-parse', 'HEAD']);
 }
 
+/**
+ * Puts the folder back to its last commit: changes to files git tracks are dropped and files it does not know are
+ * removed. What the repository ignores (build output, caches) stays. For after a gate, which runs on committed work
+ * and may write as it goes: none of that is the employee's work, and the next commit takes everything in the folder.
+ */
+export async function discardChanges(dir: string): Promise<void> {
+  assertOwnGitDir(dir);
+  if ((await git(dir, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])).code === 0) return; // a merge someone has to resolve is not litter
+  await must(dir, ['checkout', '-q', '--', '.']);
+  await must(dir, ['clean', '-fdq']);
+}
+
 const lines = (text: string): string[] => text.split('\n').filter(Boolean);
 // A diff is computed by git itself: no outside diff program and no converter named in the repository.
 const PLAIN = ['--no-ext-diff', '--no-textconv'];

@@ -22,7 +22,7 @@ import { EFFORT_LABELS, MODEL_LABELS } from '../shared/prices.ts';
 import { Capability, Company, Effort, Gate, ModelTier, Repo, Service, type Task, Team, TeamRepo } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.ts';
 import { ADMIN_TOOLS } from '../shared/adminTools.ts';
-import { adminTool, checkTeam } from '../supervisor/admin.ts';
+import { adminTool, checkGates, checkTeam } from '../supervisor/admin.ts';
 import { chat, messageEmployee } from '../supervisor/chat.ts';
 import { companyNow } from '../supervisor/companyNow.ts';
 import { repoProblem } from '../supervisor/health.ts';
@@ -187,7 +187,13 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
   });
 
   app.patch('/api/repos/:id', async (request) => {
-    const repo = await checkedRepo({ ...found(store.getRepo(db, id(request)), 'such repository'), ...RepoPatch.parse(request.body) });
+    const before = found(store.getRepo(db, id(request)), 'such repository');
+    const repo = await checkedRepo({ ...before, ...RepoPatch.parse(request.body) });
+    try {
+      checkGates(db, before, repo.gates);
+    } catch (failure) {
+      throw new HttpError(400, (failure as Error).message);
+    }
     apply(db, (tx) => tx.emit({ kind: 'repo_changed', repo }), now());
     return { repo };
   });

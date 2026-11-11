@@ -136,9 +136,21 @@ export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promi
         // Already gone.
       }
     }, gate.timeoutMinutes * 60_000);
+    let ended = false;
+    let grace: NodeJS.Timeout | undefined;
     const finish = (code: number) => {
+      if (ended) return;
+      ended = true;
       clearTimeout(timer);
-      fs.rmSync(tmp, { recursive: true, force: true });
+      clearTimeout(grace);
+      // Whatever still holds the gate's output is not waited for: its result is in.
+      child.stdout.destroy();
+      child.stderr.destroy();
+      try {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        // Something in it could not be removed. The system clears its temp folder; the gate's result does not wait on that.
+      }
       const tail = Buffer.from(output).subarray(-GATE_OUTPUT_CAP).toString('utf8');
       resolve(result(timedOut ? 124 : code, timedOut ? `${tail}\n(timed out after ${gate.timeoutMinutes} min)` : tail));
     };
@@ -146,7 +158,17 @@ export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promi
       output += String(error);
       finish(127);
     });
-    child.on('close', (code) => finish(code ?? 1));
+    // A gate is over when its command is, with that command's result. What it left running (a server started with "&")
+    // is ended with it; its last words are given a moment to arrive, and then the gate is done whoever still holds the pipe.
+    child.on('exit', (code) => {
+      try {
+        process.kill(-child.pid!, 'SIGKILL');
+      } catch {
+        // Nothing of it is left.
+      }
+      grace = setTimeout(() => finish(code ?? 1), 1500);
+      child.once('close', () => finish(code ?? 1));
+    });
   });
 }
 

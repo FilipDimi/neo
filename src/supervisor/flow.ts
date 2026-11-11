@@ -10,14 +10,14 @@ import { apply, type Tx } from '../db/apply.ts';
 import type { Paths } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
-import { changedFiles, commitAll, diffStat, NestedRepoError, patch } from '../git/commit.ts';
+import { changedFiles, commitAll, diffStat, discardChanges, NestedRepoError, patch } from '../git/commit.ts';
 import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
 import type { GateLimits, GateQueue } from '../git/gates.ts';
 import type { Identity } from '../git/git.ts';
 import { isMerged, landOn, mergeInto } from '../git/merge.ts';
 import { outside } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
-import type { Decision, Employee, Finding, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
+import type { Decision, Employee, Finding, Gate, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
 import { countsCost } from '../shared/view.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
@@ -102,6 +102,8 @@ export class Flow {
       // A child starts from its parent's branch, so that branch must be in the user's repository first.
       if (parent?.branch && parent.folder && fs.existsSync(parent.folder)) await publish(site.repo.path, parent.folder, parent.branch);
       const dir = path.join(this.host.paths.folders, task.id);
+      // A folder nobody recorded is what a start that never finished left there (the engine was stopped in the middle of it). It is made again.
+      if (!task.folder && fs.existsSync(dir)) await removeFolder(dir);
       const branch = task.branch ?? branchName(task);
       // A task that was worked before has its branch published: pick up from there.
       await createFolder({ repoPath: site.repo.path, dir, branch, startPoint: task.branch ? branch : (parent?.branch ?? site.teamRepo.baseBranch) }).catch(async (error) => {
@@ -421,16 +423,27 @@ export class Flow {
     return false;
   }
 
+  /**
+   * The gates a task names, in its own order. A gate it names that its repository no longer has is not passed over:
+   * work that was to be checked would land unchecked. It stops here, and the card says which gate is missing.
+   */
+  private gatesOf(task: Task, repo: Repo): Gate[] {
+    const missing = task.gates.filter((name) => !repo.gates.some((gate) => gate.name === name));
+    if (missing.length > 0) throw new Error(`the gate ${missing.map((name) => `"${name}"`).join(', ')} that this task names is no longer among the gates of ${repo.path} (${repo.gates.map((gate) => gate.name).join(', ') || 'it has none'}). Put it back under that name, then retry`);
+    return repo.gates.filter((gate) => task.gates.includes(gate.name)).sort((a, b) => task.gates.indexOf(a.name) - task.gates.indexOf(b.name));
+  }
+
   /** Runs the task's gates in its folder and stores the real results with the run. A failure sends the work back. */
   private async gatesPass(runId: string, task: Task): Promise<boolean> {
     const site = this.site(task);
-    const gates = (site?.repo.gates ?? []).filter((gate) => task.gates.includes(gate.name)).sort((a, b) => task.gates.indexOf(a.name) - task.gates.indexOf(b.name));
+    const gates = site ? this.gatesOf(task, site.repo) : [];
     if (!site || gates.length === 0) return true;
     const results = await this.host.gates.run(gates, site.folder, {
       onStart: (gate) => this.change((tx) => tx.emit({ kind: 'gate_started', runId, taskId: task.id, name: gate.name })),
       onFinish: (result) => this.change((tx) => tx.emit({ kind: 'gate_finished', runId, taskId: task.id, result })),
       limits: this.host.gateLimits(site.folder, site.team),
     });
+    await discardChanges(site.folder);
     const failed = results.find((r) => r.exitCode !== 0);
     if (!failed) return true;
     const current = store.getTask(this.db, task.id)!;
@@ -602,8 +615,8 @@ export class Flow {
     }
     let failedGate: GateResult | undefined;
     const recheck = async () => {
-      const gates = site.repo.gates.filter((gate) => task.gates.includes(gate.name));
-      const results = await this.host.gates.run(gates, site.folder, { limits: this.host.gateLimits(site.folder, site.team) });
+      const results = await this.host.gates.run(this.gatesOf(task, site.repo), site.folder, { limits: this.host.gateLimits(site.folder, site.team) });
+      await discardChanges(site.folder);
       failedGate = results.find((r) => r.exitCode !== 0);
       return failedGate === undefined;
     };
