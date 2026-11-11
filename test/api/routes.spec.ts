@@ -311,3 +311,91 @@ describe('company, teams and people', () => {
     expect((await call('GET', '/api/health')).json).toMatchObject({ report: { diskFreeGb: 80, login: 'ok', failures: [] } });
   });
 });
+
+describe('what a plain mistake cannot break', () => {
+  const empty = async () => {
+    const dir = tempDir();
+    const db = openDb(paths(dir).db);
+    const sup = new Supervisor({ db, dataDir: dir, spawn: scripted().spawn });
+    return api({ dir, db, sup, clock: { now: () => T0, advance: () => {} } });
+  };
+
+  it('makes no company when the repository named at setup cannot be used, and registers it with the company when it can', async () => {
+    const { call, w } = await empty();
+    const refused = await call('POST', '/api/setup', { name: 'Acme', repo: { path: path.join(tempDir(), 'nope'), gates: [] } });
+    expect(refused.status).toBe(400);
+    expect(refused.json.error).toMatch(/missing/);
+    expect(store.getCompany(w.db)).toBeUndefined();
+    // The same form again, corrected: nothing was left behind to refuse it.
+    const repoPath = gitRepo();
+    const made = await call('POST', '/api/setup', { name: 'Acme', repo: { path: `${repoPath}/`, gates: [{ name: 'tests', command: 'true', timeoutMinutes: 15, lock: null }] } });
+    expect(made.status).toBe(200);
+    expect(store.allRepos(w.db)).toMatchObject([{ path: repoPath, gates: [{ name: 'tests' }] }]);
+  });
+
+  it('registers a repository by the path it really has, and only once', async () => {
+    const home = process.env.HOME;
+    const repoPath = gitRepo();
+    const { call } = await fresh();
+    process.env.HOME = path.dirname(repoPath);
+    try {
+      expect((await call('POST', '/api/repos', { path: `~/${path.basename(repoPath)}/` })).json.repo).toMatchObject({ path: repoPath });
+    } finally {
+      process.env.HOME = home;
+    }
+    expect((await call('POST', '/api/repos', { path: repoPath })).json.error).toMatch(/already/);
+  });
+
+  it('keeps what a change did not name: a repository its gates, a team its purpose', async () => {
+    const repoPath = gitRepo();
+    const { call } = await fresh();
+    const repo = (await call('POST', '/api/repos', { path: repoPath, gates: [{ name: 'tests', command: 'true', timeoutMinutes: 10, lock: null }] })).json.repo;
+    expect((await call('PATCH', `/api/repos/${repo.id}`, { path: repoPath })).json.repo.gates).toMatchObject([{ name: 'tests' }]);
+    const made = (await call('POST', '/api/teams', { name: 'Docs', purpose: 'Writes the handbook.', selfManaged: true })).json.team;
+    expect((await call('PATCH', `/api/teams/${made.id}`, { dailyCapUsd: 15 })).json.team).toMatchObject({ purpose: 'Writes the handbook.', dailyCapUsd: 15, selfManaged: true });
+  });
+
+  it('does not fire the chief of staff, whom nothing could replace', async () => {
+    const { call, w } = await empty();
+    await call('POST', '/api/setup', { name: 'Acme', chiefName: 'Neo' });
+    const chief = store.getCompany(w.db)!.chiefOfStaffId!;
+    const refused = await call('POST', `/api/employees/${chief}/fire`);
+    expect(refused.status).toBe(400);
+    expect(refused.json.error).toMatch(/chief of staff/);
+    expect(store.getEmployee(w.db, chief)!.fired).toBe(false);
+    expect(store.getCompany(w.db)!.chiefOfStaffId).toBe(chief);
+  });
+
+  it('refuses a second person or team of the same name, since both are found by name', async () => {
+    const { call } = await fresh();
+    const second = { teamId: 'team1', role: 'Writes.', model: 'claude-sonnet-5-5', capabilities: ['read_files'] };
+    expect((await call('POST', '/api/employees', { ...second, name: ' ada ' })).json.error).toMatch(/already someone called Ada/);
+    expect((await call('PATCH', '/api/employees/emp2', { name: 'ADA' })).json.error).toMatch(/already someone called Ada/);
+    expect((await call('PATCH', '/api/employees/emp1', { name: 'Ada', role: 'Writes more.' })).status).toBe(200);
+    const made = await call('POST', '/api/admin/create_team', { name: 'Design ', selfManaged: true });
+    expect(made.json.text).toMatch(/Created the team Design/);
+    expect((await call('POST', '/api/admin/update_team', { team: 'Design', purpose: 'Draws.' })).status).toBe(200);
+    expect((await call('POST', '/api/teams', { name: 'design', selfManaged: true })).json.error).toMatch(/already a team called Design/);
+    expect((await call('POST', '/api/admin/update_team', { team: 'team1', name: 'DESIGN' })).json.error).toMatch(/already a team called Design/);
+  });
+
+  it('leaves a finished task finished when its priority is touched', async () => {
+    const { call, w } = await fresh();
+    const done = task({ id: 'old', state: 'done', updatedAt: plus(T0, -7 * 86_400).toISOString() });
+    apply(w.db, (tx) => tx.emit({ kind: 'task_changed', task: done, cause: 'created' }));
+    expect((await call('PATCH', '/api/tasks/old', { priority: 1 })).status).toBe(200);
+    expect(store.getTask(w.db, 'old')).toMatchObject({ priority: 1, updatedAt: done.updatedAt });
+  });
+
+  it('does not take a repository away from a team that has unfinished work in it', async () => {
+    const repoPath = gitRepo();
+    const { call, w } = await fresh(scripted().spawn, { repos: [{ id: 'repo1', path: repoPath, gates: [] }], teams: [team({ selfManaged: true, repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: null }] })] });
+    apply(w.db, (tx) => tx.emit({ kind: 'task_changed', task: task({ id: 'open', state: 'running', repoId: 'repo1' }), cause: 'created' }));
+    const refused = await call('PATCH', '/api/teams/team1', { repos: [] });
+    expect(refused.status).toBe(400);
+    expect(refused.json.error).toMatch(/unfinished/);
+    expect((await call('POST', '/api/admin/update_team', { team: 'team1', mergeTarget: 'team' })).status).toBe(200);
+    apply(w.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(w.db, 'open')!, state: 'done' }, cause: 'state' }));
+    expect((await call('PATCH', '/api/teams/team1', { repos: [] })).status).toBe(200);
+  });
+});

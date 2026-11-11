@@ -27,12 +27,20 @@ function checkKit(ctx: HireCtx, team: Team, skills: string[], capabilities: Capa
   if (off) throw new Error(`"${CAPABILITIES[off].label}" is off for the team ${team.name}`);
 }
 
+/** People are found by name: by the chief of staff, by the tools, by the user. Two of one name could not be told apart. */
+function checkName(ctx: HireCtx, name: string, self?: string): void {
+  const plain = name.trim().toLowerCase();
+  const other = store.allEmployees(ctx.db).find((employee) => !employee.fired && employee.id !== self && employee.name.trim().toLowerCase() === plain);
+  if (other) throw new Error(`there is already someone called ${other.name} here; people are found by name, so this one needs another`);
+}
+
 export function hire(ctx: HireCtx, input: HireInput): Employee {
   const team = store.getTeam(ctx.db, input.teamId);
   const company = store.getCompany(ctx.db);
   if (!team || !company) throw new Error(`there is no team ${input.teamId}`);
   if (team.removed) throw new Error(`the team ${team.name} was removed`);
   if (!input.name.trim()) throw new Error('an employee needs a name');
+  checkName(ctx, input.name);
   const form: HireForm =
     'preset' in input
       ? { name: input.name, teamId: input.teamId, role: PRESETS[input.preset].role, model: company.models[PRESETS[input.preset].tier], lead: PRESETS[input.preset].lead, skills: PRESETS[input.preset].skills, capabilities: PRESETS[input.preset].capabilities }
@@ -82,6 +90,8 @@ export function removeTeam(ctx: HireCtx, teamId: string): Team {
 export function fire(ctx: HireCtx, employeeId: string): void {
   const employee = store.getEmployee(ctx.db, employeeId);
   if (!employee) throw new Error(`there is no employee ${employeeId}`);
+  // Nothing appoints a chief of staff after setup, and the company's chat and its cards go through this one.
+  if (store.getCompany(ctx.db)?.chiefOfStaffId === employee.id) throw new Error(`${employee.name} is the chief of staff, whom nobody could replace: the company's chat goes through them. Change their name, role or model instead`);
   if (fs.existsSync(employee.memoryDir)) {
     const archive = path.join(ctx.paths.memory, 'archive');
     fs.mkdirSync(archive, { recursive: true });
@@ -109,6 +119,7 @@ export function edit(ctx: HireCtx, employeeId: string, patch: Partial<Pick<Emplo
   if (!employee || !team) throw new Error(`there is no employee ${employeeId}`);
   const next: Employee = { ...employee, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
   if (!next.name.trim() || !next.role.trim() || !next.model.trim()) throw new Error('an employee needs a name, a role sentence and a model');
+  checkName(ctx, next.name, employee.id);
   checkKit(ctx, team, next.skills, next.capabilities);
   apply(ctx.db, (tx) => tx.emit({ kind: 'employee_changed', employee: next }), ctx.now);
   return next;

@@ -70,8 +70,15 @@ function findSkills(ctx: HireCtx, wanted: string[]): string[] {
 }
 
 /** A team may only name repositories that are registered and branches that exist in them. */
-export async function checkTeam(db: Db, team: Team): Promise<Team> {
+export async function checkTeam(db: Db, given: Team): Promise<Team> {
+  const team: Team = { ...given, name: given.name.trim() };
   if (team.removed) throw new Error(`The team ${team.name} was removed.`);
+  const namesake = store.allTeams(db).find((other) => other.id !== team.id && other.name.trim().toLowerCase() === team.name.toLowerCase());
+  if (namesake) throw new Error(`There is already a team called ${namesake.name}. Teams are found by name, so this one needs another.`);
+  // Work that is under way is committed, gated and merged in the repository its team names. Taking that away would let it end with none of the three.
+  const kept = new Set(team.repos.map((entry) => entry.repoId));
+  const stranded = store.listTasks(db, { teamId: team.id }).filter((task) => task.repoId && !kept.has(task.repoId) && task.state !== 'done' && task.state !== 'failed');
+  if (stranded.length > 0) throw new Error(`The team ${team.name} has unfinished work in the repository it would lose: ${stranded.map((task) => `"${task.title}"`).join(', ')}. Finish or stop it first.`);
   for (const entry of z.array(TeamRepo).parse(team.repos)) {
     const repo = store.getRepo(db, entry.repoId);
     if (!repo) throw new Error(`There is no repository ${entry.repoId}.`);

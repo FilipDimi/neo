@@ -139,6 +139,6 @@ describe('fire and edit', () => {
   it('keeps an employee that already exists out of the way of a new one', () => {
     const { ctx } = setup();
     apply(ctx.db, (tx) => tx.emit({ kind: 'employee_changed', employee: employee({ id: 'old', teamId: 'ios' }) }));
-    expect(hire(ctx, { preset: 'engineer', name: 'Ada', teamId: 'ios' }).id).not.toBe('old');
+    expect(hire(ctx, { preset: 'engineer', name: 'Grace', teamId: 'ios' }).id).not.toBe('old');
   });
 });

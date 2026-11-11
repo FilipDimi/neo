@@ -268,6 +268,8 @@ export class Supervisor {
       const assignee = store.getEmployee(this.db, patch.assigneeId);
       if (!assignee || assignee.fired || assignee.teamId !== team.id) throw new Error(`${patch.assigneeId} is not on the team ${team.name}`);
     }
+    // When a task ended is when it was last changed: touching one that is over must not make it end again, today.
+    const finished = task.state === 'done' || task.state === 'failed';
     this.change((tx, now) => {
       let base = task;
       if (reassigned && staffing.length > 0) {
@@ -275,7 +277,7 @@ export class Supervisor {
         for (const card of staffing) decisions.close(tx, card, now);
         if (cards.length === staffing.length && canTransition(task, 'unblock')) base = decisions.move(tx, task, 'unblock', now);
       }
-      const next: Task = { ...base, priority: patch.priority ?? task.priority, assigneeId: patch.assigneeId === undefined ? task.assigneeId : patch.assigneeId, updatedAt: now.toISOString() };
+      const next: Task = { ...base, priority: patch.priority ?? task.priority, assigneeId: patch.assigneeId === undefined ? task.assigneeId : patch.assigneeId, updatedAt: finished ? task.updatedAt : now.toISOString() };
       tx.emit({ kind: 'task_changed', task: next, cause: 'edited' });
       if (!reassigned || next.state === 'blocked') return;
       for (const request of store.requestsOf(this.db, task.id)) tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: task.id });

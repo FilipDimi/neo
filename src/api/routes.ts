@@ -3,6 +3,8 @@
  * supervisor or the same write path it uses. The shape of what a screen needs was designed with
  * the screen plan in front of it (docs/superpowers/plans/2026-11-09-virtual-startup-screen.md).
  */
+import os from 'node:os';
+import path from 'node:path';
 import { screenId } from './webBuild.ts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -41,13 +43,15 @@ export class HttpError extends Error {
 const text = z.string().trim().min(1);
 const priority = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 
-const SetupBody = z.object({ name: text, rules: z.string().optional(), chiefName: z.string().optional(), auth: Company.shape.auth.optional(), models: Company.shape.models.partial().optional() });
+const RepoBody = z.object({ path: text, gates: z.array(Gate).default([]) });
+// A change names only what it changes. A default here would be written over what is there.
+const RepoPatch = z.object({ path: text, gates: z.array(Gate) }).partial();
+const SetupBody = z.object({ repo: RepoBody.optional(), name: text, rules: z.string().optional(), chiefName: z.string().optional(), auth: Company.shape.auth.optional(), models: Company.shape.models.partial().optional() });
 const CompanyPatch = z
   .object({ name: text, rules: z.string(), concurrency: z.number(), dailyCapUsd: z.number(), adminId: z.string().nullable(), models: Company.shape.models, denyRead: z.array(z.string()), minFreeGb: z.number(), services: z.array(Service), paused: z.object({ reason: z.literal('user'), until: z.string().nullable() }).nullable() })
   .partial();
-const RepoBody = z.object({ path: text, gates: z.array(Gate).default([]) });
 const TeamBody = z.object({ name: text, purpose: z.string().default(''), ...Team.omit({ id: true, name: true, purpose: true, leadId: true }).partial().shape });
-const TeamPatch = TeamBody.partial();
+const TeamPatch = TeamBody.extend({ purpose: z.string() }).partial();
 const HireBody = z.union([
   z.object({ preset: z.enum(Object.keys(PRESETS) as [keyof typeof PRESETS, ...(keyof typeof PRESETS)[]]), name: text, teamId: text }),
   z.object({ name: text, teamId: text, role: text, model: text, effort: Effort.nullable().optional(), lead: z.boolean().default(false), skills: z.array(z.string()).default([]), capabilities: z.array(Capability).default([]) }),
@@ -150,7 +154,15 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
 
   // ---------- the company ----------
 
-  app.post('/api/setup', async (request) => ({ company: setupCompany({ db, now: now(), paths }, SetupBody.parse(request.body)) }));
+  app.post('/api/setup', async (request) => {
+    const { repo: named, ...body } = SetupBody.parse(request.body);
+    if (store.getCompany(db)) throw new AlreadySetUp('This data directory already holds a company.');
+    // A repository that cannot be used is said before anything is made: a company made without it could not be given it by the same form again.
+    const repo = named ? await checkedRepo({ id: store.newId(), ...named }) : null;
+    const company = setupCompany({ db, now: now(), paths }, body);
+    if (repo) apply(db, (tx) => tx.emit({ kind: 'repo_changed', repo }), now());
+    return { company, repo };
+  });
 
   app.patch('/api/company', async (request) => {
     const company = found(store.getCompany(db), 'company yet');
@@ -159,7 +171,10 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     return { company: next };
   });
 
-  async function checkedRepo(repo: Repo): Promise<Repo> {
+  async function checkedRepo(given: Repo): Promise<Repo> {
+    // The folder as the engine will find it: "~" is the shell's word for home, and a path is kept without a slash at its end.
+    const repo = { ...given, path: path.resolve(given.path.replace(/^~(?=$|\/)/, os.homedir())) };
+    if (store.allRepos(db).some((other) => other.id !== repo.id && other.path === repo.path)) throw new HttpError(400, `${repo.path} is already registered.`);
     const problem = await repoProblem(repo.path);
     if (problem && !/progress|lock/.test(problem)) throw new HttpError(400, `${repo.path}: ${problem}.`);
     return repo;
@@ -172,7 +187,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
   });
 
   app.patch('/api/repos/:id', async (request) => {
-    const repo = await checkedRepo({ ...found(store.getRepo(db, id(request)), 'such repository'), ...RepoBody.partial().parse(request.body) });
+    const repo = await checkedRepo({ ...found(store.getRepo(db, id(request)), 'such repository'), ...RepoPatch.parse(request.body) });
     apply(db, (tx) => tx.emit({ kind: 'repo_changed', repo }), now());
     return { repo };
   });
