@@ -146,6 +146,12 @@ describe('a gate is confined like any other command', () => {
     expect(xcode.exitCode).toBe(0);
     expect(xcode.output).toContain('/usr/bin/xcodebuild -IDEPackageSupportDisableManifestSandbox=YES -IDEPackageSupportDisablePluginExecutionSandbox=YES "$@"');
     expect(xcode.output).toContain('/usr/bin/swift "$1" --disable-sandbox "${@:2}"');
+    // The compiler starts a sandbox of its own for a macro's plugin (every SwiftData @Model has one), and xcodebuild
+    // passes no switch for that on. The gate hands xcodebuild a settings file that tells the compiler not to.
+    const settings = await runGate(gate('settings', 'cat "$XCODE_XCCONFIG_FILE"'), dir, { xcode: true });
+    expect(settings.exitCode).toBe(0);
+    expect(settings.output.trim()).toBe('OTHER_SWIFT_FLAGS = $(inherited) -Xfrontend -disable-sandbox');
+    expect((await runGate(gate('settings', 'echo "[${XCODE_XCCONFIG_FILE:-none}]"'), dir)).output.trim()).toBe('[none]');
     const plain = await runGate(gate('tools', 'command -v xcodebuild; command -v swift'), dir);
     expect(plain.output.split('\n').filter(Boolean)).toEqual(['/usr/bin/xcodebuild', '/usr/bin/swift']);
     // XCTest talks to its test manager over one socket. Only a team that builds with Xcode may reach it, and no other socket.

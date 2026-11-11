@@ -29,9 +29,10 @@ export type GateLimits = {
   env?: Record<string, string>;
   sandboxExec?: string;
   /**
-   * The team builds with Xcode. swift and xcodebuild each start a sandbox of their own, and a sandbox cannot start
-   * inside another: the gate gets wrappers that switch those off (the gate's own sandbox still confines everything
-   * they run), and may reach the one socket XCTest talks to its test manager over.
+   * The team builds with Xcode. swift and xcodebuild each start a sandbox of their own, and so does the compiler for
+   * a macro's plugin; a sandbox cannot start inside another. The gate gets wrappers and a settings file that switch
+   * those off (the gate's own sandbox still confines everything they run), and may reach the one socket XCTest talks
+   * to its test manager over.
    */
   xcode?: boolean;
 };
@@ -88,6 +89,17 @@ function xcodeWrappers(tmp: string): string {
   return bin;
 }
 
+/**
+ * Build settings xcodebuild lays over every target it builds, the packages among them. `swift build` passes this
+ * switch to the compiler when its own sandbox is off; xcodebuild has no such switch, so without it every macro
+ * (each SwiftData @Model is one) fails to build with "swift-plugin-server produced malformed response".
+ */
+function xcodeSettings(tmp: string): string {
+  const file = path.join(tmp, 'gate.xcconfig');
+  fs.writeFileSync(file, 'OTHER_SWIFT_FLAGS = $(inherited) -Xfrontend -disable-sandbox\n');
+  return file;
+}
+
 export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promise<GateResult> {
   const started = Date.now();
   const sandboxExec = limits.sandboxExec ?? SANDBOX_EXEC;
@@ -96,7 +108,10 @@ export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promi
 
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vs-gate-')));
   const env: Record<string, string> = { ...(limits.env ?? withToolchains(plainEnv(process.env))), TMPDIR: tmp };
-  if (limits.xcode) env.PATH = `${xcodeWrappers(tmp)}${path.delimiter}${env.PATH ?? ''}`;
+  if (limits.xcode) {
+    env.PATH = `${xcodeWrappers(tmp)}${path.delimiter}${env.PATH ?? ''}`;
+    env.XCODE_XCCONFIG_FILE = xcodeSettings(tmp);
+  }
   return new Promise((resolve) => {
     // Its own process group, so a timeout ends everything the gate started.
     const child = spawn(sandboxExec, ['-p', gateProfile(cwd, tmp, limits), '/bin/bash', '-c', gate.command], {
