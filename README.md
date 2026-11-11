@@ -16,6 +16,19 @@ Status: built, and in use on Receipts since 2026-11-09 (engine plan task 15; `do
 | The three artboards: Office, Board, Hire | `docs/design/` (copies of https://claude.ai/artifact/T6Pf7v49PdieyCFQDWRgCb) |
 | What the Agent SDK really does on this login | `docs/spike/2026-11-09-spike-findings.md` |
 
+## Getting started
+
+It needs a Mac (gates run in macOS's own `sandbox-exec`), Node 20.19 or 22.13 and newer, git, and Claude Code installed and logged in with a claude.ai subscription: run `claude` in a terminal and log in. The company runs on that login. Nothing here asks for an API key.
+
+```bash
+npm install
+npm run demo        # look around first: a throwaway company on a scripted runtime, no model, nothing spent, at http://127.0.0.1:4318/
+npm run release     # the real one: a tested copy of this commit under ~/.virtual-startup-app
+npm run live        # starts your company at http://127.0.0.1:4317/ and opens it; the first page sets it up
+```
+
+Your company's data is in `~/.virtual-startup`. `VS_DATA_DIR` puts it elsewhere, `VS_APP_DIR` does the same for the releases, `VS_PORT` changes the port and `VS_NO_OPEN=1` leaves the browser alone. If `npm run release` stops at its tests, it prints why; `npm run release -- --skip-tests` makes the release without them.
+
 ## Commands
 
 ```bash
@@ -24,18 +37,18 @@ npm run live        # starts the real company from the current release: the code
 npm run stop        # stops the real company: asks every engine that runs from a release to end, as Ctrl-C would
 npm run mcp         # the company's tools for a Claude session, as a server over stdio (a session starts this itself; see below)
 npm start           # starts an engine from this working folder, for development; do not point it at a company that is at work
-npm run demo        # a throwaway company on a scripted runtime: no model, nothing spent (see scripts/demo.ts for the words that make an employee hang, ask or be refused)
+npm run demo        # a throwaway company on a scripted runtime, on port 4318: no model, nothing spent (see scripts/demo.ts for the words that make an employee hang, ask or be refused)
 npm run build:web   # builds the screen into web/dist, which the engine serves; without it the engine serves a plain page
 npm run watch:web   # rebuilds the screen on every save, for working on it against `npm run demo`; reload the page
 npm run story       # records the company day the screen's tests replay (web/src/fixtures/story.json)
 npm test            # unit and integration tests: no model, no network
 npm run typecheck
-npm run smoke       # live: a led team briefs, works, reviews and merges (about six short sessions; VS_LIVE_CONCURRENCY=1 runs them one at a time)
-npm run spike       # live: what the Agent SDK does on this login (about 20 short sessions)
+npm run smoke       # live: a led team briefs, works, reviews and merges (about ten short sessions; VS_LIVE_CONCURRENCY=1 runs them one at a time)
+npm run spike       # live: what the Agent SDK does on this login (about 20 short sessions); it rewrites the recordings under test/fixtures/sdk
 VS_LIVE=1 npx vitest run test/e2e/one-task.spec.ts   # live: one real task, and a refused write
 ```
 
-Node 20.19 or newer. `npm run spike auth` checks the login with no model turn. The other probes are listed at the top of `scripts/spike-login.ts`.
+`npm run spike auth` checks the login with no model turn. The other probes are listed at the top of `scripts/spike-login.ts`.
 
 ## Where the real company runs
 

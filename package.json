@@ -5,8 +5,11 @@
   "description": "A virtual startup: a local-first company of AI employees, shown as an office. The name is provisional.",
   "type": "module",
   "engines": {
-    "node": ">=20.19"
+    "node": "^20.19.0 || >=22.13.0"
   },
+  "os": [
+    "darwin"
+  ],
   "scripts": {
     "start": "tsx src/main.ts",
     "test": "vitest run",

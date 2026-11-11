@@ -23,7 +23,7 @@ const MINUTES = 15;
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vs-smoke-')));
 const repoPath = path.join(root, 'repo');
 const dataDir = path.join(root, 'data');
-const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid', ...args], { cwd: repoPath, encoding: 'utf8' }).trim();
+const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repoPath, encoding: 'utf8' }).trim();
 
 fs.mkdirSync(repoPath, { recursive: true });
 git('init', '-q', '-b', 'main');

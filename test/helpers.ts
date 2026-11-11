@@ -62,7 +62,7 @@ export function world(spawn: Spawn, over: { company?: Partial<Company>; teams?: 
 import { execFileSync } from 'node:child_process';
 
 export const sh = (cwd: string, command: string, ...args: string[]): string => execFileSync(command, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-export const gitIn = (cwd: string, ...args: string[]): string => sh(cwd, 'git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args);
+export const gitIn = (cwd: string, ...args: string[]): string => sh(cwd, 'git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args);
 
 /** A repository with one commit on `main` and, by default, a `team` branch at the same commit. `main` stays checked out. */
 export function gitRepo(branches: string[] = ['team'], files: Record<string, string> = { 'README.md': 'hello\n' }): string {

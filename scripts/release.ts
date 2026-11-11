@@ -4,6 +4,7 @@
  * working folder, so editing the code here and running its tests cannot touch a company at work.
  *
  *   npm run release        copies the last commit, installs, builds, tests, and makes it current
+ *   npm run release -- --skip-tests   the same without the tests
  *   npm run live           starts the company from the current release
  *
  * A release is a folder named after its commit under ~/.virtual-startup-app/releases, and
@@ -26,6 +27,24 @@ const KEPT = 2;
 const sh = (command: string, args: string[], cwd: string, input?: Buffer): Buffer => execFileSync(command, args, { cwd, input, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'inherit'], maxBuffer: 1024 * 1024 * 1024 });
 const step = (text: string): void => console.log(`· ${text}`);
 
+/**
+ * One step of building a release. It is quiet while it goes well. When it fails, what it printed is the explanation,
+ * so that is shown, and the release is not made: the company stays on the release it has.
+ */
+function build(what: string, command: string, args: string[], cwd: string, hint = ''): void {
+  step(what);
+  try {
+    execFileSync(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024 * 1024 });
+  } catch (failure) {
+    const { stdout, stderr, message } = failure as { stdout?: Buffer; stderr?: Buffer; message: string };
+    if (stdout?.length) process.stdout.write(stdout);
+    if (stderr?.length) process.stderr.write(stderr);
+    if (!stdout?.length && !stderr?.length) console.error(message);
+    console.error(`\nNo release was made: ${what} failed, as shown above. Nothing that is running was touched.${hint}`);
+    process.exit(1);
+  }
+}
+
 const sha = sh('git', ['rev-parse', 'HEAD'], REPO).toString().trim();
 const dirty = sh('git', ['status', '--porcelain'], REPO).toString().trim();
 if (dirty) console.log(`Note: this folder has changes that are not committed. They are not in the release:\n${dirty}\n`);
@@ -40,14 +59,9 @@ else {
   fs.mkdirSync(dir, { recursive: true });
   step(`copying commit ${sha.slice(0, 12)} to ${dir}`);
   sh('tar', ['-x', '-C', dir], REPO, sh('git', ['archive', '--format=tar', sha], REPO));
-  step('installing its dependencies');
-  sh('npm', ['ci', '--no-audit', '--no-fund'], dir);
-  step('building its screen');
-  sh(process.execPath, [path.join(dir, 'node_modules/vite/bin/vite.js'), 'build', '--config', path.join(dir, 'web/vite.config.ts'), '--logLevel', 'warn'], dir);
-  if (!process.argv.includes('--skip-tests')) {
-    step('running its tests');
-    sh('npm', ['test', '--silent'], dir);
-  }
+  build('installing its dependencies', 'npm', ['ci', '--no-audit', '--no-fund'], dir);
+  build('building its screen', process.execPath, [path.join(dir, 'node_modules/vite/bin/vite.js'), 'build', '--config', path.join(dir, 'web/vite.config.ts'), '--logLevel', 'warn'], dir);
+  if (!process.argv.includes('--skip-tests')) build('running its tests', 'npm', ['test', '--silent'], dir, '\nTo make the release without running them: npm run release -- --skip-tests');
   fs.writeFileSync(marker, `${JSON.stringify({ commit: sha, builtAt: new Date().toISOString() }, null, 2)}\n`);
 }
 

@@ -235,7 +235,7 @@ export function caller(port: number, token: string): Call {
     try {
       response = await fetch(`${origin}${route}`, { method, headers: { authorization: `Bearer ${token}`, origin, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     } catch {
-      throw new Refused(`The company is not running on this Mac: nothing answers on port ${port}. Call the start tool to start it, or in a terminal: cd ~/Desktop/startup && npm run live`);
+      throw new Refused(`The company is not running on this Mac: nothing answers on port ${port}. Call the start tool to start it, or in a terminal, in the app's folder: npm run live`);
     }
     const json = (await response.json().catch(() => ({}))) as T & { error?: string };
     if (response.status === 401) throw new Refused('The engine did not accept the token. It was probably started with another data folder than these tools read (VS_DATA_DIR).');

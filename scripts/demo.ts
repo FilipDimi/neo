@@ -2,7 +2,8 @@
  * The whole product with no model: a throwaway company (the cast of the design's artboards), a
  * throwaway repository, real worker processes, and a scripted runtime in place of the SDK.
  *
- *   npm run demo            then open http://127.0.0.1:4317/
+ *   npm run demo            then open http://127.0.0.1:4318/
+ *   VS_PORT=…               another port (the default is 4318: 4317 is the real company's)
  *   VS_DEMO_DELAY_MS=400    makes the employees quicker
  *   VS_DEMO_EMPTY=1         starts with no company, to see first setup
  *
@@ -12,17 +13,23 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildServer, DEFAULT_PORT } from '../src/api/server.ts';
+import { buildServer } from '../src/api/server.ts';
 import { ensureWebBuilt } from '../src/api/webBuild.ts';
+import { whoAnswers } from '../src/api/whoAnswers.ts';
 import { paths } from '../src/db/dataDir.ts';
 import { openDb } from '../src/db/open.ts';
 import { Supervisor } from '../src/supervisor/supervisor.ts';
 import { healthyProbes, seedDemoCompany } from './seed-demo.ts';
 
+const port = Number(process.env.VS_PORT ?? 4318);
+if ((await whoAnswers(port)) !== 'nobody') {
+  console.error(`Port ${port} on this machine is taken, so the demo cannot start there.\nStop what is running there (an earlier demo, perhaps), or start on another port: VS_PORT=4320 npm run demo`);
+  process.exit(1);
+}
+
 ensureWebBuilt();
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vs-demo-')));
 const dataDir = path.join(root, 'data');
-const port = Number(process.env.VS_PORT ?? DEFAULT_PORT);
 const db = openDb(paths(dataDir).db);
 const runtimeModule = path.resolve(import.meta.dirname, '../test/fixtures/demoRuntime.ts');
 

@@ -91,7 +91,7 @@ export async function checkHealth(input: { repos: Repo[]; minFreeGb: number; aut
   let login: HealthReport['login'] = 'ok';
   if (!signedIn.loggedIn) {
     login = 'missing';
-    failures.push({ key: 'login', scope: 'company', text: 'Claude Code is not logged in on this machine. Run "claude", log in, then check again.' });
+    failures.push({ key: 'login', scope: 'company', text: 'Claude Code is not logged in on this machine. Run "claude" in a terminal and log in with your claude.ai account, then check again. If there is no "claude" command, install Claude Code first.' });
   } else if (input.auth === 'subscription' && signedIn.authMethod !== 'claude.ai') {
     login = 'wrong_method';
     failures.push({ key: 'login', scope: 'company', text: `Sessions would run on "${signedIn.authMethod}", but this company runs on the claude.ai subscription. Check the environment the engine was started from.` });

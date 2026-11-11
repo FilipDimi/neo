@@ -13,7 +13,7 @@ import { setupCompany, TEAM_DEFAULTS } from '../src/supervisor/setup.ts';
 
 export function seedDemoCompany(input: { db: Db; dataDir: string; repoPath: string; now: Date; leaseMinutes: number }): void {
   const { db, dataDir, repoPath, now } = input;
-  const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Demo', '-c', 'user.email=demo@example.invalid', ...args], { cwd: repoPath });
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Demo', '-c', 'user.email=demo@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repoPath });
   fs.mkdirSync(repoPath, { recursive: true });
   git('init', '-q', '-b', 'main');
   fs.writeFileSync(path.join(repoPath, 'README.md'), '# A throwaway repository for the demo\n');
