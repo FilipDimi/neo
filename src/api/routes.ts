@@ -19,7 +19,8 @@ import { EARLIER_SHOWN } from '../shared/view.ts';
 import { EFFORT_LABELS, MODEL_LABELS } from '../shared/prices.ts';
 import { Capability, Company, Effort, Gate, ModelTier, Repo, Service, type Task, Team, TeamRepo } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.ts';
-import { checkTeam } from '../supervisor/admin.ts';
+import { ADMIN_TOOLS } from '../shared/adminTools.ts';
+import { adminTool, checkTeam } from '../supervisor/admin.ts';
 import { chat, messageEmployee } from '../supervisor/chat.ts';
 import { companyNow } from '../supervisor/companyNow.ts';
 import { repoProblem } from '../supervisor/health.ts';
@@ -134,6 +135,18 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
 
   /** The same in words: every board, who is running, the cards waiting, today's spend. What the chief of staff is told, and what the tools for a Claude session read. */
   app.get('/api/now', async () => ({ text: companyNow(db, now()) }));
+
+  // ---------- the setup, by tool: what Morpheus's conversations and the morpheus chat both call ----------
+
+  app.post('/api/admin/:tool', async (request) => {
+    const tool = (request.params as { tool: string }).tool;
+    if (!(ADMIN_TOOLS as readonly string[]).includes(tool)) throw new HttpError(404, `There is no setup tool ${tool}.`);
+    try {
+      return { text: await adminTool(hireCtx(), tool, request.body ?? {}) };
+    } catch (failure) {
+      throw new HttpError(400, failure instanceof Error ? failure.message : String(failure));
+    }
+  });
 
   // ---------- the company ----------
 

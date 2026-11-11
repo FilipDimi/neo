@@ -83,6 +83,16 @@ describe("the company's tools for a Claude session", () => {
     expect(await c.use('morpheus', { text: 'remove marketing' })).toEqual({ isError: false, text: 'Morpheus: Removed the team Marketing, and fired Mara.' });
   });
 
+  it('changes the setup directly, with the same tools Morpheus has, and refuses in words', async () => {
+    const c = await company(() => {});
+    expect((await c.use('company_setup')).text).toMatch(/Teams:\n- Office/);
+    expect(await c.use('create_team', { name: 'Design', purpose: 'Designs the app.', selfManaged: true, dailyCapUsd: 5 })).toMatchObject({ isError: false, text: expect.stringMatching(/Created the team Design/) });
+    expect(store.allTeams(c.w.db).map((entry) => entry.name)).toContain('Design');
+    expect(await c.use('update_employee', { employee: 'Mara', model: 'Fable 5.2', effort: 'xhigh' })).toMatchObject({ isError: false, text: expect.stringMatching(/Mara: model Fable 5\.2, extra high effort/) });
+    expect(await c.use('remove_team', { team: 'Sales' })).toMatchObject({ isError: true, text: expect.stringMatching(/no team "Sales"/) });
+    expect((await c.use('remove_team', { team: 'Design' })).text).toMatch(/Removed the team Design/);
+  });
+
   it('says so when no reply came in time, and shows it later', async () => {
     let release: (() => void) | undefined;
     const c = await company(async (s) => {

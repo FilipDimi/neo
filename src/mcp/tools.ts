@@ -7,6 +7,7 @@
  * the screen cannot do.
  */
 import { z } from 'zod';
+import { ADMIN_DESCRIPTION, ADMIN_INPUT, ADMIN_TOOLS } from '../shared/adminTools.ts';
 import type { Decision, Employee, Message, Run, Task, Team } from '../shared/types.ts';
 
 export type Call = <T>(method: 'GET' | 'POST', route: string, body?: unknown) => Promise<T>;
@@ -26,6 +27,7 @@ export const INSTRUCTIONS = `This is the user's line to their chief of staff (Ne
 Read: now (every board, who is running, cards waiting, spend today), tasks, task (one task with its runs), cards, replies (what employees last said to the user).
 Talk: chat (the chief of staff: questions about the company, and requests it turns into tasks on the right team), morpheus (the admin: changes to teams, people, models, caps, rules and gates, and bugs or features for the app itself), message (one employee by name: answered as a conversation; work that is asked for goes on that employee's own team's board).
 Act: answer_card (presses one button of a card), new_task (puts a task straight on a team's board), start (starts the company when a tool says it is not running).
+Setup: company_setup reads the whole setup (teams, people, models, caps, rules, gates); create_team, update_team, remove_team, hire, update_employee, fire, update_company and set_gates change it at once. Use a setup tool only when the user asked for that change, and read company_setup first.
 
 Ask the user before answer_card unless they named the card and the button themselves: a card is a decision that is theirs (a merge, a raised cap, a tool handed to an employee). Ask before new_task unless they asked for that task. chat and message cost a little and can start work; use now, tasks and cards for plain questions about what is going on, which cost nothing.
 An employee's reply can take from a few seconds to a few minutes. When a tool says no reply has come yet, tell the user so and call replies later; do not send the message again.`;
@@ -211,6 +213,16 @@ export const TOOLS: Tool[] = [
     },
   },
 ];
+
+// The setup tools: the same ones Morpheus has inside the company, called straight through the engine's API.
+for (const name of ADMIN_TOOLS) {
+  TOOLS.push({
+    name,
+    description: `${ADMIN_DESCRIPTION[name]} Changes the company's setup at once: use it only when the user asked for that change.`,
+    input: ADMIN_INPUT[name].shape,
+    run: async (args, ctx) => (await ctx.call<{ text: string }>('POST', `/api/admin/${name}`, args)).text,
+  });
+}
 
 /** Calls the engine's API on this machine the way its own screen does: with the token, and as a request from its own address. */
 export function caller(port: number, token: string): Call {

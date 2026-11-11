@@ -253,6 +253,17 @@ describe('company, teams and people', () => {
     expect((await call('POST', '/api/teams/nope/remove')).status).toBe(404);
   });
 
+  it('runs a setup tool by name, and answers a refusal with its words', async () => {
+    const { call, w } = await fresh();
+    const made = await call('POST', '/api/admin/create_team', { name: 'Design', selfManaged: true });
+    expect(made.json.text).toMatch(/Created the team Design/);
+    expect(store.allTeams(w.db).map((entry) => entry.name)).toContain('Design');
+    const refused = await call('POST', '/api/admin/hire', { team: 'Nowhere', name: 'x', role: 'x', model: 'Opus 5.5', tools: ['read_files'] });
+    expect(refused.status).toBe(400);
+    expect(refused.json.error).toMatch(/no team "Nowhere"/);
+    expect((await call('POST', '/api/admin/make_coffee', {})).status).toBe(404);
+  });
+
   it('creates and edits a team, registers a repository, and edits the company', async () => {
     const repoPath = gitRepo();
     const { call, w } = await fresh();
