@@ -69,6 +69,7 @@ export const TOOL_INPUT = {
       .array(
         z.object({
           title: z.string().min(1),
+          summary: z.string().max(300).optional(),
           assigneeId: z.string().min(1),
           brief: z.string().min(1),
           ownership: z.array(z.string()),
@@ -90,6 +91,7 @@ export const TOOL_INPUT = {
     teamId: z.string().min(1),
     assigneeId: z.string().optional(),
     title: z.string().min(1),
+    summary: z.string().max(300).optional(),
     brief: z.string().min(1),
     priority: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     doneCondition: z.string().min(1),

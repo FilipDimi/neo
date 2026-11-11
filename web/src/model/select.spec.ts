@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { company, decision, employee, plus, run, T0, task, team } from '../../../test/rows.ts';
 import { storyAt, taskTitled } from '../fixtures/story.ts';
 import { fromSnapshot, type Snapshot } from '../store/reduce.ts';
-import { board, deck, header, orgChart, spendToday } from './select.ts';
+import { board, deck, gist, glance, header, orgChart, spendToday } from './select.ts';
 
 const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({ version: 1, company: company(), repos: [], teams: [team()], employees: [employee()], tasks: [], runs: [], requests: [], decisions: [], messages: [], health: null, planUsage: null, spend: { company: 0, byTeam: {}, byEmployee: {} }, lastEventId: 1, now: T0.toISOString(), ...over });
 const column = (store: ReturnType<typeof fromSnapshot>, key: string, now = T0) => board(store, now).find((c) => c.key === key)!;
@@ -186,5 +186,45 @@ describe('a decision without a task', () => {
   it('is on the deck with no team', () => {
     const store = fromSnapshot(snapshot({ decisions: [decision({ taskId: null, kind: 'health', text: 'Disk is low.', options: [{ id: 'recheck', label: 'Check again', effect: 'recheck' }] })] }));
     expect(deck(store, T0)).toMatchObject([{ kind: 'health', team: null, text: 'Disk is low.' }]);
+  });
+});
+
+describe('a task at a glance', () => {
+  const people = [employee(), employee({ id: 'lead', name: 'Priya' }), employee({ id: 'neo', name: 'Neo' })];
+  const long = 'The new home screen, first half. Read the layout notes before anything else, all of them, with every page they link to, and do not start on the code until that is done, however long it takes. Sources: the notes and the boards.\n\nData: someone else adds these in a parallel task.';
+  const at = (over: Partial<Snapshot>, now = T0) => glance(fromSnapshot(snapshot({ employees: people, ...over })), 'task1', now)!;
+
+  it('says what the task is in a line or two: its own summary, or else the opening of its brief', () => {
+    expect(gist('Write the note well.')).toBe('Write the note well.');
+    expect(gist(long)).toBe('The new home screen, first half.');
+    expect(gist(`# Heading\n${'word '.repeat(80)}`)).toMatch(/^Heading word .{120,154}…$/);
+    expect(at({ tasks: [task({ brief: long })] }).summary).toBe('The new home screen, first half.');
+    expect(at({ tasks: [task({ brief: long, summary: 'The new home screen, built from the boards.' })] }).summary).toBe('The new home screen, built from the boards.');
+  });
+
+  it('says where a running task stands: who is on it and what they say they are doing, its parts, its gates, its spend, and the last report', () => {
+    const earlier = run({ id: 'run0', outcome: 'done', endedAt: T0.toISOString(), costUsd: 0.5, summary: 'Laid out the header. The list is next.', gateResults: [{ name: 'tests', command: 'npm test', exitCode: 0, output: '', durationMs: 1 }, { name: 'lint', command: 'npm run lint', exitCode: 1, output: '', durationMs: 1 }] });
+    const live = run({ id: 'run1', activity: 'Building the results list of the search page', costUsd: 0.25 });
+    const kids = [task({ id: 'k1', parentId: 'task1', state: 'done' }), task({ id: 'k2', parentId: 'task1', state: 'running' })];
+    const seen = at({ tasks: [task({ state: 'running', assigneeId: 'emp1', capUsd: 3, reviewRounds: 1 }), ...kids], runs: [earlier, live] });
+    expect(seen.lines).toEqual(['Ada is working on it now: Building the results list of the search page.', '1 of 2 sub-tasks done.', 'Sent back once.', 'Gates last time: tests passed, lint failed.', '$0.75 of $3.00 spent over 2 runs.']);
+    expect(seen.report).toEqual({ by: 'Ada', text: 'Laid out the header. The list is next.' });
+  });
+
+  it('says who a waiting task waits on: a review, the user, or whoever is deciding for the user', () => {
+    const reviewing = run({ id: 'r2', mode: 'review', employeeId: 'lead' });
+    expect(at({ tasks: [task({ state: 'review' })], runs: [reviewing] }).lines[0]).toBe('Priya is reviewing it now.');
+    expect(at({ tasks: [task({ state: 'review' })] }).lines[0]).toBe('Waiting for its review to start.');
+    expect(at({ tasks: [task({ state: 'queued', assigneeId: 'emp1' })] }).lines[0]).toBe('Waiting to start, for Ada.');
+    expect(at({ tasks: [task({ state: 'blocked' })], decisions: [decision({ kind: 'question' })] }).lines[0]).toBe('Waiting on you: has a question.');
+    expect(at({ tasks: [task({ state: 'blocked' })], decisions: [decision({ kind: 'review', deciderId: 'neo' })] }).lines[0]).toBe('Neo is deciding what happens next.');
+    expect(at({ tasks: [task({ state: 'done', mergedInto: 'team' })] }).lines[0]).toBe('Done, merged into team.');
+    expect(at({ tasks: [task({ state: 'failed' })] }).lines[0]).toBe('Stopped.');
+  });
+
+  it('says how much the last review left to fix', () => {
+    const work = run({ id: 'w', outcome: 'done', endedAt: T0.toISOString(), summary: 'Added.' });
+    const review = run({ id: 'r', mode: 'review', employeeId: 'lead', outcome: 'done', reason: 'sent_back', endedAt: T0.toISOString(), findings: [{ severity: 'blocking', file: 'a', title: 'x', why: '', fix: '' }, { severity: 'blocking', file: 'b', title: 'y', why: '', fix: '' }, { severity: 'minor', file: 'c', title: 'z', why: '', fix: '' }] });
+    expect(at({ tasks: [task({ state: 'running', assigneeId: 'emp1', reviewRounds: 1 })], runs: [work, review] }).lines).toContain('Sent back once: Priya found 2 things that must be fixed.');
   });
 });

@@ -112,6 +112,8 @@ export const Task = z.object({
   /** 'user' or an employee id. */
   createdBy: z.string(),
   title: z.string().min(1),
+  /** What the task delivers, in a sentence or two, for someone who will not read the brief. Absent on tasks written before there was one. */
+  summary: z.string().optional(),
   brief: z.string(),
   priority: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   state: TaskState,

@@ -231,6 +231,27 @@ describe('daily caps', () => {
     expect(fake.workers).toHaveLength(2);
   });
 
+  it('takes a cap card away when the cap it is about was raised some other way: it asks about nothing any more', async () => {
+    const { w, fake } = await spentWorld({ teams: [team({ selfManaged: true, dailyCapUsd: 0.5 })] }, 0.6);
+    await w.sup.tick();
+    expect(store.openDecisions(w.db)).toMatchObject([{ kind: 'cap' }]);
+    // The cap is raised in the setup, not with the card's button.
+    apply(w.db, (tx) => tx.emit({ kind: 'team_changed', team: { ...store.getTeam(w.db, 'team1')!, dailyCapUsd: 5 } }));
+    await w.sup.tick();
+    expect(store.openDecisions(w.db)).toEqual([]);
+    expect(fake.workers).toHaveLength(2);
+    // Raised, but not far enough: the old card goes and one about the cap as it now is takes its place.
+    const again = await spentWorld({ company: { dailyCapUsd: 0.5 } }, 0.8);
+    await again.w.sup.tick();
+    const [first] = store.openDecisions(again.w.db);
+    apply(again.w.db, (tx) => tx.emit({ kind: 'company_changed', company: { ...store.getCompany(again.w.db)!, dailyCapUsd: 0.7 } }));
+    await again.w.sup.tick();
+    const cards = store.openDecisions(again.w.db);
+    expect(cards).toMatchObject([{ kind: 'cap', text: expect.stringContaining("today's $0.70 cap") }]);
+    expect(cards[0]!.id).not.toBe(first!.id);
+    await again.w.sup.stop();
+  });
+
   it('raises no card when a cap is reached but nothing is waiting', async () => {
     const fake = scripted((worker) => {
       worker.say(started);

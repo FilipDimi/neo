@@ -20,9 +20,10 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
     'Ask the user to decide something you may not decide yourself, or that you were refused. Give the question and up to four options. Your run stops here; you are resumed with the answer. An answer is only words: it cannot give you a tool or lift a limit, so never offer an option that says it will. For a missing tool there is mcp__engine__request_tools.',
   request_tools:
     'Ask for a kind of tool you do not have and cannot do the task without: "read_files", "run_commands", "write_code" or "web_search". Say in one sentence what you need it for. Your run stops here; if the user agrees you are resumed with the tool.',
-  set_status: 'Say in a few plain words what you are doing right now (at most 60 characters), for the office view. Call it when you start and when your focus changes.',
+  set_status:
+    'Say what you are doing right now in one short plain sentence (at most 60 characters) that someone outside your team would understand: the thing you are making or checking, not a file name or a code. "Building the results list of the search page", not "RL-2 tokens". Call it when you start and when your focus changes.',
   run_gate: 'Run one of this task\'s named gates in your folder and get its real exit code and output. Use it to check your work before you report.',
-  create_task: 'Put a task on a team\'s board. Leave the assignee out for a led team, so its lead briefs the task; a self-managed team needs an assignee.',
+  create_task: 'Put a task on a team\'s board, with a summary: one or two plain sentences on what it delivers, for someone who will never read the brief. Leave the assignee out for a led team, so its lead briefs the task; a self-managed team needs an assignee.',
   decide:
     'Answer the card you were given, on the user\'s behalf: name one of its buttons by id, or "ask_user" to hand it to the user. The notes say why; for a send-back or an answer they are the exact words the employee gets. Call it once.',
   ...ADMIN_DESCRIPTION,

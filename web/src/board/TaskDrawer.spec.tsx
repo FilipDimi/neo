@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { subjectsOf, type EngineEvent, type EventRow } from '../../../src/shared/events.ts';
@@ -25,7 +25,7 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('NOTE.md exists.')).toBeTruthy();
     expect(screen.getByText('A sub-task')).toBeTruthy();
     expect(screen.getByText(/work · Ada · running · \$0\.40/)).toBeTruthy();
-    expect(screen.getByText(/tests passed/)).toBeTruthy();
+    expect(screen.getByText(/tests passed/, { selector: '.gate' })).toBeTruthy();
     expect(await screen.findByText('Reading the brief.')).toBeTruthy();
     expect(screen.getByText(/Write NOTE\.md/)).toBeTruthy();
   });
@@ -48,8 +48,30 @@ describe('TaskDrawer', () => {
     const api = fakeApi(() => detail([said(3, '**Done.** Two files:\n\n- `NOTE.md`\n- `README.md`'), row(4, { kind: 'run_event', runId: 'run1', taskId: 'task1', employeeId: 'emp1', teamId: 'team1', event: { kind: 'tool_call', id: 't', tool: 'Bash', input: { command: 'ls **/*.md' } } })]));
     mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
     expect((await screen.findByText('Done.')).tagName).toBe('STRONG');
-    expect(screen.getAllByRole('listitem').map((item) => item.innerHTML)).toEqual(['<code>NOTE.md</code>', '<code>README.md</code>']);
+    expect(within(document.querySelector<HTMLElement>('.feed')!).getAllByRole('listitem').map((item) => item.innerHTML)).toEqual(['<code>NOTE.md</code>', '<code>README.md</code>']);
     expect(screen.getByText('▸ Bash ls **/*.md')).toBeTruthy();
+  });
+
+  it('opens on what the task is and where it stands, with the long brief folded away', async () => {
+    const brief = `The settings screen, built from board S-3. ${'Every detail of the layout is spelled out here at length. '.repeat(8)}\n\nWork:\n1. Layout first\n2. Then the toggles`;
+    const big = task({ state: 'running', assigneeId: 'emp1', brief, summary: 'The settings screen, from board S-3.', doneCondition: 'It matches the board.', capUsd: 2 });
+    const working = run({ sessionId: 's', costUsd: 0.4, activity: 'Laying out the toggles' });
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: fromSnapshot({ ...base, tasks: [big], runs: [working] }), now: T0, api: fakeApi(() => ({ ...detail([]), task: big })) });
+    const glance = screen.getByRole('region', { name: 'At a glance' });
+    expect(within(glance).getByText('The settings screen, from board S-3.')).toBeTruthy();
+    expect(within(glance).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['Ada is working on it now: Laying out the toggles.', '$0.40 of $2.00 spent over 1 run.']);
+    // The brief is all there, one click away, and not in the way.
+    const fold = screen.getByText('The full brief').closest('details')!;
+    expect(fold.open).toBe(false);
+    expect(within(fold).getByText(/Every detail of the layout/)).toBeTruthy();
+    expect(within(fold).getByText('It matches the board.')).toBeTruthy();
+    expect(within(glance).queryByText(/Every detail of the layout/)).toBeNull();
+  });
+
+  it('does not say a short brief twice', async () => {
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api: fakeApi(() => detail([])) });
+    expect(screen.getAllByText('Write the note well.')).toHaveLength(1);
+    expect(screen.getByText('NOTE.md exists.')).toBeTruthy();
   });
 
   it('says in the feed who decided a card and what, in their words', async () => {
@@ -71,7 +93,7 @@ describe('TaskDrawer', () => {
   it("lists what a review found under its run, the blocking ones marked", async () => {
     const review = run({ id: 'run2', mode: 'review', outcome: 'done', reason: 'sent_back', endedAt: T0.toISOString(), findings: [{ severity: 'blocking', file: 'NOTE.md', line: 3, title: 'The note contradicts the brief', why: 'It says the opposite.', fix: 'Rewrite line 3.' }, { severity: 'minor', file: 'NOTE.md', title: 'A typo', why: '', fix: 'Fix it.' }] });
     mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: fromSnapshot({ ...base, tasks: [theTask], runs: [live, review] }), now: T0, api: fakeApi(() => detail([])) });
-    const found = await screen.findAllByRole('listitem');
+    const found = within(await screen.findByRole('list', { name: 'What the review found' })).getAllByRole('listitem');
     expect(found.map((item) => [item.getAttribute('data-severity'), item.textContent])).toEqual([
       ['blocking', 'blocking NOTE.md:3: The note contradicts the brief. It says the opposite. Fix: Rewrite line 3.'],
       ['minor', 'minor NOTE.md: A typo. Fix: Fix it.'],

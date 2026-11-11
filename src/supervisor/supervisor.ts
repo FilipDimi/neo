@@ -56,7 +56,7 @@ export type SupervisorOptions = {
 };
 
 export type NewTaskInput = Pick<Task, 'teamId' | 'title' | 'brief'> &
-  Partial<Pick<Task, 'createdBy' | 'assigneeId' | 'reviewerId' | 'parentId' | 'kind' | 'priority' | 'doneCondition' | 'repoId' | 'gates' | 'ownership' | 'capUsd' | 'retryAllowed' | 'leaseMinutes'>>;
+  Partial<Pick<Task, 'summary' | 'createdBy' | 'assigneeId' | 'reviewerId' | 'parentId' | 'kind' | 'priority' | 'doneCondition' | 'repoId' | 'gates' | 'ownership' | 'capUsd' | 'retryAllowed' | 'leaseMinutes'>>;
 
 type ToolReply = { ok: boolean; text: string };
 const DEFAULT_WORKER = new URL('../worker/worker.ts', import.meta.url).pathname;
@@ -610,12 +610,19 @@ export class Supervisor {
   }
 
   /** A pause for the usage limit ends by itself at the reset time, if the limit gave one. */
-  /** A daily cap's card is about one day. When that day is over its buttons mean nothing: the spend has started again from zero. */
+  /**
+   * A daily cap's card is about one day and one amount. When that day is over its buttons mean nothing: the spend has
+   * started again from zero. And when the cap was changed some other way (in the setup), the card asks about a cap
+   * that is no longer there: if work still waits behind the new one, a card about that one is raised in its place.
+   */
   private closeCapCardsOfEarlierDays(): void {
     const today = dayKey(this.now());
+    const company = store.getCompany(this.db);
     const stale = store.openDecisions(this.db).filter((card) => {
       const key = card.kind === 'cap' && typeof card.subject?.key === 'string' ? card.subject.key.split(':') : [];
-      return key[0] === 'daily' && key[2] !== today;
+      if (key[0] !== 'daily') return false;
+      const capNow = key[1] === 'company' ? company?.dailyCapUsd : store.getTeam(this.db, key[1] ?? '')?.dailyCapUsd;
+      return key[2] !== today || String(capNow) !== key[3];
     });
     if (stale.length > 0) this.change((tx, now) => stale.forEach((card) => decisions.close(tx, card, now)));
   }

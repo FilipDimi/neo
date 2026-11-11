@@ -38,6 +38,18 @@
 .drawer section { display: flex; flex-direction: column; gap: 6px; }
 .drawer p { margin: 0; overflow-wrap: anywhere; }
 .drawer .brief { line-height: 19px; }
+/* The top of a task: what it is, and where it stands. */
+.glance { padding: 14px 16px; border-radius: var(--card); background: var(--surface); border: 1px solid var(--line); gap: 10px !important; }
+.glance-summary { font-size: 15px; font-weight: 600; line-height: 21px; }
+.standing { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; color: var(--soft); line-height: 18px; }
+.standing li { padding-left: 14px; position: relative; overflow-wrap: anywhere; }
+.standing li::before { content: ''; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--dim); }
+.standing li:first-child { color: var(--text); font-weight: 600; } .standing li:first-child::before { background: var(--working); }
+.glance-report { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--soft); max-height: 180px; overflow-y: auto; }
+/* What is there for whoever wants all of it, and out of the way of everyone else. */
+.fold > summary { cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 2px 0; }
+.fold > summary:hover { color: var(--text); }
+.fold[open] > summary { margin-bottom: 8px; }
 .drawer .child { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; border-radius: var(--input); background: var(--surface); border: 1px solid var(--line); text-align: left; }
 .drawer .run { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--soft); }
 .findings { flex-basis: 100%; margin: 2px 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; line-height: 17px; color: var(--soft); overflow-wrap: anywhere; }

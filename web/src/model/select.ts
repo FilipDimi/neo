@@ -4,7 +4,7 @@
  */
 import { reviewerFor } from '../../../src/supervisor/scheduler.ts';
 import type { Decision, Employee, Run, Task, Team } from '../../../src/shared/types.ts';
-import { ago, attention, cardLine, EARLIER_SHOWN, type Attention } from '../../../src/shared/view.ts';
+import { ago, attention, cardLine, EARLIER_SHOWN, WHY, type Attention } from '../../../src/shared/view.ts';
 import { clock, initials, money } from '../format.ts';
 import { dayOf, type Store } from '../store/reduce.ts';
 
@@ -17,6 +17,65 @@ const beingDecided = (store: Store, taskId: string): Decision | undefined => [..
 export const liveRuns = (store: Store): Run[] => [...store.runs.values()].filter((run) => run.outcome === 'running');
 export const runsOf = (store: Store, taskId: string): Run[] => [...store.runs.values()].filter((run) => run.taskId === taskId);
 const nameOf = (store: Store, id: string | null): string => (id === 'user' ? 'you' : ((id && store.employees.get(id)?.name) ?? 'nobody'));
+
+// ---------- a task at a glance ----------
+
+/** What a task is, when nobody wrote a summary for it: the opening of its brief, whole sentences, a line or two. */
+export function gist(brief: string, max = 160): string {
+  const opening = (brief.trim().split(/\n\s*\n/)[0] ?? '').replace(/\s+/g, ' ').replace(/^#+\s*/, '').trim();
+  if (opening.length <= max) return opening;
+  let out = '';
+  for (const sentence of opening.match(/[^.!?]+[.!?]+(?=\s|$)/g) ?? []) {
+    if ((out + sentence).length > max) break;
+    out += sentence;
+  }
+  if (out.trim()) return out.trim();
+  const cut = opening.slice(0, max - 1);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 1)).trimEnd()}…`;
+}
+
+export type Glance = { summary: string; /** Where it stands, most important first, each a plain sentence. */ lines: string[]; /** What its author last reported. */ report: { by: string; text: string } | null };
+
+/** The top of a task's drawer: what it is and where it stands, for someone who has ten seconds. */
+export function glance(store: Store, taskId: string, _now: Date): Glance | null {
+  const task = store.tasks.get(taskId);
+  if (!task) return null;
+  const runs = runsOf(store, taskId).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  const live = runs.find((run) => run.outcome === 'running');
+  const team = store.teams.get(task.teamId);
+  const who = (id: string | null | undefined): string => (id && store.employees.get(id)?.name) || 'someone';
+  const count = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+  const card = openDecisions(store).find((decision) => decision.taskId === taskId);
+  const held = beingDecided(store, taskId);
+  const children = [...store.tasks.values()].filter((child) => child.parentId === taskId);
+  const lines: string[] = [];
+
+  if (live) lines.push(live.mode === 'review' ? `${who(live.employeeId)} is reviewing it now.` : live.mode === 'brief' ? `${who(live.employeeId)} is splitting it into sub-tasks.` : `${who(live.employeeId)} is working on it now${live.activity ? `: ${live.activity.replace(/[.!?]+$/, '')}` : ''}.`);
+  else if (task.state === 'done') lines.push(`Done${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}.`);
+  else if (task.state === 'failed') lines.push('Stopped.');
+  else if (card) lines.push(`Waiting on you: ${WHY[card.kind]}.`);
+  else if (held) lines.push(`${who(held.deciderId)} is deciding what happens next.`);
+  else if (task.state === 'queued') lines.push(`Waiting to start, for ${who(task.assigneeId ?? team?.leadId)}.`);
+  else if (task.state === 'review') lines.push('Waiting for its review to start.');
+  else if (children.some((child) => child.state !== 'done' && child.state !== 'failed')) lines.push('Waiting on its sub-tasks.');
+  else lines.push('Nobody is on it right now.');
+
+  if (children.length > 0) lines.push(`${children.filter((child) => child.state === 'done').length} of ${count(children.length, 'sub-task')} done.`);
+
+  // What the last review of the work as it stands left to fix.
+  const review = runs.slice(runs.findLastIndex(authored) + 1).findLast((run) => run.mode === 'review' && run.reason === 'sent_back');
+  const mustFix = (review?.findings ?? []).filter((finding) => finding.severity === 'blocking').length;
+  const times = task.reviewRounds === 1 ? 'once' : task.reviewRounds === 2 ? 'twice' : `${task.reviewRounds} times`;
+  if (task.reviewRounds > 0) lines.push(review && mustFix > 0 ? `Sent back ${times}: ${who(review.employeeId)} found ${count(mustFix, 'thing')} that must be fixed.` : `Sent back ${times}.`);
+
+  const gates = runs.findLast((run) => run.gateResults.length > 0)?.gateResults ?? [];
+  if (gates.length > 0) lines.push(`Gates last time: ${gates.map((gate) => `${gate.name} ${gate.exitCode === 0 ? 'passed' : 'failed'}`).join(', ')}.`);
+
+  if (runs.length > 0) lines.push(`${money(runs.reduce((sum, run) => sum + run.costUsd, 0))} of ${money(task.capUsd)} spent over ${count(runs.length, 'run')}.`);
+
+  const reported = runs.findLast((run) => authored(run) && run.outcome !== 'running' && Boolean(run.summary?.trim()));
+  return { summary: task.summary?.trim() || gist(task.brief), lines, report: reported ? { by: who(reported.employeeId), text: reported.summary!.trim() } : null };
+}
 
 // ---------- the header ----------
 

@@ -10,8 +10,35 @@ import type { Store } from '../store/reduce.ts';
 
 export type Placement = { where: 'desk' | 'meeting' | 'stuck'; screen: 'dark' | 'lit'; bubble: string | null; tone: 'plain' | 'review' | 'stuck'; decisionId: string | null; taskId: string | null };
 
-const BUBBLE_MAX = 40;
+/** A status line is a sentence of up to this many characters; the room wraps it, so all of it is kept. */
+const BUBBLE_MAX = 60;
 export const cut = (text: string, max = BUBBLE_MAX): string => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
+
+/**
+ * What someone says, on at most `lines` lines of `perLine` letters, broken between words. A sentence is never cut
+ * in the middle of a word to fit beside the next seat: what does not fit ends with an ellipsis after a whole word.
+ * Only a word longer than a line is cut.
+ */
+export function wrap(text: string, perLine: number, lines = 2): string[] {
+  const out: string[] = [];
+  let line = '';
+  for (const word of text.trim().split(/\s+/)) {
+    if (word.length > perLine) return [...out, cut(line ? `${line} ${word}` : word, perLine)].slice(0, lines);
+    if (!line || `${line} ${word}`.length <= perLine) {
+      line = line ? `${line} ${word}` : word;
+      continue;
+    }
+    if (out.length === lines - 1) {
+      // No room for another line: this one ends the bubble, with whole words only.
+      let last = line;
+      while (`${last}…`.length > perLine && last.includes(' ')) last = last.slice(0, last.lastIndexOf(' '));
+      return [...out, `${last}…`];
+    }
+    out.push(line);
+    line = word;
+  }
+  return line ? [...out, line] : out;
+}
 const times = (n: number): string => (n <= 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
 const authored = (run: Run): boolean => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate';
 

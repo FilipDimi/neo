@@ -8,7 +8,7 @@ import { ago, initials, money } from '../format.ts';
 import { board, liveRuns, openDecisions, spendToday } from '../model/select.ts';
 import type { Store } from '../store/reduce.ts';
 import { CHIEF, FLOOR, KITCHEN, MEETING, PALETTE, rugs, seats, SKIN, STUCK, WALL, type Rect } from './layout.ts';
-import { cut, placement, type Placement } from './placement.ts';
+import { placement, wrap, type Placement } from './placement.ts';
 
 export type SceneKind = 'floor' | 'window' | 'rug' | 'label' | 'desk' | 'monitor' | 'chair' | 'person' | 'tag' | 'bubble' | 'whiteboard' | 'table' | 'couch' | 'lamp' | 'tray' | 'counter' | 'plant' | 'wallboard' | 'button';
 export type SceneNode = Rect & { id: string; kind: SceneKind; props: Record<string, unknown> };
@@ -22,6 +22,8 @@ const CHIEF_SHIRT = '#2A2A2E';
 /** Where a person stands relative to a member's desk, a lead's desk, the meeting table and the couch, at full size. */
 type Offsets = { monitor: Point; chair: Point; person: Point; tag: Point & { w: number }; bubble: Point; side: 'left' | 'right'; /** How many letters fit before the next seat's bubble, at full size. */ say: number };
 type Point = { x: number; y: number };
+/** How much taller a bubble is for its second line. */
+const BUBBLE_LINE = 13;
 const AT_DESK: Offsets = { monitor: { x: 34, y: -14 }, chair: { x: 40, y: 64 }, person: { x: 48, y: 36 }, tag: { x: 26, y: 110, w: 68 }, bubble: { x: 104, y: 24 }, side: 'right', say: 28 };
 // A lead's desk stands on end at the right of the rug; the bubble opens to the left of it.
 const AT_LEAD_DESK: Offsets = { monitor: { x: 8, y: 60 }, chair: { x: 14, y: 146 }, person: { x: 22, y: 118 }, tag: { x: -2, y: 192, w: 76 }, bubble: { x: 68, y: 136 }, side: 'left', say: 22 };
@@ -83,7 +85,10 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
     add(node(`tag:${employeeId}`, 'tag', { ...place(offsets.tag, offsets.tag.w, 18), h: 18 }, { text: tagText(employee.name), tone: lit ? 'active' : 'idle' }));
     if (at.bubble) {
       const anchor = place(offsets.bubble, 0, 0);
-      bubbles.push(node(`bubble:${employeeId}`, 'bubble', { x: anchor.x, y: anchor.y, w: 0, h: 22 }, { text: cut(at.bubble, Math.max(12, Math.floor(offsets.say * scale))), tone: 'plain', side: offsets.side, taskId: at.taskId }));
+      // As many letters a line as fit before the next seat's bubble, on two lines: the second grows upwards, away from the desk.
+      const said = wrap(at.bubble, Math.max(12, Math.floor(offsets.say * scale)));
+      const h = 22 + (said.length - 1) * BUBBLE_LINE;
+      bubbles.push(node(`bubble:${employeeId}`, 'bubble', { x: anchor.x, y: anchor.y - (h - 22), w: 0, h }, { text: said.join('\n'), tone: 'plain', side: offsets.side, taskId: at.taskId }));
     }
   }
 

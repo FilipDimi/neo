@@ -37,7 +37,7 @@ const BUBBLE: Record<string, { fill: string; alpha: number; text: string; weight
 /** Words beside a person. The box is as wide as the words; `side` says which way it opens from its anchor. */
 export function bubble(node: SceneNode): Container {
   const look = BUBBLE[str(node.props.tone, 'plain')] ?? BUBBLE.plain!;
-  const text = words(str(node.props.text), { size: 10, weight: look.weight, color: look.text });
+  const text = words(str(node.props.text), { size: 10, weight: look.weight, color: look.text, lineHeight: 13 });
   const w = Math.ceil(text.width) + 18;
   const h = node.h;
   const left = node.props.side === 'left' ? -w : 0;

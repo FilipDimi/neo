@@ -5,7 +5,7 @@ import { useApi, useUi, type TaskTab } from '../app/context.ts';
 import { money } from '../format.ts';
 import { MessageBox } from '../frame/MessageBox.tsx';
 import { Prose } from '../frame/Prose.tsx';
-import { liveRuns } from '../model/select.ts';
+import { glance, liveRuns } from '../model/select.ts';
 import { useStore } from '../store/store.ts';
 
 const sentence = (text: string): string => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
@@ -59,6 +59,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   const children = useStore((store) => [...store.tasks.values()].filter((child) => child.parentId === taskId), [taskId]);
   const runs = useStore((store) => [...store.runs.values()].filter((run) => run.taskId === taskId), [taskId]);
   const employees = useStore((store) => store.employees);
+  const seen = useStore((store) => glance(store, taskId, new Date(0)), [taskId]);
   const team = useStore((store) => (task ? store.teams.get(task.teamId) : undefined), [task?.teamId]);
   const live = useStore((store) => liveRuns(store).find((run) => run.taskId === taskId), [taskId]);
   const seq = useStore((store) => store.taskSeq[taskId] ?? 0, [taskId]);
@@ -107,6 +108,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   }, [detail]);
 
   if (!task) return null;
+  const briefSaid = !task.summary?.trim() && seen?.summary === task.brief.trim();
   const recipient = nameOf(live?.employeeId ?? task.assigneeId ?? team?.leadId ?? null);
   const delivered = sent ? (messages.get(sent.id)?.state ?? sent.state) : null;
 
@@ -142,16 +144,40 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
         </button>
       </header>
 
-      <section>
-        <Prose className="brief" text={task.brief} />
-        {task.doneCondition && (
-          <p>
-            <span className="label">Done when</span> <span>{task.doneCondition}</span>
-          </p>
-        )}
-        {task.gates.length > 0 && <p className="muted">Gates: {task.gates.join(', ')}</p>}
-        {task.ownership.length > 0 && <p className="muted">Owns: {task.ownership.join(', ')}</p>}
-      </section>
+      {/* What the task is and where it stands, for someone who has ten seconds. Everything else is below it, folded or further down. */}
+      {seen && (
+        <section className="glance" aria-label="At a glance">
+          <Prose className="glance-summary" text={seen.summary} />
+          <ul className="standing">
+            {seen.lines.map((line, index) => (
+              <li key={index}>{line}</li>
+            ))}
+          </ul>
+          {seen.report && (
+            <div className="glance-report">
+              <div className="label">Last report · {seen.report.by}</div>
+              <Prose text={seen.report.text} />
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* A brief that is no longer than its summary is already said above: only what is left of it is folded here. */}
+      {(!briefSaid || task.doneCondition || task.gates.length > 0 || task.ownership.length > 0) && (
+        <details className="fold">
+          <summary>{briefSaid ? 'Done when, gates and files' : 'The full brief'}</summary>
+          <section>
+            {!briefSaid && <Prose className="brief" text={task.brief} />}
+            {task.doneCondition && (
+              <p>
+                <span className="label">Done when</span> <span>{task.doneCondition}</span>
+              </p>
+            )}
+            {task.gates.length > 0 && <p className="muted">Gates: {task.gates.join(', ')}</p>}
+            {task.ownership.length > 0 && <p className="muted">Owns: {task.ownership.join(', ')}</p>}
+          </section>
+        </details>
+      )}
 
       {children.length > 0 && (
         <section>
@@ -167,9 +193,11 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
         </section>
       )}
 
+      {/* Every run and what each review found: the record, for whoever wants it. The glance above says where it stands. */}
       {runs.length > 0 && (
-        <section>
-          <div className="label">Runs</div>
+        <details className="fold">
+          <summary>{`Runs · ${runs.length}`}</summary>
+          <section>
           {runs.map((run) => (
             <div key={run.id} className="run">
               <span>{`${run.mode} · ${nameOf(run.employeeId)} · ${run.outcome}${run.reason ? ` (${run.reason})` : ''} · ${money(run.costUsd)}`}</span>
@@ -180,7 +208,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
               ))}
               {/* What a review found, in the reviewer's order: the numbers are the ones its author answers by. */}
               {run.findings && run.findings.length > 0 && (
-                <ol className="findings">
+                <ol className="findings" aria-label="What the review found">
                   {run.findings.map((finding, index) => (
                     <li key={index} data-severity={finding.severity}>
                       <b>{finding.severity}</b> {`${finding.file}${finding.line ? `:${finding.line}` : ''}: ${sentence(finding.title)}${finding.why.trim() ? ` ${sentence(finding.why)}` : ''}${finding.fix.trim() ? ` Fix: ${sentence(finding.fix)}` : ''}`}
@@ -190,7 +218,8 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
               )}
             </div>
           ))}
-        </section>
+          </section>
+        </details>
       )}
 
       <nav className="tabs">

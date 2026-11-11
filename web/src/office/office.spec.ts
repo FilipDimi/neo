@@ -4,7 +4,7 @@ import { storyAt, storyEvents, storySnapshot, taskTitled } from '../fixtures/sto
 import { board } from '../model/select.ts';
 import { fromSnapshot, reduce, type Snapshot, type Store } from '../store/reduce.ts';
 import { FLOOR, rugs, seats, type Rect } from './layout.ts';
-import { placement } from './placement.ts';
+import { placement, wrap } from './placement.ts';
 import { officeScene, type SceneNode } from './scene.ts';
 
 const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({ version: 1, company: company(), repos: [], teams: [team()], employees: [employee()], tasks: [], runs: [], requests: [], decisions: [], messages: [], health: null, planUsage: null, spend: { company: 0, byTeam: {}, byEmployee: {} }, lastEventId: 1, now: T0.toISOString(), ...over });
@@ -59,11 +59,20 @@ describe('placement', () => {
     expect(placement('emp1', fromSnapshot(snapshot({ tasks: tasks.slice(2), runs })), T0).where).toBe('desk');
   });
 
-  it('cuts a bubble at 40 characters', () => {
-    const store = fromSnapshot(snapshot({ tasks: [task({ state: 'running', assigneeId: 'emp1' })], runs: [liveRun({ activity: 'x'.repeat(60) })] }));
-    const bubble = placement('emp1', store, T0).bubble!;
-    expect(bubble).toHaveLength(40);
-    expect(bubble.endsWith('…')).toBe(true);
+  it('keeps the whole of a status line: it is a sentence of up to 60 characters, and the room wraps it', () => {
+    const said = 'Building the results list of the search page';
+    const store = fromSnapshot(snapshot({ tasks: [task({ state: 'running', assigneeId: 'emp1' })], runs: [liveRun({ activity: said })] }));
+    expect(placement('emp1', store, T0).bubble).toBe(said);
+    const long = fromSnapshot(snapshot({ tasks: [task({ state: 'running', assigneeId: 'emp1' })], runs: [liveRun({ activity: 'x'.repeat(90) })] }));
+    expect(placement('emp1', long, T0).bubble).toHaveLength(60);
+  });
+
+  it('wraps what is said onto two lines between words, and ends a third with an ellipsis', () => {
+    expect(wrap('Drawing the toggles of the settings screen', 28)).toEqual(['Drawing the toggles of the', 'settings screen']);
+    expect(wrap('docking the glass row', 28)).toEqual(['docking the glass row']);
+    expect(wrap('Building the results list of the search page from the board and its empty state', 28)).toEqual(['Building the results list of', 'the search page from the…']);
+    // A word longer than a line is the one thing that is cut.
+    expect(wrap(`${'x'.repeat(40)} tail`, 28)).toEqual([`${'x'.repeat(27)}…`]);
   });
 });
 
