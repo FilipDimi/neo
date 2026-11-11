@@ -4,7 +4,9 @@ import { useApi } from '../app/context.ts';
 import { useStore } from '../store/store.ts';
 
 /** What xcodebuild must be able to write besides the task folder (measured in the spike). The engine resolves the two $ names. */
-export const XCODE_BUILD_FOLDERS = ['~/Library/Developer/Xcode', '~/Library/Caches', '~/Library/org.swift.swiftpm', '$DARWIN_USER_CACHE_DIR', '$DARWIN_USER_TEMP_DIR'];
+import { XCODE_BUILD_FOLDERS } from '../../../src/shared/teams.ts';
+
+export { XCODE_BUILD_FOLDERS };
 
 const FLAGS: [keyof Pick<Team, 'mayPush' | 'mayOpenPr' | 'mayPublish' | 'maySend' | 'mayPay' | 'mayDelete'>, string][] = [
   ['mayPush', 'push branches'],

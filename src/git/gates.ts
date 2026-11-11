@@ -55,12 +55,21 @@ export function gateProfile(cwd: string, tmp: string, limits: GateLimits): strin
     // would carry whatever is put in a name out to the network. `localhost` resolves without it.
     '(deny network-outbound)',
     '(allow network-outbound (remote ip "localhost:*") (literal "/private/var/run/syslog"))',
-    ...(limits.xcode ? ['(allow network-outbound (regex #"^/private/var/tmp/com\\.apple\\.launchd\\.[^/]+/com\\.apple\\.testmanagerd\\.unix-domain\\.socket$"))'] : []),
+    // XCTest reaches its test manager, and the booted simulator's own test manager and log, over these sockets and no others.
+    ...(limits.xcode
+      ? [
+          '(allow network-outbound (regex #"^/private/var/tmp/com\\.apple\\.launchd\\.[^/]+/com\\.apple\\.testmanagerd\\.(unix-domain\\.socket|remote-automation\\.uds)$"))',
+          '(allow network-outbound (regex #"^/private/var/tmp/com\\.apple\\.CoreSimulator\\.SimDevice\\.[^/]+/syslogsock$"))',
+        ]
+      : []),
     ...(limits.blockPorts ?? []).map((port) => `(deny network-outbound (remote ip "localhost:${port}"))`),
     // Nothing reaches other programs: no signal to a process that is not the gate's own, no change to any program's
     // preferences, no Apple Event, and no launching an application (each is a way to have something run outside).
     '(deny signal)',
     '(allow signal (target same-sandbox))',
+    // xcodebuild watches the test runner the simulator starts, which is not the gate's own process: an Xcode gate may
+    // signal other processes. It still cannot read or write outside its places or reach the network.
+    ...(limits.xcode ? ['(allow signal (target others))'] : []),
     '(deny user-preference-write)',
     // The preferences service writes on a caller's behalf, wherever the file is. Without it a program reads the files itself, and cannot write them.
     '(deny mach-lookup (global-name "com.apple.cfprefsd.daemon") (global-name "com.apple.cfprefsd.agent"))',

@@ -14,6 +14,9 @@ import type { RuntimeEvent } from '../shared/runtime.ts';
 import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task, Team } from '../shared/types.ts';
 import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
 import { GateQueue, type GateLimits } from '../git/gates.ts';
+import { ADMIN_TOOLS } from '../shared/adminTools.ts';
+import { XCODE_BUILD_FOLDERS } from '../shared/teams.ts';
+import { adminTool } from './admin.ts';
 import { availableCapabilities, CAPABILITIES, commandLimits, envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
 import { budgetFor, costOf, isUsageLimit } from './budget.ts';
 import * as decisions from './decisions.ts';
@@ -117,6 +120,19 @@ export class Supervisor {
       engineWork: (taskId, work) => this.engineWork(taskId, work),
       planRunEnd: (runId, outcome, reason) => void this.planned.set(runId, { outcome, reason }),
     });
+  }
+
+  /** One of the admin's setup tools. Only the admin's conversations may use them. */
+  private async adminCall(run: Run, name: string, input: unknown): Promise<ToolReply> {
+    const company = store.getCompany(this.db);
+    if (!company?.adminId || company.adminId !== run.employeeId || run.mode !== 'route') return { ok: false, text: 'Only the admin changes the setup, from a conversation. Tell the user to ask Morpheus.' };
+    const now = this.now();
+    apply(this.db, (tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, text: `changing the setup: ${name.replace(/_/g, ' ')}` }), now);
+    try {
+      return { ok: true, text: await adminTool({ db: this.db, now, paths: this.paths, skills: this.skills() }, name, input) };
+    } catch (failure) {
+      return { ok: false, text: failure instanceof Error ? failure.message : String(failure) };
+    }
   }
 
   /** Picks up after whatever the last process left, then starts the loop and the health checks. */
@@ -842,6 +858,7 @@ export class Supervisor {
       case 'run_gate':
         return this.flow.runGateTool(run, input);
       default:
+        if ((ADMIN_TOOLS as readonly string[]).includes(name)) return this.adminCall(run, name, input);
         return { ok: false, text: `The tool ${name} is not available in this run.` };
     }
   }
@@ -890,7 +907,7 @@ export class Supervisor {
     const company = store.getCompany(this.db);
     const limits = commandLimits({ folder, team, company: company ?? { denyRead: [] }, envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)), protect: engineFiles(this.paths) });
     // A team that may write Xcode's build folders builds with Xcode: its gates get what Xcode needs inside the sandbox.
-    return { ...limits, blockPorts: [this.apiPort], xcode: team.sandboxWrite.includes('~/Library/Developer/Xcode') };
+    return { ...limits, blockPorts: [this.apiPort], xcode: team.sandboxWrite.includes(XCODE_BUILD_FOLDERS[0]!) };
   }
 
   /** Runs a piece of engine work for a task. While it runs the task is not idle; if it throws, a card says so. */

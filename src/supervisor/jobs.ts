@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { engineFiles, type Paths } from '../db/dataDir.ts';
+import { ADMIN_TOOLS } from '../shared/adminTools.ts';
 import { plainEnv, withToolchains } from '../runtime/env.ts';
 import type { Company, Employee, Message, Repo, Run, RunMode, RunRequest, Task, Team } from '../shared/types.ts';
 import type { EngineTool, WorkerJob } from '../worker/protocol.ts';
@@ -71,23 +72,25 @@ export function messagesTurn(messages: Message[], nameOf: (id: string) => string
 export function buildJob(input: JobInput): WorkerJob {
   const { run, request, task, team, employee, company } = input;
   const cwd = folderOf(input.paths, task);
+  const admin = Boolean(company.adminId) && company.adminId === employee.id;
   fs.mkdirSync(cwd, { recursive: true });
   const shape = sessionShape({ task, team, employee, mode: run.mode, folder: cwd, company, envFiles: input.envFiles, protect: engineFiles(input.paths) });
-  const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams, board: input.board, chief: company.chiefOfStaffId === employee.id, self: employee });
+  const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams, board: input.board, chief: company.chiefOfStaffId === employee.id, admin, self: employee });
   // A command may run long, but never longer than the lease: the Bash timeout sits two minutes under it.
   const bashTimeout = String(Math.max(1, run.leaseMinutes - 2) * 60_000);
   return {
     runId: run.id,
     mode: run.mode,
     cwd,
-    systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode }),
+    systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode, admin }),
     firstTurn: [first, messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
     model: employee.model,
     // A conversation is answered at the model's own effort, so that it stays quick. Work runs at the effort the employee was hired with.
     ...(employee.effort && run.mode !== 'route' ? { effort: employee.effort } : {}),
     env: { ...withToolchains(sessionEnv(company)), BASH_DEFAULT_TIMEOUT_MS: bashTimeout, BASH_MAX_TIMEOUT_MS: bashTimeout },
     tools: shape.tools,
-    engineTools: ENGINE_TOOLS_FOR[run.mode],
+    // The admin's conversations change the setup: they get the setup tools, and no one else's do.
+    engineTools: admin && run.mode === 'route' ? [...ENGINE_TOOLS_FOR.route, ...ADMIN_TOOLS] : ENGINE_TOOLS_FOR[run.mode],
     skills: input.mounted.skills,
     plugins: input.mounted.plugins,
     additionalDirectories: shape.additionalDirectories,

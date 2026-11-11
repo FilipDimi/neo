@@ -94,7 +94,9 @@ export function fire(ctx: HireCtx, employeeId: string): void {
     (tx) => {
       tx.emit({ kind: 'employee_changed', employee: { ...employee, fired: true } });
       if (team?.leadId === employee.id) tx.emit({ kind: 'team_changed', team: { ...team, leadId: null } });
-      if (company?.chiefOfStaffId === employee.id) tx.emit({ kind: 'company_changed', company: { ...company, chiefOfStaffId: null } });
+      if (company && (company.chiefOfStaffId === employee.id || company.adminId === employee.id)) {
+        tx.emit({ kind: 'company_changed', company: { ...company, ...(company.chiefOfStaffId === employee.id && { chiefOfStaffId: null }), ...(company.adminId === employee.id && { adminId: null }) } });
+      }
     },
     ctx.now,
   );

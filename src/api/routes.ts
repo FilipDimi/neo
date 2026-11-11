@@ -19,6 +19,7 @@ import { EARLIER_SHOWN } from '../shared/view.ts';
 import { EFFORT_LABELS, MODEL_LABELS } from '../shared/prices.ts';
 import { Capability, Company, Effort, Gate, ModelTier, Repo, Service, type Task, Team, TeamRepo } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.ts';
+import { checkTeam } from '../supervisor/admin.ts';
 import { chat, messageEmployee } from '../supervisor/chat.ts';
 import { companyNow } from '../supervisor/companyNow.ts';
 import { repoProblem } from '../supervisor/health.ts';
@@ -41,7 +42,7 @@ const priority = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 
 const SetupBody = z.object({ name: text, rules: z.string().optional(), chiefName: z.string().optional(), auth: Company.shape.auth.optional(), models: Company.shape.models.partial().optional() });
 const CompanyPatch = z
-  .object({ name: text, rules: z.string(), concurrency: z.number(), dailyCapUsd: z.number(), models: Company.shape.models, denyRead: z.array(z.string()), minFreeGb: z.number(), services: z.array(Service), paused: z.object({ reason: z.literal('user'), until: z.string().nullable() }).nullable() })
+  .object({ name: text, rules: z.string(), concurrency: z.number(), dailyCapUsd: z.number(), adminId: z.string().nullable(), models: Company.shape.models, denyRead: z.array(z.string()), minFreeGb: z.number(), services: z.array(Service), paused: z.object({ reason: z.literal('user'), until: z.string().nullable() }).nullable() })
   .partial();
 const RepoBody = z.object({ path: text, gates: z.array(Gate).default([]) });
 const TeamBody = z.object({ name: text, purpose: z.string().default(''), ...Team.omit({ id: true, name: true, purpose: true, leadId: true }).partial().shape });
@@ -165,15 +166,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
 
   /** A team may only name repositories that are registered and branches that exist in them. */
   async function checkedTeam(team: Team): Promise<Team> {
-    if (team.removed) throw new HttpError(400, `The team ${team.name} was removed.`);
-    for (const entry of z.array(TeamRepo).parse(team.repos)) {
-      const repo = store.getRepo(db, entry.repoId);
-      if (!repo) throw new HttpError(400, `There is no repository ${entry.repoId}.`);
-      for (const branch of [entry.baseBranch, ...(entry.mergeTarget ? [entry.mergeTarget] : [])]) {
-        if ((await git(repo.path, ['rev-parse', '-q', '--verify', `refs/heads/${branch}`])).code !== 0) throw new HttpError(400, `The repository at ${repo.path} has no branch "${branch}".`);
-      }
-    }
-    return Team.parse(team);
+    return checkTeam(db, team);
   }
 
   app.post('/api/teams', async (request) => {

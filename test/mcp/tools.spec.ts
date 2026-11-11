@@ -17,6 +17,7 @@ const people = [
   employee({ id: 'lead', name: 'Priya', teamId: 'ios', role: 'Leads iOS.' }),
   employee({ id: 'ada', name: 'Ada', teamId: 'ios' }),
   employee({ id: 'mw', name: 'Mara', teamId: 'marketing', role: 'Writes copy.' }),
+  employee({ id: 'morpheus', name: 'Morpheus', teamId: 'office', role: 'Runs this app.' }),
 ];
 const teams = [team({ id: 'office', name: 'Office', leadId: 'neo' }), team({ id: 'ios', name: 'Engineering iOS', leadId: 'lead' }), team({ id: 'marketing', name: 'Marketing', selfManaged: true })];
 
@@ -31,7 +32,7 @@ afterEach(async () => {
 /** A company with its engine listening, and its tools pointed at it the way the real ones are: over HTTP, with the token. */
 async function company(play: (scene: Scene) => Promise<void> | void): Promise<Company> {
   const fixture = inProcess(staged(play));
-  const w = world(fixture.spawn, { company: { chiefOfStaffId: 'neo' }, teams, employees: people });
+  const w = world(fixture.spawn, { company: { chiefOfStaffId: 'neo', adminId: 'morpheus' }, teams, employees: people });
   const app = await buildServer({ db: w.db, dataDir: w.dir, supervisor: w.sup, port: 0, webDir: tempDir() });
   await app.listen({ host: '127.0.0.1', port: 0 });
   const port = (app.server.address() as AddressInfo).port;
@@ -74,7 +75,12 @@ describe("the company's tools for a Claude session", () => {
     expect(await c.use('message', { to: 'priya', text: 'yo, what are we working on?' })).toEqual({ isError: false, text: 'Priya: We are between tasks.' });
     const unknown = await c.use('message', { to: 'Zed', text: 'hello' });
     expect(unknown.isError).toBe(true);
-    expect(unknown.text).toMatch(/Nobody here is called "Zed".*Neo, Priya, Ada, Mara/);
+    expect(unknown.text).toMatch(/Nobody here is called "Zed".*Neo, Priya, Ada, Mara, Morpheus/);
+  });
+
+  it('talks to Morpheus, the admin, and comes back with what he changed', async () => {
+    const c = await company((s) => void (s.mode === 'route' && s.say('Removed the team Marketing, and fired Mara.')));
+    expect(await c.use('morpheus', { text: 'remove marketing' })).toEqual({ isError: false, text: 'Morpheus: Removed the team Marketing, and fired Mara.' });
   });
 
   it('says so when no reply came in time, and shows it later', async () => {

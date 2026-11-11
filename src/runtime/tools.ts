@@ -3,6 +3,7 @@
  * A brief, a review verdict and a done-report are tool calls with a schema, never parsed prose.
  */
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { ADMIN_DESCRIPTION } from '../shared/adminTools.ts';
 import { TOOL_INPUT, type EngineTool } from '../worker/protocol.ts';
 
 export type ToolReply = { ok: boolean; text: string };
@@ -22,6 +23,7 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
   set_status: 'Say in a few plain words what you are doing right now (at most 60 characters), for the office view. Call it when you start and when your focus changes.',
   run_gate: 'Run one of this task\'s named gates in your folder and get its real exit code and output. Use it to check your work before you report.',
   create_task: 'Put a task on a team\'s board. Leave the assignee out for a led team, so its lead briefs the task; a self-managed team needs an assignee.',
+  ...ADMIN_DESCRIPTION,
 };
 
 /** One definition per named tool. Exported so tests can call a handler without a model. */

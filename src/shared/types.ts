@@ -45,6 +45,8 @@ export const Company = z.object({
   minFreeGb: z.number().nonnegative(),
   services: z.array(Service),
   chiefOfStaffId: id.nullable(),
+  /** The admin: the one who changes the company's setup and the app itself from a conversation (Morpheus). Absent in rows written before there was one. */
+  adminId: id.nullable().optional(),
   paused: z.object({ reason: z.enum(['usage_limit', 'health', 'user']), until: iso.nullable() }).nullable(),
 });
 export type Company = z.infer<typeof Company>;

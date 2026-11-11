@@ -139,6 +139,50 @@ describe('the company chat', () => {
   });
 });
 
+describe('Morpheus, the admin', () => {
+  function admin(play: (scene: Scene) => Promise<void> | void) {
+    const fixture = inProcess(staged(play));
+    const morpheus = employee({ id: 'morpheus', name: 'Morpheus', teamId: 'admin', role: 'Runs this app.', capabilities: ['read_files', 'run_commands', 'write_code'] });
+    const w = (open = world(fixture.spawn, { company: { chiefOfStaffId: 'neo', adminId: 'morpheus' }, teams: [...teams, team({ id: 'admin', name: 'Admin', selfManaged: true })], employees: [...people, morpheus] }));
+    return { w, fixture };
+  }
+
+  it('changes the setup from a conversation, with tools only his conversations get', async () => {
+    const said: string[] = [];
+    let turn = '';
+    const { w, fixture } = admin(async (s) => {
+      if (s.mode !== 'route') return;
+      turn = s.input.prompt;
+      said.push((await s.engine('create_team', { name: 'Design', purpose: 'Designs the app.', selfManaged: true, dailyCapUsd: 5 })).text);
+      s.say('Done: the Design team exists.');
+    });
+    messageEmployee(w.sup, 'morpheus', 'add a design team, $5 a day');
+    await drain(w, fixture);
+    expect(said[0]).toMatch(/Created the team Design \(self-managed; \$5 a day/);
+    expect(store.allTeams(w.db).map((entry) => entry.name)).toContain('Design');
+    expect(store.recentMessages(w.db, 5).at(-1)).toMatchObject({ fromId: 'morpheus', toId: 'user', text: 'Done: the Design team exists.' });
+    expect(turn).toContain('You are the admin of this company app');
+    expect(fixture.jobs[0]!.engineTools).toEqual(expect.arrayContaining(['create_task', 'company_setup', 'create_team', 'remove_team', 'hire', 'fire', 'update_company', 'set_gates']));
+    // His rules are the app's, not the product's.
+    expect(fixture.jobs[0]!.systemPrompt).toContain('## Your rules');
+    expect(fixture.jobs[0]!.systemPrompt).not.toContain('## Company rules');
+  });
+
+  it('does not lend the setup tools to anyone else, not even the chief of staff', async () => {
+    const said: string[] = [];
+    const { w, fixture } = admin(async (s) => {
+      if (s.mode !== 'route') return;
+      said.push((await s.engine('remove_team', { team: 'Marketing' })).text);
+      s.say('Tried.');
+    });
+    chat(w.sup, 'remove marketing');
+    await drain(w, fixture);
+    expect(fixture.jobs[0]!.engineTools).toEqual(['create_task', 'set_status']);
+    expect(said[0]).toMatch(/Only the admin changes the setup/);
+    expect(store.allTeams(w.db).map((entry) => entry.name)).toContain('Marketing');
+  });
+});
+
 describe('a message to an employee', () => {
   it('reaches a running employee as its next turn', async () => {
     const { w, fixture } = company(async (s) => {

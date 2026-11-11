@@ -3,9 +3,10 @@
  */
 import { z } from 'zod';
 import type { RuntimeEvent, ToolCall } from '../shared/runtime.ts';
+import { ADMIN_INPUT, ADMIN_TOOLS } from '../shared/adminTools.ts';
 import { Capability, Effort, RunMode } from '../shared/types.ts';
 
-export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task'] as const;
+export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', ...ADMIN_TOOLS] as const;
 export const EngineTool = z.enum(ENGINE_TOOLS);
 export type EngineTool = z.infer<typeof EngineTool>;
 
@@ -94,6 +95,7 @@ export const TOOL_INPUT = {
     doneCondition: z.string().min(1),
     capUsd: z.number().positive(),
   }),
+  ...ADMIN_INPUT,
 } satisfies Record<EngineTool, z.ZodType>;
 
 export type SubtaskProposal = z.infer<typeof TOOL_INPUT.propose_subtasks>['subtasks'][number];

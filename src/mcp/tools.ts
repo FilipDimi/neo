@@ -24,13 +24,13 @@ export type Tool = { name: string; description: string; input: z.ZodRawShape; ru
 export const INSTRUCTIONS = `This is the user's line to their chief of staff (Neo, unless they renamed it) and the company it runs. When the user says "ask Neo", "tell Neo" or names the company, use chat: Neo knows every board and turns a request into tasks on the right team. These tools reach a company of AI employees that runs on this Mac: teams with boards of tasks, a chief of staff who answers questions and turns requests into tasks, and cards for the decisions that are the user's alone. The same company is on screen at http://127.0.0.1:4317.
 
 Read: now (every board, who is running, cards waiting, spend today), tasks, task (one task with its runs), cards, replies (what employees last said to the user).
-Talk: chat (the chief of staff: questions about the company, and requests it turns into tasks on the right team), message (one employee by name: answered as a conversation; work that is asked for goes on that employee's own team's board).
+Talk: chat (the chief of staff: questions about the company, and requests it turns into tasks on the right team), morpheus (the admin: changes to teams, people, models, caps, rules and gates, and bugs or features for the app itself), message (one employee by name: answered as a conversation; work that is asked for goes on that employee's own team's board).
 Act: answer_card (presses one button of a card), new_task (puts a task straight on a team's board), start (starts the company when a tool says it is not running).
 
 Ask the user before answer_card unless they named the card and the button themselves: a card is a decision that is theirs (a merge, a raised cap, a tool handed to an employee). Ask before new_task unless they asked for that task. chat and message cost a little and can start work; use now, tasks and cards for plain questions about what is going on, which cost nothing.
 An employee's reply can take from a few seconds to a few minutes. When a tool says no reply has come yet, tell the user so and call replies later; do not send the message again.`;
 
-type Snapshot = { company: { name: string; chiefOfStaffId: string | null } | null; teams: Team[]; employees: Employee[]; tasks: Task[]; runs: Run[]; decisions: Decision[]; messages: Message[] };
+type Snapshot = { company: { name: string; chiefOfStaffId: string | null; adminId?: string | null } | null; teams: Team[]; employees: Employee[]; tasks: Task[]; runs: Run[]; decisions: Decision[]; messages: Message[] };
 
 /** A problem that is the caller's to fix, said in words it can act on. */
 class Refused extends Error {}
@@ -88,6 +88,19 @@ export const TOOLS: Tool[] = [
       if (!chief || chief.fired) throw new Refused('This company has no chief of staff to talk to. Use message to write to an employee by name, or hire a chief of staff on screen.');
       const { message } = await ctx.call<{ message: Message }>('POST', '/api/chat', { text: text(args.text) });
       return said(ctx, message, chief.name);
+    },
+  },
+  {
+    name: 'morpheus',
+    description: "Says something to Morpheus, the admin of this company app, and waits for the reply. Morpheus changes the setup at once (teams, people, models, efforts, tools, skills, caps, rules, gates) and turns a bug or a feature for the app into a task on his own board.",
+    input: { text: z.string().min(1).describe('What to say, in the user\'s own words where they gave them.') },
+    run: async (args, ctx) => {
+      const { company, employees } = await ctx.call<Snapshot>('GET', '/api/snapshot');
+      const admin = employees.find((employee) => employee.id === company?.adminId);
+      if (!admin || admin.fired) throw new Refused('This company has no admin yet: nobody is set up as Morpheus.');
+      const { message } = await ctx.call<{ message: Message }>('POST', `/api/employees/${admin.id}/message`, { text: text(args.text) });
+      if (message.taskId === null) return `${admin.name} is in the middle of a run, so your message goes to it as that run's next turn. There is no separate reply.`;
+      return said(ctx, message, admin.name);
     },
   },
   {

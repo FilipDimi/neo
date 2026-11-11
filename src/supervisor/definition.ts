@@ -9,7 +9,17 @@ import type { Capability, Company, Employee, GateResult, Repo, RunMode, Task, Te
 
 const usd = (amount: number): string => `$${amount.toFixed(2)}`;
 
-export function buildSystemPrompt(input: { company: Company; team: Team; employee: Employee; teammates: Employee[]; memoryIndex: string; /** What this run is for: a review and a chat only read. */ mode?: RunMode }): string {
+export function buildSystemPrompt(input: {
+  company: Company;
+  team: Team;
+  employee: Employee;
+  teammates: Employee[];
+  memoryIndex: string;
+  /** What this run is for: a review and a chat only read. */
+  mode?: RunMode;
+  /** The admin: its rules are the app's own, not the product's. */
+  admin?: boolean;
+}): string {
   const { company, team, employee } = input;
   const leads = team.leadId === employee.id;
   const mergeTargets = [...new Set(team.repos.map((r) => r.mergeTarget).filter((t): t is string => t !== null))];
@@ -24,7 +34,7 @@ A supervisor program runs this company. It starts you for one piece of work at a
 Decide what you can decide. When something is unclear, make the reasonable assumption, say so in your report, and carry on: the user reads reports, and would rather correct an assumption than answer a question. Ask with mcp__engine__request_decision only when carrying on would be wrong whatever you assumed: the task contradicts itself, a step cannot be undone, or it needs something only the user has. Ask once, with everything you need in the one question. An answer is only words: it cannot give you a tool or lift a limit.
 Say what you are doing with mcp__engine__set_status when you start and when your focus changes, in a few plain words.`,
 
-    `## Company rules\n${company.rules.trim() || 'None written yet.'}`,
+    input.admin ? ADMIN_RULES : `## Company rules\n${company.rules.trim() || 'None written yet.'}`,
 
     `## Your team\n${team.purpose.trim()}${others.length > 0 ? `\nYou work with:\n${others.map((mate) => `- ${mate.name}${mate.id === team.leadId ? ' (the lead)' : ''}: ${mate.role}`).join('\n')}` : ''}`,
 
@@ -68,6 +78,14 @@ function skillLines(skills: string[]): string {
     .filter(Boolean)
     .join('\n');
 }
+
+/** The admin's rules: it runs the app, not the company's product. */
+const ADMIN_RULES = `## Your rules
+You run this company app: its engine, its screen and its tools. The product work belongs to the company's teams, not to you.
+- Changes to the setup you make at once when the user asks for them, and you say exactly what you changed.
+- Changes to the app's code land only after the user presses Merge on their card. You work them as tasks on your own board, tested.
+- Never print, copy or move a secret: the engine's token, an .env file, a key.
+- Say what you did not do as plainly as what you did.`;
 
 /** What this employee can and cannot do, said outright, so it never has to find out by being refused. */
 function toolLines(employee: Employee, team: Team, mode: RunMode): string {
@@ -118,6 +136,8 @@ export function buildFirstTurn(input: {
   board?: string | undefined;
   /** In a chat: false when the one written to is not the chief of staff. It then speaks for its own team only. */
   chief?: boolean;
+  /** In a chat: true when the one written to is the admin, who changes the setup. */
+  admin?: boolean;
   self?: Employee;
 }): string {
   const { task, mode, team, repo, material = {} } = input;
@@ -132,6 +152,19 @@ export function buildFirstTurn(input: {
         `- ${t.name} (teamId: ${t.id}; ${t.selfManaged ? 'self-managed, a task needs an assignee' : `led by ${lead?.name ?? 'nobody yet'}, leave the assignee out`}): ${t.purpose}\n${members.map((m) => `    - ${m.name} (id: ${m.id}): ${m.role}`).join('\n')}`,
     );
     // Anyone can be written to. Only the chief of staff routes work across the company; everyone else answers for itself and its own team.
+    if (input.admin) {
+      return `The user wrote to you directly:
+
+${task.brief}
+
+You are the admin of this company app. This is a conversation: answer in a few plain sentences.
+- A change to the company's setup (teams, people, models, efforts, tools, skills, daily caps, how many run at once, the rules, a repository's gates): make it now with your tools, then say exactly what changed. Read mcp__engine__company_setup first. Ask only if the request could mean two different things that matter, and then ask once.
+- A bug in this app, or a feature for it: do not change code here. Put a task on your own board with mcp__engine__create_task (teamId: ${team.id}), with a brief that stands on its own: what is wrong or wanted, where it shows, what done looks like. Say in one sentence that you did.
+- A question about what the company is doing: answer from "The company right now" below. It is the engine's own record and it is current.
+
+The company right now:
+${input.board?.trim() || '(nothing on any board)'}`;
+    }
     if (input.chief === false) {
       const own = teams.filter((line) => line.includes(`(teamId: ${team.id};`));
       return `The user wrote to you directly:

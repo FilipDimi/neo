@@ -149,9 +149,14 @@ describe('a gate is confined like any other command', () => {
     const plain = await runGate(gate('tools', 'command -v xcodebuild; command -v swift'), dir);
     expect(plain.output.split('\n').filter(Boolean)).toEqual(['/usr/bin/xcodebuild', '/usr/bin/swift']);
     // XCTest talks to its test manager over one socket. Only a team that builds with Xcode may reach it, and no other socket.
-    const socket = /com\\\.apple\\\.testmanagerd\\\.unix-domain\\\.socket/;
+    const socket = /com\\\.apple\\\.testmanagerd\\\.\(unix-domain/;
     expect(gateProfile(dir, dir, { xcode: true })).toMatch(socket);
     expect(gateProfile(dir, dir, {})).not.toMatch(socket);
+    expect(gateProfile(dir, dir, { xcode: true })).toMatch(/remote-automation/);
+    expect(gateProfile(dir, dir, { xcode: true })).toMatch(/SimDevice.*syslogsock/);
+    expect(gateProfile(dir, dir, {})).not.toMatch(/SimDevice/);
+    expect(gateProfile(dir, dir, { xcode: true })).toContain('(allow signal (target others))');
+    expect(gateProfile(dir, dir, {})).not.toContain('(target others)');
   });
 
   it('can open a pseudo-terminal, as a test runner does for its output', async () => {
