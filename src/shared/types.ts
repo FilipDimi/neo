@@ -136,6 +136,9 @@ export const Task = z.object({
   folder: z.string().nullable(),
   branch: z.string().nullable(),
   mergedInto: z.string().nullable(),
+  /** The commit its branch began at, and, once landed, what it landed on and as what: its diff is read between these. */
+  startedFrom: z.string().optional(),
+  landed: z.object({ over: z.string(), tip: z.string() }).optional(),
   createdAt: iso,
   updatedAt: iso,
   blockedAt: iso.nullable(),

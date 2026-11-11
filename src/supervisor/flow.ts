@@ -13,7 +13,7 @@ import * as store from '../db/store.ts';
 import { changedFiles, commitAll, diffStat, discardChanges, NestedRepoError, patch } from '../git/commit.ts';
 import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
 import type { GateLimits, GateQueue } from '../git/gates.ts';
-import type { Identity } from '../git/git.ts';
+import { must, type Identity } from '../git/git.ts';
 import { isMerged, landOn, mergeInto } from '../git/merge.ts';
 import { outside } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
@@ -111,6 +111,8 @@ export class Flow {
         await createFolder({ repoPath: site.repo.path, dir, branch, startPoint: parent?.branch ?? site.teamRepo.baseBranch });
       });
       Object.assign(changes, { folder: dir, branch });
+      // Where the branch began, for a branch made here and now: what the task changed is measured from it once the branch has been taken in elsewhere.
+      if (!task.branch) changes.startedFrom = await must(dir, ['rev-parse', 'HEAD']);
     }
     if (request.mode !== 'integrate' || request.firstTurn) return { task: changes };
     const ready = { ...task, ...changes };
@@ -630,7 +632,7 @@ export class Flow {
       const landing = await landOn(site.repo.path, site.folder, task.branch!, target, ENGINE, recheck);
       switch (landing.result) {
         case 'landed':
-          this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(this.db, task.id)!, mergedInto: target, updatedAt: now.toISOString() }, cause: 'edited' }));
+          this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(this.db, task.id)!, mergedInto: target, landed: { over: landing.over, tip: landing.tip }, updatedAt: now.toISOString() }, cause: 'edited' }));
           return this.complete(task.id);
         case 'checkout_dirty':
           return ask(`"${task.title}" is ready to merge into ${target}, but your checkout at ${landing.where} has uncommitted changes on that branch, so the engine did not touch it. Merge once it is clean, or keep the branch.`, target);

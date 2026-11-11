@@ -26,7 +26,8 @@ export async function mergeInto(dir: string, otherBranch: string, engine: Identi
   return { ok: false, conflicts };
 }
 
-export type Landing = { result: 'landed'; mergedTarget: boolean } | { result: 'conflict'; conflicts: string[] } | { result: 'gates_failed' } | { result: 'checkout_dirty'; where: string } | { result: 'target_moved' };
+/** `over` is the target as it was, `tip` the work that was put on it: between the two is what this landing changed. */
+export type Landing = { result: 'landed'; mergedTarget: boolean; over: string; tip: string } | { result: 'conflict'; conflicts: string[] } | { result: 'gates_failed' } | { result: 'checkout_dirty'; where: string } | { result: 'target_moved' };
 
 /**
  * Lands the task branch on a target branch of the user's repository.
@@ -36,6 +37,7 @@ export type Landing = { result: 'landed'; mergedTarget: boolean } | { result: 'c
 export async function landOn(repoPath: string, dir: string, branch: string, target: string, engine: Identity, recheck?: () => Promise<boolean>): Promise<Landing> {
   assertOwnGitDir(dir);
   await must(dir, ['fetch', '-q', 'origin', `refs/heads/${target}`]);
+  const over = await must(dir, ['rev-parse', 'FETCH_HEAD']);
   const upToDate = (await git(dir, ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'])).code === 0;
   if (!upToDate) {
     const merged = await git(dir, ['merge', '-q', '--no-ff', '--no-edit', '-m', `Merge ${target} into ${branch}`, 'FETCH_HEAD'], engine);
@@ -47,16 +49,17 @@ export async function landOn(repoPath: string, dir: string, branch: string, targ
     if (recheck && !(await recheck())) return { result: 'gates_failed' };
   }
   await publish(repoPath, dir, branch);
+  const landed = { result: 'landed' as const, mergedTarget: !upToDate, over, tip: await must(dir, ['rev-parse', 'HEAD']) };
 
   const checkout = await checkoutOf(repoPath, target);
   if (checkout === null) {
     // Nobody has the target checked out: move it, fast-forward only.
     const moved = await git(repoPath, ['fetch', '-q', dir, `refs/heads/${branch}:refs/heads/${target}`]);
-    return moved.code === 0 ? { result: 'landed', mergedTarget: !upToDate } : { result: 'target_moved' };
+    return moved.code === 0 ? landed : { result: 'target_moved' };
   }
   // The target is checked out. Never move a branch under someone's uncommitted work.
   if ((await must(checkout, ['status', '--porcelain', '--untracked-files=no'])) !== '') return { result: 'checkout_dirty', where: checkout };
   const forwarded = await git(checkout, ['merge', '-q', '--ff-only', branch]);
-  if (forwarded.code === 0) return { result: 'landed', mergedTarget: !upToDate };
+  if (forwarded.code === 0) return landed;
   return /untracked|overwritten/i.test(forwarded.out) ? { result: 'checkout_dirty', where: checkout } : { result: 'target_moved' };
 }

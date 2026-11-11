@@ -55,7 +55,7 @@ describe('landOn', () => {
   it('lands on a target nobody has checked out', async () => {
     const repo = gitRepo();
     const dir = await work(repo, 'task/x', { 'X.md': 'x\n' });
-    expect(await landOn(repo, dir, 'task/x', 'team', engine)).toEqual({ result: 'landed', mergedTarget: false });
+    expect(await landOn(repo, dir, 'task/x', 'team', engine)).toMatchObject({ result: 'landed', mergedTarget: false });
     expect(fileAt(repo, 'team', 'X.md')).toBe('x');
     expect(refOf(repo, 'main')).not.toBe(refOf(repo, 'team'));
     expect(fs.existsSync(path.join(repo, 'X.md'))).toBe(false);
@@ -83,7 +83,7 @@ describe('landOn', () => {
     const repo = gitRepo();
     const dir = await work(repo, 'task/x', { 'X.md': 'x\n' });
     await work(repo, 'task/other', { 'OTHER.md': 'other\n' }).then((other) => landOn(repo, other, 'task/other', 'team', engine));
-    expect(await landOn(repo, dir, 'task/x', 'team', engine)).toEqual({ result: 'landed', mergedTarget: true });
+    expect(await landOn(repo, dir, 'task/x', 'team', engine)).toMatchObject({ result: 'landed', mergedTarget: true });
     expect(fileAt(repo, 'team', 'X.md')).toBe('x');
     expect(fileAt(repo, 'team', 'OTHER.md')).toBe('other');
   });

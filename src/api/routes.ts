@@ -14,6 +14,7 @@ import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { git } from '../git/git.ts';
 import { folderOf } from '../supervisor/jobs.ts';
+import { diffOf } from './diff.ts';
 import { writtenFiles } from './files.ts';
 import { PRESETS } from '../presets/presets.ts';
 import { EVENT_VERSION } from '../shared/events.ts';
@@ -272,18 +273,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
   });
 
   /** What a task's branch changed, read from the user's repository, where the engine publishes it after every work run. */
-  app.get('/api/tasks/:id/diff', async (request) => {
-    const task: Task = found(store.getTask(db, id(request)), 'such task');
-    const repo = task.repoId ? store.getRepo(db, task.repoId) : undefined;
-    const teamRepo = store.getTeam(db, task.teamId)?.repos.find((r) => r.repoId === task.repoId);
-    if (!repo || !teamRepo || !task.branch) return { stat: '', patch: '', lines: 0 };
-    const base = (task.parentId && store.getTask(db, task.parentId)?.branch) || teamRepo.baseBranch;
-    const range = `${base}...${task.branch}`;
-    const [stat, patch, short] = await Promise.all([git(repo.path, ['diff', '--stat', range]), git(repo.path, ['diff', range]), git(repo.path, ['diff', '--shortstat', range])]);
-    if (stat.code !== 0) return { stat: '', patch: '', lines: 0 };
-    const count = (pattern: RegExp) => Number(pattern.exec(short.out)?.[1] ?? 0);
-    return { stat: stat.out, patch: patch.out.slice(0, 200_000), lines: count(/(\d+) insertions?/) + count(/(\d+) deletions?/) };
-  });
+  app.get('/api/tasks/:id/diff', async (request) => diffOf(db, found(store.getTask(db, id(request)), 'such task')));
 
   /** What a task without a repository wrote: the files in its folder. A task with one has its diff instead. */
   app.get('/api/tasks/:id/files', async (request) => {

@@ -5,6 +5,7 @@ import { apply } from '../../src/db/apply.ts';
 import { paths } from '../../src/db/dataDir.ts';
 import * as store from '../../src/db/store.ts';
 import type { Gate } from '../../src/shared/types.ts';
+import { diffOf } from '../../src/api/diff.ts';
 import { adminTool } from '../../src/supervisor/admin.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
 import { staged, type Scene } from '../fixtures/staged.ts';
@@ -63,6 +64,32 @@ describe('what an earlier start left behind', () => {
     await drain(setup);
     expect(store.openDecisions(setup.w.db).map((card) => card.text)).toEqual([]);
     expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+  });
+});
+
+describe("a task's diff", () => {
+  it('still shows what the task changed after it has landed, and what a part changed after the whole was put together', async () => {
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'brief') {
+        await s.engine('propose_subtasks', { subtasks: [{ title: 'Greeting', assigneeId: 'emp1', ownership: ['GREETING.md'], gates: ['greeting'], brief: 'Do it.', doneCondition: 'Done.', priority: 2, capUsd: 0.5, retryAllowed: true }] });
+      }
+      if (s.mode === 'work' && s.who === 'Ada') {
+        s.write('GREETING.md', 'Hello, and welcome.\n');
+        await s.engine('report_done', { summary: 'Added.' });
+      }
+      if (s.mode === 'integrate' || (s.mode === 'work' && s.who === 'Priya')) await s.engine('report_done', { summary: 'In.' });
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+    });
+    const whole = setup.w.sup.createTask({ teamId: 'team1', title: 'Greet the reader', brief: 'One file.', doneCondition: 'It exists.', gates: ['greeting'], capUsd: 3 });
+    await drain(setup);
+    const done = store.getTask(setup.w.db, whole.id)!;
+    expect(done).toMatchObject({ state: 'done', mergedInto: 'team' });
+    const [part] = store.listTasks(setup.w.db, { parentId: whole.id });
+    for (const task of [done, part!]) {
+      const diff = await diffOf(setup.w.db, task);
+      expect(diff.patch, task.title).toContain('+Hello, and welcome.');
+      expect(diff.lines, task.title).toBe(1);
+    }
   });
 });
 
