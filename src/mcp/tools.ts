@@ -154,7 +154,8 @@ export const TOOLS: Tool[] = [
       if (!card) throw new Refused(`No card ${text(args.card)} is waiting. ${decisions.length === 0 ? 'No card is waiting at all.' : `The cards waiting are: ${decisions.map((entry) => entry.id).join(', ')}.`}`);
       const option = card.options.find((entry) => entry.id === text(args.option));
       if (!option) throw new Refused(`That card has no button "${text(args.option)}". Its buttons are: ${card.options.map((entry) => entry.id).join(', ')}.`);
-      await ctx.call('POST', `/api/decisions/${card.id}/answer`, { optionId: option.id, ...(text(args.text) ? { text: text(args.text) } : {}) });
+      const { result } = await ctx.call<{ result: 'applied' | 'ignored' }>('POST', `/api/decisions/${card.id}/answer`, { optionId: option.id, ...(text(args.text) ? { text: text(args.text) } : {}) });
+      if (result === 'ignored') return 'That card had already been answered, so nothing was pressed.';
       return `Pressed "${option.label}" on the card: ${card.text.split('\n')[0]}`;
     },
   },
@@ -188,7 +189,8 @@ export const TOOLS: Tool[] = [
         task.doneCondition.trim() ? `Done when: ${task.doneCondition.trim()}` : '',
         children.length > 0 ? `Sub-tasks:\n${children.map((child) => `- ${child.id} "${child.title}" (${child.state})`).join('\n')}` : '',
         runs.length > 0 ? `Runs:\n${runs.map((run) => `- ${run.mode} by ${name(run.employeeId)}: ${run.outcome}${run.reason ? ` (${run.reason})` : ''}${priced ? `, ${usd(run.costUsd)}` : ''}${run.summary ? `\n  ${run.summary.trim().replace(/\n/g, '\n  ')}` : ''}`).join('\n')}` : 'No run yet.',
-        decisions.length > 0 ? `Waiting on you:\n${decisions.map((card) => `- card ${card.id}: ${card.text}`).join('\n')}` : '',
+        // A card the chief of staff is deciding is not on the user's desk, and cannot be pressed from here.
+        ...[...new Set(decisions.map((card) => card.deciderId ?? ''))].map((decider) => `${decider ? `${name(decider)} is deciding for you` : 'Waiting on you'}:\n${decisions.filter((card) => (card.deciderId ?? '') === decider).map((card) => `- card ${card.id}: ${card.text}`).join('\n')}`),
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -203,6 +205,7 @@ export const TOOLS: Tool[] = [
       brief: z.string().min(1).describe('What to do, standing on its own.'),
       doneCondition: z.string().optional().describe('How someone can check that it is done.'),
       assignee: z.string().optional().describe('An employee\'s name.'),
+      gates: z.array(z.string().min(1)).optional().describe('The names of the gates of the team\'s repository that the finished work must pass before it lands (company_setup lists them). A task given none is checked by none.'),
     },
     run: async (args, ctx) => {
       const { teams, employees } = await ctx.call<Snapshot>('GET', '/api/snapshot');
@@ -211,7 +214,7 @@ export const TOOLS: Tool[] = [
       const staff = employees.filter((employee) => !employee.fired && employee.teamId === team.id);
       const assignee = text(args.assignee) ? byName(staff, text(args.assignee)) : undefined;
       if (text(args.assignee) && !assignee) throw new Refused(`Nobody on ${team.name} is called "${text(args.assignee)}". On that team: ${staff.map((entry) => entry.name).join(', ') || 'nobody yet'}.`);
-      const { task } = await ctx.call<{ task: Task }>('POST', '/api/tasks', { teamId: team.id, title: text(args.title), brief: text(args.brief), ...(text(args.doneCondition) ? { doneCondition: text(args.doneCondition) } : {}), ...(assignee ? { assigneeId: assignee.id } : {}) });
+      const { task } = await ctx.call<{ task: Task }>('POST', '/api/tasks', { teamId: team.id, title: text(args.title), brief: text(args.brief), ...(text(args.doneCondition) ? { doneCondition: text(args.doneCondition) } : {}), ...(assignee ? { assigneeId: assignee.id } : {}), ...(Array.isArray(args.gates) && args.gates.length > 0 ? { gates: args.gates } : {}) });
       return `Created task ${task.id} "${task.title}" on ${team.name}${assignee ? ` for ${assignee.name}` : team.selfManaged ? '' : '; its lead will brief it'}.`;
     },
   },

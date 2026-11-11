@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadToken } from '../../src/api/security.ts';
 import { buildServer } from '../../src/api/server.ts';
+import { apply } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import { caller, runTool, TOOLS, type Ctx } from '../../src/mcp/tools.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
@@ -145,6 +146,39 @@ describe("the company's tools for a Claude session", () => {
     expect(one.text).toContain('Draft three taglines.');
     expect(one.text).toMatch(/work by Mara: done.*Three taglines written\./s);
     expect((await c.use('new_task', { team: 'Sales', title: 'x', brief: 'y' })).text).toMatch(/There is no team "Sales".*Office, Engineering iOS, Marketing/);
+  });
+
+  it('says who finished a task its lead took, and keeps a card someone is deciding out of "waiting on you"', async () => {
+    const c = await company(async (s) => {
+      if (s.mode === 'brief') return void (await s.engine('report_done', { summary: 'Did it myself.' }));
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+    });
+    const made = c.w.sup.createTask({ teamId: 'ios', title: 'Rename the tab', brief: 'Rename it.' });
+    for (let i = 0; i < 4; i++) await c.use('now');
+    const now = (await c.use('now')).text;
+    expect(now, now).toMatch(/"Rename the tab" \(done\): finished today by Priya/);
+    // A card of that task that Neo is deciding for the user is not the user's to answer yet.
+    const card = { id: 'card1', taskId: made.id, runId: null, employeeId: null, kind: 'question' as const, text: 'Formal or friendly?', options: [{ id: 'stop', label: 'Stop it', effect: 'stop_task' as const }], costSoFarUsd: 0, answer: null, askedAt: c.w.clock.now().toISOString(), answeredAt: null, deciderId: 'neo' };
+    apply(c.w.db, (tx) => tx.emit({ kind: 'decision_raised', decision: card }));
+    const one = (await runTool('task', { id: made.id }, c.ctx)).text;
+    expect(one).not.toContain('Waiting on you');
+    expect(one).toMatch(/Neo is deciding for you:\n- card card1: Formal or friendly\?/);
+  });
+
+  it('says so when a card had already been answered, and presses nothing', async () => {
+    const c = await company(async (s) => void (s.mode === 'work' && !s.resumed && (await s.engine('request_decision', { question: 'Formal or friendly?', options: ['Formal', 'Friendly'] }))));
+    c.w.sup.createTask({ teamId: 'marketing', assigneeId: 'mw', title: 'App Store description', brief: 'Write it.' });
+    await c.use('now');
+    const [card] = store.openDecisions(c.w.db);
+    // Answered on the screen in the moment between this tool reading the cards and pressing the button.
+    const real = c.ctx.call;
+    c.ctx.call = (async (method: 'GET' | 'POST', route: string, body?: unknown) => {
+      if (method === 'POST' && route.endsWith('/answer')) c.w.sup.answer(card!.id, { optionId: 'stop' });
+      return real(method, route, body);
+    }) as typeof real;
+    const said = await c.use('answer_card', { card: card!.id, option: 'choice1' });
+    expect(said.text).toMatch(/already been answered/);
+    expect(said.text).not.toMatch(/Pressed/);
   });
 
   it('says plainly when the company is not running', async () => {

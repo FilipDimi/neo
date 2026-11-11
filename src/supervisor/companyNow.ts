@@ -17,6 +17,8 @@ export function companyNow(db: Db, now: Date): string {
   const cards = store.openDecisions(db);
   const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
   const work = store.listTasks(db).filter((task) => task.kind === 'work');
+  // Who did the work: a task its lead took has no assignee, so the name comes from the last run that made something.
+  const authorOf = (taskId: string): string | undefined => store.runsOf(db, taskId).findLast((run) => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate')?.employeeId;
   const lines: string[] = [];
 
   for (const team of store.allTeams(db)) {
@@ -37,7 +39,7 @@ export function companyNow(db: Db, now: Date): string {
           : card
             ? `waiting on the user (${WHY[card.kind]}) for ${ago(card.askedAt, now)}`
             : task.state === 'done'
-              ? `finished today by ${name(task.assigneeId)}${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}`
+              ? `finished today by ${name(authorOf(task.id) ?? task.assigneeId ?? team.leadId)}${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}`
               : task.state === 'failed'
                 ? 'stopped today'
                 : task.state === 'queued'

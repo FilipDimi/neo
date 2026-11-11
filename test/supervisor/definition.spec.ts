@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildFirstTurn, buildSystemPrompt } from '../../src/supervisor/definition.ts';
+import { TOOL_INPUT } from '../../src/worker/protocol.ts';
 import { company, employee, repo, task, team } from '../helpers.ts';
 
 const lead = employee({ id: 'lead', name: 'Priya', role: 'Leads the iOS team.' });
@@ -198,5 +199,12 @@ describe('buildFirstTurn', () => {
   it('a route turn lists the teams with their ids and asks for a reply', () => {
     const turn = buildFirstTurn({ ...base, task: task({ kind: 'chat', brief: 'Make the open seamless and fix the roster.' }), mode: 'route', teams: [{ team: led, lead, members: [ada] }] });
     for (const part of ['Make the open seamless', 'team1', 'Engineering iOS', 'mcp__engine__create_task']) expect(turn, part).toContain(part);
+  });
+
+  it("a route turn names each team's gates, so the work it creates is checked by them", () => {
+    const turn = buildFirstTurn({ ...base, task: task({ kind: 'chat', brief: 'Add the stories endpoint.' }), mode: 'route', teams: [{ team: led, lead, members: [ada], gates: ['rust', 'contract'] }] });
+    expect(turn).toContain('its gates: rust, contract');
+    expect(turn).toMatch(/gates: the names of the gates .* must pass/);
+    expect(TOOL_INPUT.create_task.parse({ teamId: 'team1', title: 'T', brief: 'b', priority: 2, doneCondition: 'd', capUsd: 1, gates: ['rust'] }).gates).toEqual(['rust']);
   });
 });

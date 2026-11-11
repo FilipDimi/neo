@@ -121,7 +121,8 @@ export function findingLines(findings: Finding[]): string {
   const sentence = (text: string): string => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
   return findings.map((finding, index) => `${index + 1}. [${finding.severity}] ${finding.file}${finding.line ? `:${finding.line}` : ''}: ${sentence(finding.title)}${finding.why.trim() ? ` ${sentence(finding.why)}` : ''}${finding.fix.trim() ? ` Fix: ${sentence(finding.fix)}` : ''}`).join('\n');
 }
-export type TeamView = { team: Team; lead: Employee | null; members: Employee[] };
+/** `gates`: the names of the gates of the repository the team works in, which a task for it can be made to pass. */
+export type TeamView = { team: Team; lead: Employee | null; members: Employee[]; gates?: string[] };
 
 export function gateLines(results: GateResult[]): string {
   return results.map((r) => `- ${r.name}: ${r.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${r.exitCode})${r.output.trim() ? `\n\`\`\`\n${r.output.trim().slice(-1500)}\n\`\`\`` : ''}`).join('\n');
@@ -158,8 +159,8 @@ export function buildFirstTurn(input: {
 
   if (mode === 'route') {
     const teams = (input.teams ?? []).map(
-      ({ team: t, lead, members }) =>
-        `- ${t.name} (teamId: ${t.id}; ${t.selfManaged ? 'self-managed, a task needs an assignee' : `led by ${lead?.name ?? 'nobody yet'}, leave the assignee out`}): ${t.purpose}\n${members.map((m) => `    - ${m.name} (id: ${m.id}): ${m.role}`).join('\n')}`,
+      ({ team: t, lead, members, gates }) =>
+        `- ${t.name} (teamId: ${t.id}; ${t.selfManaged ? 'self-managed, a task needs an assignee' : `led by ${lead?.name ?? 'nobody yet'}, leave the assignee out`}${gates && gates.length > 0 ? `; its gates: ${gates.join(', ')}` : ''}): ${t.purpose}\n${members.map((m) => `    - ${m.name} (id: ${m.id}): ${m.role}`).join('\n')}`,
     );
     // Anyone can be written to. Only the chief of staff routes work across the company; everyone else answers for itself and its own team.
     if (input.admin) {
@@ -196,7 +197,7 @@ ${input.board?.trim() || '(nothing on any board)'}`;
 
 ${task.brief}
 
-Turn this into work. For each separate piece, call mcp__engine__create_task on the team it belongs to, with a summary (one or two plain sentences on what it delivers, for someone who will never read the brief), a brief that stands on its own and a done-condition someone can check. Do not do the work yourself and do not invent work the message does not ask for. If the message is a question, answer it instead. If it asks what the company or a team is doing, answer it from "The company right now" below: that is the engine's own record and it is current, so do not look in files or in your notes for it.
+Turn this into work. For each separate piece, call mcp__engine__create_task on the team it belongs to, with a summary (one or two plain sentences on what it delivers, for someone who will never read the brief), a brief that stands on its own and a done-condition someone can check. Where a team has gates, give the task its gates: the names of the gates the finished work must pass before it lands, chosen from that team's own (a task given none is checked by none). Do not do the work yourself and do not invent work the message does not ask for. If the message is a question, answer it instead. If it asks what the company or a team is doing, answer it from "The company right now" below: that is the engine's own record and it is current, so do not look in files or in your notes for it.
 
 The teams:
 ${teams.join('\n') || '- (no teams yet)'}

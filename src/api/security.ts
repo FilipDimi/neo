@@ -12,7 +12,8 @@ export const EVENTS_PATH = '/api/events';
 
 /** The per-install token, created on first use in a file only this user can read. */
 export function loadToken(file: string): string {
-  if (!fs.existsSync(file)) fs.writeFileSync(file, randomBytes(32).toString('hex'), { mode: 0o600 });
+  // A file that is there but empty (a write cut short) would make the token the empty word, which a request that sends none would match.
+  if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8').trim() === '') fs.writeFileSync(file, randomBytes(32).toString('hex'), { mode: 0o600 });
   fs.chmodSync(file, 0o600);
   return fs.readFileSync(file, 'utf8').trim();
 }

@@ -500,7 +500,8 @@ export class Supervisor {
       const run = store.newRun(request, now, leaseMinutesFor(request, task, team));
       const messages = store.waitingMessages(this.db, employee.id);
       const everyone = store.allEmployees(this.db).filter((e) => !e.fired);
-      const teams: TeamView[] = store.allTeams(this.db).map((t) => ({ team: t, lead: everyone.find((e) => e.id === t.leadId) ?? null, members: everyone.filter((e) => e.teamId === t.id) }));
+      const gatesOf = (t: Team): string[] => (t.repos[0] ? (store.getRepo(this.db, t.repos[0].repoId)?.gates ?? []) : []).map((gate) => gate.name);
+      const teams: TeamView[] = store.allTeams(this.db).map((t) => ({ team: t, lead: everyone.find((e) => e.id === t.leadId) ?? null, members: everyone.filter((e) => e.teamId === t.id), gates: gatesOf(t) }));
       const job = this.jobFor({
         paths: this.paths,
         run,

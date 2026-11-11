@@ -13,16 +13,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { whoAnswers } from '../api/whoAnswers.ts';
 import { dataDir, paths } from '../db/dataDir.ts';
-import { launchEngine, startCompany } from './start.ts';
+import { engineRoot, launchEngine, startCompany } from './start.ts';
 import { caller, INSTRUCTIONS, runTool, TOOLS, type Call } from './tools.ts';
 
 const port = Number(process.env.VS_PORT ?? 4317);
 const dir = dataDir(process.env, false);
 const tokenFile = paths(dir).token;
-// The engine that is started is the one in this folder: the release these tools themselves run from.
+// The engine that is started is the current release when these tools run from a release, and this folder otherwise.
 const root = path.resolve(import.meta.dirname, '../..');
 const log = path.join(dir, 'logs', 'engine.log');
-const start = () => startCompany({ port, who: whoAnswers, launch: () => launchEngine(root, log), log });
+const start = () => startCompany({ port, who: whoAnswers, launch: () => launchEngine(engineRoot(root), log), log });
 
 /** The token is read at each call: the company may be started, or set up for the first time, after this server. */
 const call: Call = (method, route, body) => {

@@ -96,6 +96,7 @@ export const TOOL_INPUT = {
     priority: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     doneCondition: z.string().min(1),
     capUsd: z.number().positive(),
+    gates: z.array(z.string().min(1)).optional(),
   }),
   decide: z.object({ option: z.string().min(1), notes: z.string() }),
   ...ADMIN_INPUT,
