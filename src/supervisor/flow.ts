@@ -10,18 +10,18 @@ import { apply, type Tx } from '../db/apply.ts';
 import type { Paths } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
-import { changedFiles, commitAll, diffStat, discardChanges, NestedRepoError, patch } from '../git/commit.ts';
+import { addedLines, changedFiles, commitAll, diffStat, discardChanges, NestedRepoError, patch } from '../git/commit.ts';
 import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
 import type { GateLimits, GateQueue } from '../git/gates.ts';
 import { must, type Identity } from '../git/git.ts';
 import { isMerged, landOn, mergeInto } from '../git/merge.ts';
-import { outside } from '../git/ownership.ts';
+import { outside, owns } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
 import type { Decision, Employee, Finding, Gate, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
 import { countsCost } from '../shared/view.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
-import { builtOnFor } from './record.ts';
+import { builtOnFor, contractProblem, issueContractVersion } from './record.ts';
 import * as decisions from './decisions.ts';
 import { writtenFiles } from '../api/files.ts';
 import { buildDecidingTurn, buildFirstTurn, findingLines, type Part } from './definition.ts';
@@ -206,11 +206,14 @@ export class Flow {
     } catch (failure) {
       return { ok: false, text: `${failure instanceof Error ? failure.message : String(failure)} Propose again.` };
     }
+    if (subtasks.some((sub) => sub.contract) && !repo?.contract) return { ok: false, text: 'A sub-task is marked as changing the contract, but this task\'s repository has no contract named. Leave "contract" out and propose again.' };
     this.change((tx, now) => {
-      for (const [index, { decisions: _cited, ...sub }] of subtasks.entries()) {
+      for (const [index, { decisions: _cited, contract: changes, ...sub }] of subtasks.entries()) {
         // Created a millisecond apart, so that creation order is the order they were proposed in.
         const child = store.newTask({ ...sub, teamId: parent.teamId, parentId: parent.id, repoId: parent.repoId, createdBy: run.employeeId, ...(built[index] ? { builtOn: built[index] } : {}) }, new Date(now.getTime() + index));
         tx.emit({ kind: 'task_changed', task: child, cause: 'created' });
+        // A part that changes the contract gets its version now, so its author is told it at the start.
+        if (changes && parent.repoId) issueContractVersion(tx, this.db, now, { repoId: parent.repoId, ...changes, taskId: child.id, by: run.employeeId });
         tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: child.id, mode: 'work', employeeId: sub.assigneeId, reason: 'new' }, new Date(now.getTime() + index)) });
       }
       decisions.move(tx, store.getTask(this.db, parent.id)!, 'subtasks_created', now);
@@ -335,6 +338,7 @@ export class Flow {
         if (this.site(task)) {
           if (!(await this.committed(run, task))) return;
           if (!this.ownershipHolds(run, await this.changed(task), task)) return;
+          if (!(await this.contractHolds(task))) return;
           if (!(await this.gatesPass(run.id, task))) return;
         }
         return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
@@ -357,9 +361,33 @@ export class Flow {
     }
     // A split is not a way around what the task owns: what the parts changed between them, and what the lead changed putting them together, is held to it.
     if (checkOwnership && !this.ownershipHolds(run, await this.changed(task), task, true)) return;
+    if (!(await this.contractHolds(task))) return;
     if (!(await this.gatesPass(run.id, task))) return;
     // Each part was reviewed on its own; how they were put together was not. That is reviewed too before anything lands.
     return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
+  }
+
+  /**
+   * The contract changes only under a version the engine handed out. False when this work changed it without one, or
+   * holds one its files do not state: it has gone back to its author with the reason.
+   */
+  private async contractHolds(task: Task): Promise<boolean> {
+    const site = this.site(task)!;
+    const paths = site.repo.contract?.paths ?? [];
+    if (paths.length === 0) return true;
+    const changed = (await this.changed(task)).filter((file) => owns(paths, file));
+    if (changed.length === 0) return true;
+    const parent = task.parentId ? store.getTask(this.db, task.parentId) : undefined;
+    const problem = contractProblem({
+      own: task.contractVersion ?? null,
+      parent: parent?.contractVersion ?? null,
+      parts: store.listTasks(this.db, { parentId: task.id }).flatMap((child) => child.contractVersion ?? []),
+      changed,
+      added: await addedLines(site.folder, this.baseOf(task, site.teamRepo), paths.map((entry) => entry.replace(/\/\*{1,2}$/, ''))),
+    });
+    if (!problem) return true;
+    this.sendBack(task, `${problem}\n\nThen call mcp__engine__report_done again.`, `"${task.title}" changed the contract without its version`);
+    return false;
   }
 
   /** Commits the run's work. False when it could not be committed as it is and has gone back to its author. */

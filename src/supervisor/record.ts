@@ -7,7 +7,7 @@ import { apply, type Tx } from '../db/apply.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import type { ToolReply } from '../runtime/tools.ts';
-import type { Decision, RecordEntry, Run, Task } from '../shared/types.ts';
+import type { ContractVersion, Decision, RecordEntry, Run, Task } from '../shared/types.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 
 export const entryId = (n: number): string => `D-${n}`;
@@ -78,6 +78,64 @@ export function compareVersions(a: string, b: string): number {
 export function currentContract(db: Db, repoId: string): string | null {
   const issued = store.contractVersions(db, repoId).map((entry) => entry.version);
   return issued.length === 0 ? null : issued.reduce((highest, version) => (compareVersions(version, highest) > 0 ? version : highest));
+}
+
+/** The version after the highest one: a breaking change raises the first number, an addition the second, wording the third. */
+export function nextVersion(highest: string | null, change: 'breaking' | 'adds' | 'wording'): string {
+  const [major = 0, minor = 0, patch = 0] = parts(highest ?? '0.0.0');
+  return change === 'breaking' ? `${major + 1}.0.0` : change === 'adds' ? `${major}.${minor + 1}.0` : `${major}.${minor}.${patch + 1}`;
+}
+
+export type NewVersion = { repoId: string; change: ContractVersion['change']; summary: string; taskId: string | null; decisions?: string[] | undefined; by: string | null; version?: string | undefined };
+
+/**
+ * Hands out the next version of a repository's contract, and gives it to the ticket named. It is made from the
+ * highest ever handed out, so it is higher than every one before it whichever ticket lands first, and one given to
+ * a ticket that never lands is simply skipped. `start` says where counting begins, and takes its version as given.
+ */
+export function issueContractVersion(tx: Tx, db: Db, now: Date, input: NewVersion): ContractVersion {
+  const highest = currentContract(db, input.repoId);
+  if (input.change === 'start') {
+    if (!input.version || !/^\d+\.\d+\.\d+$/.test(input.version)) throw new Error('A version is three numbers with dots between them, such as 0.10.1.');
+    if (highest && compareVersions(input.version, highest) <= 0) throw new Error(`${input.version} is not higher than ${highest}, which was already handed out.`);
+  }
+  const cited = (input.decisions ?? []).map((id) => id.trim().toUpperCase());
+  const missing = cited.find((id) => !store.getEntry(db, id));
+  if (missing) throw new Error(`There is no decision ${missing} on record.`);
+  const issued: ContractVersion = {
+    id: store.newId(),
+    repoId: input.repoId,
+    version: input.change === 'start' ? input.version! : nextVersion(highest, input.change),
+    change: input.change,
+    summary: input.summary.trim(),
+    taskId: input.taskId,
+    decisions: cited,
+    by: input.by,
+    at: now.toISOString(),
+  };
+  tx.emit({ kind: 'contract_version_issued', issued });
+  const task = input.taskId && input.change !== 'start' ? store.getTask(db, input.taskId) : undefined;
+  if (task) tx.emit({ kind: 'task_changed', task: { ...task, contractVersion: issued.version, updatedAt: now.toISOString() }, cause: 'edited' });
+  return issued;
+}
+
+/** True when a text states this version, and not one it is only part of ("0.10.2" is not stated by "0.10.21" or "10.10.2"). */
+export function states(text: string, version: string): boolean {
+  return new RegExp(`(?<![\\d.])${version.replace(/\./g, '\\.')}(?!\\d)(?!\\.\\d)`).test(text);
+}
+
+/**
+ * What is wrong with a ticket's change to the contract, in words for its author; null when nothing is. The contract
+ * changes only on a ticket the engine gave a version to (or under one: its parent's, or a part's own), and the
+ * ticket that holds the version states it in the contract's files.
+ */
+export function contractProblem(input: { own: string | null; parent: string | null; parts: string[]; changed: string[]; added: string }): string | null {
+  if (input.changed.length === 0) return null;
+  if (!input.own && !input.parent && input.parts.length === 0) {
+    return `You changed the contract (${input.changed.slice(0, 8).join(', ')}) without a version. A change to the contract needs a version from the engine: a lead gets one with mcp__engine__contract_version, and anyone else asks their lead with mcp__engine__request_decision. If the contract did not need to change, take that change out.`;
+  }
+  if (input.own && !states(input.added, input.own)) return `The contract's files do not state ${input.own}, the version this change was given. Write it where the contract states its version.`;
+  return null;
 }
 
 // ---------- what a ticket is built on, and what a run is shown ----------
@@ -205,6 +263,30 @@ export function onRecordDecision(db: Db, now: Date, run: Run, input: unknown): T
       now,
     );
     return { ok: true, text: `Recorded as ${made.id}.` };
+  } catch (failure) {
+    return { ok: false, text: words(failure) };
+  }
+}
+
+/** `contract_version`: the next version, for the run's ticket or one of its sub-tasks. For a lead and the chief of staff. */
+export function onContractVersion(db: Db, now: Date, run: Run, input: unknown): ToolReply {
+  const asked = TOOL_INPUT.contract_version.safeParse(input);
+  if (!asked.success) return { ok: false, text: 'Say what kind of change it is (breaking, adds or wording) and what it is, in one sentence.' };
+  const employee = store.getEmployee(db, run.employeeId);
+  const chief = store.getCompany(db)?.chiefOfStaffId === run.employeeId;
+  const lead = Boolean(employee && store.getTeam(db, employee.teamId)?.leadId === employee.id);
+  if (!chief && !lead) return { ok: false, text: 'A contract version is asked for by a team\'s lead or the chief of staff. Ask your lead with mcp__engine__request_decision.' };
+  const task = store.getTask(db, run.taskId);
+  if (!task || task.kind !== 'work') return { ok: false, text: 'A version is given to a ticket, and this is a conversation. The lead of the team that takes the work asks for it on that ticket.' };
+  const ticket = asked.data.subtask ? store.getTask(db, asked.data.subtask) : task;
+  if (!ticket || (asked.data.subtask && ticket.parentId !== task.id)) return { ok: false, text: `${asked.data.subtask} is not a sub-task of this ticket.` };
+  const repo = ticket.repoId ? store.getRepo(db, ticket.repoId) : undefined;
+  if (!repo?.contract) return { ok: false, text: 'This ticket\'s repository has no contract named, so nothing there needs a version.' };
+  if (ticket.contractVersion) return { ok: true, text: `${ticket.id === task.id ? 'This ticket' : `"${ticket.title}"`} already holds ${ticket.contractVersion}: a ticket holds one version.` };
+  try {
+    let issued!: ContractVersion;
+    apply(db, (tx) => void (issued = issueContractVersion(tx, db, now, { repoId: repo.id, change: asked.data.change, summary: asked.data.summary, taskId: ticket.id, decisions: asked.data.decisions, by: run.employeeId })), now);
+    return { ok: true, text: `Version ${issued.version} is ${ticket.id === task.id ? 'this ticket\'s' : `"${ticket.title}"'s`}. The contract's files (${repo.contract.paths.join(', ')}) may be changed on it, and must state ${issued.version}.` };
   } catch (failure) {
     return { ok: false, text: words(failure) };
   }

@@ -84,6 +84,15 @@ export async function patch(dir: string, base: string, capBytes: number): Promis
   return full.length <= capBytes ? full : `${full.slice(0, capBytes)}…`;
 }
 
+/** The lines a branch added under some paths since it left its base, without their "+" marks. */
+export async function addedLines(dir: string, base: string, paths: string[]): Promise<string> {
+  const diff = await must(dir, ['diff', ...PLAIN, '-U0', `${base}...HEAD`, '--', ...paths]);
+  return lines(diff)
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .map((line) => line.slice(1))
+    .join('\n');
+}
+
 export async function changedFiles(dir: string, base: string): Promise<string[]> {
   // A move is two changes: a file gone from one place and a file new in another. Both are named.
   return lines(await must(dir, ['diff', ...PLAIN, '--no-renames', '--name-only', `${base}...HEAD`])).sort();

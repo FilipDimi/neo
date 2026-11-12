@@ -79,6 +79,8 @@ export const TOOL_INPUT = {
           capUsd: z.number().positive(),
           retryAllowed: z.boolean(),
           decisions: z.array(z.string().min(1)).optional(),
+          /** This part changes the contract: it is given the next version when the proposal is accepted. */
+          contract: z.object({ change: z.enum(['breaking', 'adds', 'wording']), summary: z.string().trim().min(1) }).optional(),
         }),
       )
       .min(1),
