@@ -101,3 +101,98 @@ describe('a done report says what was checked, and only what holds is kept', () 
     expect(work!.gateResults[0]!.at).toMatch(/^\d{4}-/);
   });
 });
+
+describe('a review says what it checked, and an approval waits for the gates it claims', () => {
+  it('refuses an approval that lists nothing, and lands one that cites a file of the work', async () => {
+    const replies: { ok: boolean; text: string }[] = [];
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'work') {
+        s.write('GREETING.md', 'Hello.\n');
+        await s.engine('report_done', { summary: 'Added.' });
+      }
+      if (s.mode === 'review') {
+        replies.push(await s.engine('submit_review', { verdict: 'approve', notes: 'Looks fine.', findings: [] }));
+        replies.push(await s.engine('submit_review', { verdict: 'approve', notes: 'Looks fine.', findings: [], checks: [{ file: 'GREETING.md', line: 1 }] }));
+      }
+    });
+    const task = greet(setup.w);
+    await drain(setup);
+    expect(replies.map((reply) => reply.ok)).toEqual([false, true]);
+    expect(replies[0]!.text).toBe('An approval says what you checked: list at least one gate, command or file.');
+    const review = store.runsOf(setup.w.db, task.id).find((run) => run.mode === 'review')!;
+    expect(review.checks).toEqual([{ kind: 'file', what: 'GREETING.md', line: 1, shown: 'cites GREETING.md:1' }]);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+  });
+
+  it('runs a gate the approval claims and nobody ran: a failure sends the work back, a pass lands it', async () => {
+    const told: string[] = [];
+    let reviews = 0;
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'work') {
+        told.push(s.input.prompt);
+        s.write('GREETING.md', 'Hello.\n');
+        if (s.resumed) s.write('FAREWELL.md', 'Goodbye.\n');
+        await s.engine('report_done', { summary: 'Added.' });
+      }
+      if (s.mode === 'review') {
+        reviews++;
+        await s.engine('submit_review', { verdict: 'approve', notes: 'The farewell gate is green.', findings: [] });
+      }
+    });
+    const task = greet(setup.w);
+    await drain(setup);
+    expect(reviews).toBe(2);
+    expect(told[1]).toMatch(/"farewell" failed/);
+    const [first, second] = store.runsOf(setup.w.db, task.id).filter((run) => run.mode === 'review');
+    expect(first!.claimedGates).toEqual(['farewell']);
+    expect(first!.gateResults.map((result) => [result.name, result.exitCode === 0])).toEqual([['farewell', false]]);
+    expect(second!.gateResults.map((result) => [result.name, result.exitCode === 0])).toEqual([['farewell', true]]);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+  });
+
+  it('takes a gate the reviewer ran itself as proof, and the commit step\'s, without running it again', async () => {
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'work') {
+        s.write('GREETING.md', 'Hello.\n');
+        s.write('FAREWELL.md', 'Goodbye.\n');
+        await s.engine('report_done', { summary: 'Added.' });
+      }
+      if (s.mode === 'review') {
+        await s.engine('run_gate', { name: 'farewell' });
+        await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], checks: [{ gate: 'farewell' }, { gate: 'greeting' }] });
+      }
+    });
+    const task = greet(setup.w);
+    await drain(setup);
+    const review = store.runsOf(setup.w.db, task.id).find((run) => run.mode === 'review')!;
+    expect(review.claimedGates).toEqual(['farewell', 'greeting']);
+    expect(review.gateResults).toEqual([]);
+    expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+  });
+
+  it('lands nothing when the task is stopped while the gate an approval claims is running', async () => {
+    const slow: Gate = { name: 'slow', command: 'sleep 1', timeoutMinutes: 1, lock: null };
+    const fixture = inProcess(
+      staged(async (s) => {
+        if (s.mode === 'work') {
+          s.write('GREETING.md', 'Hello.\n');
+          await s.engine('report_done', { summary: 'Added.' });
+        }
+        if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], checks: [{ gate: 'slow' }] });
+      }),
+    );
+    const repoPath = gitRepo();
+    const w = (open = world(fixture.spawn, { repos: [repo({ path: repoPath, gates: [...GATES, slow] })], teams: [team({ leadId: 'lead', repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: 'team' }] })], employees: people }));
+    const setup = { w, fixture, repoPath };
+    const task = greet(w);
+    for (let i = 0; i < 40 && !store.runsOf(w.db, task.id).some((run) => run.mode === 'review' && run.endedAt); i++) {
+      await w.sup.tick();
+      await fixture.idle();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    w.sup.cancelTask(task.id);
+    await drain(setup);
+    expect(store.getTask(w.db, task.id)).toMatchObject({ state: 'failed', mergedInto: null });
+    expect(fileAt(repoPath, 'team', 'GREETING.md')).toBeNull();
+  });
+});

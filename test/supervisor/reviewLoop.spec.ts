@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as store from '../../src/db/store.ts';
 import type { Gate } from '../../src/shared/types.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
-import { staged, type Scene } from '../fixtures/staged.ts';
+import { looked, staged, type Scene } from '../fixtures/staged.ts';
 import { employee, gitRepo, repo, team, world, type World } from '../helpers.ts';
 
 // Real git and real gates, several times over.
@@ -62,7 +62,7 @@ describe('a review gives findings, and each is checked again', () => {
       if (s.mode === 'review') {
         seen.reviewer.push(s.input.prompt);
         if (seen.reviewer.length === 1) await s.engine('submit_review', { verdict: 'send_back', notes: 'Close, but not yet.', findings: [tooCurt, noNewline] });
-        else await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+        else await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
       }
     });
     const task = greet(setup.w);
@@ -96,10 +96,10 @@ describe('a review gives findings, and each is checked again', () => {
         await s.engine('report_done', { summary: 'Added.' });
       }
       if (s.mode === 'review') {
-        replies.push(await s.engine('submit_review', { verdict: 'approve', notes: 'Fine.', findings: [tooCurt] }));
+        replies.push(await s.engine('submit_review', { verdict: 'approve', notes: 'Fine.', findings: [tooCurt], ...looked(s) }));
         replies.push(await s.engine('submit_review', { verdict: 'send_back', notes: '', findings: [noNewline] }));
         replies.push(await s.engine('submit_review', { verdict: 'send_back', notes: ' ', findings: [] }));
-        replies.push(await s.engine('submit_review', { verdict: 'approve', notes: 'Fine.', findings: [noNewline] }));
+        replies.push(await s.engine('submit_review', { verdict: 'approve', notes: 'Fine.', findings: [noNewline], ...looked(s) }));
       }
     });
     const task = greet(setup.w);
@@ -130,7 +130,7 @@ describe('a send-back the author can act on, however it comes', () => {
 
   it('gives the author the findings when the round limit made a card of the send-back and "Send back" was pressed with no words', async () => {
     const seen = { author: [] as string[], reviewer: [] as string[] };
-    const setup = ledWorld(loop(seen, (s, round) => (round < 3 ? s.engine('submit_review', { verdict: 'send_back', notes: `Round ${round}.`, findings: [tooCurt] }) : s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] }))), { maxReviewRounds: 1 });
+    const setup = ledWorld(loop(seen, (s, round) => (round < 3 ? s.engine('submit_review', { verdict: 'send_back', notes: `Round ${round}.`, findings: [tooCurt] }) : s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) }))), { maxReviewRounds: 1 });
     const task = greet(setup.w);
     await drain(setup);
     const [card] = store.openDecisions(setup.w.db);
@@ -150,7 +150,7 @@ describe('a send-back the author can act on, however it comes', () => {
       loop(seen, (s, round) => {
         if (round === 1) return s.engine('submit_review', { verdict: 'send_back', notes: 'First.', findings: [tooCurt] });
         if (round === 2) return s.engine('submit_review', { verdict: 'send_back', notes: 'Fixed, but now it rambles. Shorten it.', findings: [] });
-        return s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+        return s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
       }),
     );
     greet(setup.w);
@@ -165,7 +165,7 @@ describe('a send-back the author can act on, however it comes', () => {
     const seen = { author: [] as string[], reviewer: [] as string[] };
     const setup = ledWorld(
       loop(seen, async (s, round) => {
-        if (round > 1) return s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+        if (round > 1) return s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
         replies.push(await s.engine('submit_review', { verdict: 'send_back', notes: 'Again.', findings: [tooCurt] }));
         replies.push(await s.engine('submit_review', { verdict: 'send_back', notes: 'Again.', findings: [tooCurt] }));
       }),
@@ -227,7 +227,7 @@ describe('what a lead puts together is reviewed before it lands', () => {
         await s.engine('report_done', { summary: s.resumed ? '1: the farewell now speaks in the same voice.' : 'Both files are in.' });
       }
       if (s.mode === 'review') {
-        if (!s.input.prompt.includes('This is the whole task')) return void (await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] }));
+        if (!s.input.prompt.includes('This is the whole task')) return void (await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) }));
         seen.whole.push(s.input.prompt);
         await onWhole(s, ++rounds);
       }
@@ -236,7 +236,7 @@ describe('what a lead puts together is reviewed before it lands', () => {
 
   it('gives the whole to a teammate who did not put it together, and lands it only once that review approves', async () => {
     const seen = { whole: [] as string[], integrate: [] as string[] };
-    const setup = ledWorld(split((s) => s.engine('submit_review', { verdict: 'approve', notes: 'Fits.', findings: [] }), seen));
+    const setup = ledWorld(split((s) => s.engine('submit_review', { verdict: 'approve', notes: 'Fits.', findings: [], ...looked(s) }), seen));
     const task = whole(setup.w);
     await drain(setup);
     expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId, run.reason])).toEqual([['brief', 'lead', null], ['integrate', 'lead', null], ['review', 'emp1', 'approved']]);
@@ -247,7 +247,7 @@ describe('what a lead puts together is reviewed before it lands', () => {
   it('sends the whole back to the lead with findings, and reviews it again', async () => {
     const seen = { whole: [] as string[], integrate: [] as string[] };
     const twoVoices = { severity: 'blocking', file: 'FAREWELL.md', line: 1, title: 'The two files do not read as one voice', why: 'The done-condition asks for it.', fix: 'Rewrite the farewell to match the greeting.' } as const;
-    const setup = ledWorld(split((s, round) => (round === 1 ? s.engine('submit_review', { verdict: 'send_back', notes: 'The parts are fine; the whole is not.', findings: [twoVoices] }) : s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] })), seen));
+    const setup = ledWorld(split((s, round) => (round === 1 ? s.engine('submit_review', { verdict: 'send_back', notes: 'The parts are fine; the whole is not.', findings: [twoVoices] }) : s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) })), seen));
     const task = whole(setup.w);
     await drain(setup);
     expect(store.runsOf(setup.w.db, task.id).map((run) => [run.mode, run.employeeId, run.reason])).toEqual([
@@ -264,7 +264,7 @@ describe('what a lead puts together is reviewed before it lands', () => {
 
   it('says on the merge card that the whole was reviewed, and by whom', async () => {
     const seen = { whole: [] as string[], integrate: [] as string[] };
-    const setup = ledWorld(split((s) => s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] }), seen), { mergeTarget: null });
+    const setup = ledWorld(split((s) => s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) }), seen), { mergeTarget: null });
     whole(setup.w);
     await drain(setup);
     const [card] = store.openDecisions(setup.w.db);

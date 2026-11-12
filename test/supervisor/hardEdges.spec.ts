@@ -8,7 +8,7 @@ import type { Gate } from '../../src/shared/types.ts';
 import { diffOf } from '../../src/api/diff.ts';
 import { adminTool } from '../../src/supervisor/admin.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
-import { staged, type Scene } from '../fixtures/staged.ts';
+import { looked, staged, type Scene } from '../fixtures/staged.ts';
 import { employee, fileAt, gitIn, gitRepo, repo, T0, team, world, type World } from '../helpers.ts';
 
 // Real git and real gates.
@@ -50,7 +50,7 @@ const plain = async (s: Scene): Promise<void> => {
     s.write('GREETING.md', 'Hello, and welcome.\n');
     await s.engine('report_done', { summary: 'Added.' });
   }
-  if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+  if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
 };
 const greet = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Add a greeting', brief: 'One friendly line in GREETING.md.', doneCondition: 'GREETING.md exists.', gates: ['greeting'], capUsd: 2, ...over });
 
@@ -78,7 +78,7 @@ describe("a task's diff", () => {
         await s.engine('report_done', { summary: 'Added.' });
       }
       if (s.mode === 'integrate' || (s.mode === 'work' && s.who === 'Priya')) await s.engine('report_done', { summary: 'In.' });
-      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
     });
     const whole = setup.w.sup.createTask({ teamId: 'team1', title: 'Greet the reader', brief: 'One file.', doneCondition: 'It exists.', gates: ['greeting'], capUsd: 3 });
     await drain(setup);
@@ -125,7 +125,7 @@ describe('a gate a task names', () => {
       }
       if (s.mode === 'review') {
         if (++reviews === 1) await s.engine('submit_review', { verdict: 'send_back', notes: 'Too curt.', findings: [{ severity: 'blocking', file: 'GREETING.md', line: 1, title: 'One curt word', why: 'First thing read.', fix: 'A friendly sentence.' }] });
-        else await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+        else await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
       }
     }, [litter]);
     const task = greet(setup.w);

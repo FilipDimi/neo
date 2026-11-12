@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { RuntimeFactory } from '../../src/runtime/sdk.ts';
-import { staged, type Scene } from './staged.ts';
+import { looked, staged, type Scene } from './staged.ts';
 
 const pace = Number(process.env.VS_DEMO_DELAY_MS ?? 1500);
 const byTheClock = (factor = 1) => new Promise<void>((resolve) => setTimeout(resolve, pace * factor));
@@ -178,7 +178,7 @@ export function demoPlay(wait: (factor?: number) => Promise<void> = byTheClock):
           ],
         }));
       }
-      return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+      return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
     }
     case 'integrate': {
       await s.engine('set_status', { text: `putting ${title.slice(0, 36)} together` });

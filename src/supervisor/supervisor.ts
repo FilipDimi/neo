@@ -136,6 +136,7 @@ export class Supervisor {
       ...(options.gateHeartbeatMs !== undefined ? { gateHeartbeatMs: options.gateHeartbeatMs } : {}),
       engineWork: (taskId, work) => this.engineWork(taskId, work),
       planRunEnd: (runId, outcome, reason, record) => void this.planned.set(runId, { outcome, reason, ...(record && { record }) }),
+      verify: (run, checks, prose) => this.verify(run, checks, prose),
     });
   }
 

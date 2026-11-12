@@ -13,6 +13,11 @@ import { employee, team, world, type World } from '../helpers.ts';
 
 const SCRIPTED_WORKER = new URL('../fixtures/scriptedWorker.ts', import.meta.url).pathname;
 const started: ToSupervisor = { t: 'event', event: { kind: 'session_started', sessionId: 'sess-1', model: 'm', loginSource: 'none', tools: [] } };
+/** What a reviewer does before it approves: it runs a command, and the command succeeds. */
+const looked: ToSupervisor[] = [
+  { t: 'event', event: { kind: 'tool_call', id: 'look-1', tool: 'Bash', input: { command: 'git diff' } } },
+  { t: 'event', event: { kind: 'tool_result', id: 'look-1', ok: true } },
+];
 const newTask = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', title: 'Write the note', brief: 'Write it.', assigneeId: 'emp1', ...over });
 const alive = (pid: number) => {
   try {
@@ -329,8 +334,11 @@ describe('Supervisor', () => {
         worker.say(said('propose_subtasks', { subtasks: [{ title: 'Part one', assigneeId: 'emp2', brief: 'Do it.', ownership: [], doneCondition: 'Done.', gates: [], priority: 2, capUsd: 0.5, retryAllowed: true }] }));
         return worker.say(exit('failed', 'error_max_turns', 'sess-brief'));
       }
-      if (mode === 'review') worker.say(said('submit_review', { verdict: 'approve', notes: '' }));
-      else worker.say(said('report_done', { summary: `${mode} done` }));
+      if (mode === 'review') {
+        // An approval says what was checked: here, a command the reviewer ran and that succeeded.
+        for (const event of looked) worker.say(event);
+        worker.say(said('submit_review', { verdict: 'approve', notes: '', checks: [{ command: 'git diff' }] }));
+      } else worker.say(said('report_done', { summary: `${mode} done` }));
       worker.say(exit('done', null, `sess-${mode}`));
     });
     const w = track(world(fake.spawn, { teams: [team({ leadId: 'lead' })], employees: [employee({ id: 'lead', name: 'Lead' }), employee(), employee({ id: 'emp2', name: 'Grace' })] }));
@@ -484,7 +492,8 @@ describe('Supervisor', () => {
     const fake = scripted();
     const w = track(world(fake.spawn, { employees: [employee(), employee({ id: 'emp2', name: 'Grace' })] }));
     const { task, reviewer } = await underReview(fake, w);
-    reviewer.say({ t: 'tool', askId: 'r1', name: 'submit_review', input: { verdict: 'approve', notes: '' } });
+    for (const event of looked) reviewer.say(event);
+    reviewer.say({ t: 'tool', askId: 'r1', name: 'submit_review', input: { verdict: 'approve', notes: '', checks: [{ command: 'git diff' }] } });
     await new Promise((resolve) => setImmediate(resolve));
     await w.sup.stop();
     // The run was over in all but name. It is written down as it would have ended, not left for the next start to call lost.
@@ -497,7 +506,8 @@ describe('Supervisor', () => {
       const fake = scripted();
       const w = track(world(fake.spawn, { employees: [employee(), employee({ id: 'emp2', name: 'Grace' })] }));
       const { task, reviewer } = await underReview(fake, w);
-      reviewer.say({ t: 'tool', askId: 'r1', name: 'submit_review', input: { verdict: 'approve', notes: '' } });
+      for (const event of looked) reviewer.say(event);
+      reviewer.say({ t: 'tool', askId: 'r1', name: 'submit_review', input: { verdict: 'approve', notes: '', checks: [{ command: 'git diff' }] } });
       await new Promise((resolve) => setImmediate(resolve));
       if (cut === 'crash') reviewer.die();
       else (w.sup as unknown as { pauseForUsageLimit(until: string | null): void }).pauseForUsageLimit(null);

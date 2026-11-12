@@ -3,7 +3,7 @@ import { apply } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import type { Gate } from '../../src/shared/types.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
-import { staged, type Scene } from '../fixtures/staged.ts';
+import { looked, staged, type Scene } from '../fixtures/staged.ts';
 import { employee, gitRepo, repo, team, world, type World } from '../helpers.ts';
 
 // Real git and real gates, several times over.
@@ -66,7 +66,7 @@ describe('cards go to the chief of staff first', () => {
     let reviews = 0;
     const setup = company(
       work(
-        (s) => (++reviews === 1 ? escalate(s) : s.engine('submit_review', { verdict: 'approve', notes: '' })),
+        (s) => (++reviews === 1 ? escalate(s) : s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) })),
         async (s) => {
           seen.push({ prompt: s.input.prompt, tools: s.input.engineTools?.names ?? [] });
           expect(store.forUser(setup.w.db)).toEqual([]); // while Neo decides, nothing waits for the user
@@ -101,7 +101,7 @@ describe('cards go to the chief of staff first', () => {
   it('lets Neo merge what waits for a merge', async () => {
     const setup = company(
       work(
-        (s) => s.engine('submit_review', { verdict: 'approve', notes: '' }),
+        (s) => s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }),
         async (s) => {
           expect(s.input.prompt).toContain('- merge: Merge');
           expect(s.input.prompt).toMatch(/Approved by Priya, gates green \(greeting\)/);

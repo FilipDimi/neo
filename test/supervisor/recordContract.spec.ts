@@ -6,7 +6,7 @@ import * as store from '../../src/db/store.ts';
 import type { ContractVersion } from '../../src/shared/types.ts';
 import { currentContract, issueContractVersion, nextVersion, onContractVersion, states } from '../../src/supervisor/record.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
-import { staged, type Scene } from '../fixtures/staged.ts';
+import { looked, staged, type Scene } from '../fixtures/staged.ts';
 import { company as companyRow, employee, fileAt, gitRepo, repo, run, T0, task, team, tempDb, world, type World } from '../helpers.ts';
 
 // Real git.
@@ -130,7 +130,7 @@ async function drain({ w, fixture }: Setup, max = 60): Promise<void> {
     quiet = store.liveRuns(w.db).length === 0 && store.openRequests(w.db).length === 0 ? quiet + 1 : 0;
   }
 }
-const approve = (s: Scene) => s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+const approve = (s: Scene) => s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
 const ticket = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Add the stories endpoint', brief: 'Add it.', doneCondition: 'It is described.', capUsd: 2, ...over });
 
 describe('no version, no change to the contract', () => {

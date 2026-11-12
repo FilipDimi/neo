@@ -23,6 +23,17 @@ function modeOf(turn: Turn): Scene['mode'] {
   return /Every sub-task of this task is finished|conflict/i.test(turn.input.prompt) ? 'integrate' : 'work';
 }
 
+/**
+ * For a review: a check that holds, so an approval says what it looked at. It cites the first file of the work in the
+ * session's folder (git's own files aside).
+ */
+export function looked(scene: Pick<Scene, 'cwd'>): { checks: { file: string }[] } {
+  const files = (fs.readdirSync(scene.cwd, { recursive: true }) as string[])
+    .filter((name) => !name.split(path.sep).includes('.git') && fs.statSync(path.join(scene.cwd, name)).isFile())
+    .sort();
+  return { checks: files.length > 0 ? [{ file: files[0]! }] : [] };
+}
+
 /** `play` runs for the first turn of every session; later turns (reminders, messages) do nothing unless `everyTurn`. */
 export function staged(play: (scene: Scene) => Promise<void> | void, options: { everyTurn?: boolean; costPerTurn?: number } = {}): FakeRuntime {
   return fakeRuntime(async (turn) => {

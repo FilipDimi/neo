@@ -9,7 +9,7 @@ import { judgeToolCall } from '../../src/supervisor/blastRadius.ts';
 import { recordDecision, type NewEntry } from '../../src/supervisor/record.ts';
 import { fileOf, render, writeRecordFiles } from '../../src/supervisor/recordFiles.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
-import { staged, type Scene } from '../fixtures/staged.ts';
+import { looked, staged, type Scene } from '../fixtures/staged.ts';
 import { company as companyRow, employee, fileAt, gitIn, gitRepo, repo, T0, task, team, tempDb, tempDir, world, type World } from '../helpers.ts';
 
 // Real git.
@@ -151,7 +151,7 @@ describe('decision files reach the repository when work lands', () => {
         s.write(`NOTE-${++n}.md`, 'A note.\n');
         await s.engine('report_done', { summary: 'Written.' });
       }
-      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
     });
     const first = add(setup.w.db, 'Notes are in markdown.');
     note(setup.w, 'First note');
@@ -185,7 +185,7 @@ describe('decision files reach the repository when work lands', () => {
         } else fs.rmSync(path.join(s.input.cwd, 'docs/decisions/my-own-notes.md'));
         await s.engine('report_done', { summary: 'Written.' });
       }
-      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
     });
     const entry = add(setup.w.db, 'Notes are in markdown.');
     note(setup.w, 'First note');
@@ -211,7 +211,7 @@ describe('decision files reach the repository when work lands', () => {
         s.write('NOTE.md', 'A note.\n');
         await s.engine('report_done', { summary: 'Written.' });
       }
-      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
     });
     add(setup.w.db, 'Notes are in markdown.');
     const made = note(setup.w, 'First note');

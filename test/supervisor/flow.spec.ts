@@ -6,7 +6,7 @@ import { readEvents } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import type { Gate } from '../../src/shared/types.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
-import { staged, type Scene } from '../fixtures/staged.ts';
+import { looked, staged, type Scene } from '../fixtures/staged.ts';
 import { employee, fileAt, gitIn, gitRepo, refOf, repo, team, world, type World } from '../helpers.ts';
 
 // Every test here runs real git and real gates, several times over. On a busy machine five seconds is not always enough.
@@ -66,7 +66,7 @@ const straight = async (s: Scene) => {
     s.write(s.who === 'Ada' ? 'GREETING.md' : 'FAREWELL.md', `from ${s.who}\n`);
     await s.engine('report_done', { summary: `${s.who} wrote the file.` });
   }
-  if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '' });
+  if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) });
   if (s.mode === 'integrate') await s.engine('report_done', { summary: 'Both files are in.' });
 };
 const parentTask = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', title: 'Add a greeting and a farewell', brief: 'Two files, one each.', doneCondition: 'Both files exist.', gates: ['greeting', 'farewell'], capUsd: 2, ...over });
@@ -85,7 +85,7 @@ describe('a team with no repository', () => {
           s.write(`half-${s.who}.md`, `from ${s.who}\n`);
           await s.engine('report_done', { summary: `${s.who} did a half.` });
         }
-        if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '' });
+        if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) });
         if (s.mode === 'integrate') {
           integrateTurn = s.input.prompt;
           await s.engine('report_done', { summary: 'Put together.' });
@@ -146,7 +146,7 @@ describe('briefing', () => {
   it('a lead that does a task itself from a brief run has it reviewed by a teammate, like any other work', async () => {
     const setup = ledWorld(
       async (s) => {
-        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
         s.write('NOTE.md', 'small enough to do myself\n');
         await s.engine('report_done', { summary: 'Did it myself.' });
       },
@@ -209,7 +209,7 @@ describe('work and review', () => {
         s.write('GREETING.md', s.resumed ? 'Hello, properly.\n' : 'hi\n');
         await s.engine('report_done', { summary: s.resumed ? 'Fixed the greeting.' : 'Added the greeting.' });
       }
-      if (s.mode === 'review') await s.engine('submit_review', ++reviews === 1 ? { verdict: 'send_back', notes: 'Write a full sentence.' } : { verdict: 'approve', notes: '' });
+      if (s.mode === 'review') await s.engine('submit_review', ++reviews === 1 ? { verdict: 'send_back', notes: 'Write a full sentence.' } : { verdict: 'approve', notes: '', ...looked(s) });
     });
     const task = parentTask(setup.w, { assigneeId: 'emp1', gates: ['greeting'] });
     await drain(setup);
@@ -265,7 +265,7 @@ describe('work and review', () => {
         if (s.resumed) s.write('GREETING.md', 'hello\n');
         await s.engine('report_done', { summary: s.resumed ? 'Now it exists.' : 'All done, I promise.' });
       }
-      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '' });
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) });
     });
     const task = parentTask(setup.w, { assigneeId: 'emp1', gates: ['greeting'] });
     await drain(setup);
@@ -327,7 +327,7 @@ describe('work and review', () => {
     const setup = ledWorld(async (s) => {
       if (s.mode === 'brief') return void (await s.engine('propose_subtasks', halves));
       // Asked by Ada, the lead answers; everything else it reviews, it approves.
-      if (s.mode === 'review') return void (await s.engine('submit_review', s.input.prompt.includes('has stopped with a question') ? { verdict: 'send_back', notes: 'Report it done and say so.' } : { verdict: 'approve', notes: '' }));
+      if (s.mode === 'review') return void (await s.engine('submit_review', s.input.prompt.includes('has stopped with a question') ? { verdict: 'send_back', notes: 'Report it done and say so.' } : { verdict: 'approve', notes: '', ...looked(s) }));
       if (s.mode === 'work' && s.resumed) {
         const turn = (resumes.get(s.who) ?? 0) + 1;
         resumes.set(s.who, turn);
@@ -394,7 +394,7 @@ describe('work and review', () => {
   it("has a teammate review a lead's own work before it can reach a merge card", async () => {
     const setup = ledWorld(
       async (s) => {
-        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
         s.write('GREETING.md', 'hello\n');
         await s.engine('report_done', { summary: 'Wrote it myself.' });
       },
@@ -451,7 +451,7 @@ describe('work and review', () => {
       async (s) => {
         if (s.mode === 'review') {
           seen.push((await s.engine('request_tools', { capabilities: ['run_commands'], reason: 'to run the tests' })).text);
-          return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+          return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
         }
         s.write('GREETING.md', 'hello\n');
         await s.engine('report_done', { summary: 'Wrote it myself.' });
@@ -469,7 +469,7 @@ describe('work and review', () => {
     const turns: string[] = [];
     const setup = ledWorld(
       async (s) => {
-        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
         turns.push(s.input.prompt);
         if (!s.resumed) {
           // What `cargo new tool` leaves: a folder with a repository of its own.
@@ -494,7 +494,7 @@ describe('work and review', () => {
   it('never offers to accept work that could not be committed: accepting it would land the branch without it', async () => {
     const setup = ledWorld(
       async (s) => {
-        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
         // The repository inside the folder keeps coming back, whatever the employee is told.
         if (!fs.existsSync(path.join(s.cwd, 'tool'))) {
           fs.mkdirSync(path.join(s.cwd, 'tool'));
@@ -523,7 +523,7 @@ describe('work and review', () => {
     let reviews = 0;
     const setup = ledWorld(
       async (s) => {
-        if (s.mode === 'review') return void (await s.engine('submit_review', ++reviews === 1 ? { verdict: 'send_back', notes: 'Say who it is for.' } : { verdict: 'approve', notes: '' }));
+        if (s.mode === 'review') return void (await s.engine('submit_review', ++reviews === 1 ? { verdict: 'send_back', notes: 'Say who it is for.' } : { verdict: 'approve', notes: '', ...looked(s) }));
         s.write('GREETING.md', s.resumed ? 'hello, reader\n' : 'hello\n');
         await s.engine('report_done', { summary: s.resumed ? 'Fixed.' : 'Wrote it myself.' });
       },
@@ -584,7 +584,7 @@ describe('a question on a led team', () => {
         seen.lead.push(s.input.prompt);
         return void (await lead(s));
       }
-      if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+      if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
       if (s.mode !== 'work') return;
       seen.ada.push(s.input.prompt);
       if (!s.resumed) return void (await s.engine('request_decision', QUESTION));
@@ -641,7 +641,7 @@ describe('a question on a led team', () => {
     const seen = { lead: [] as string[], ada: [] as string[] };
     const setup = ledWorld(
       asking(async (s) => {
-        said.push((await s.engine('submit_review', { verdict: 'approve', notes: '' })).text);
+        said.push((await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) })).text);
         said.push((await s.engine('submit_review', { verdict: 'send_back', notes: '  ' })).text);
         await s.engine('submit_review', { verdict: 'send_back', notes: 'For the reader.' });
       }, seen),
@@ -800,7 +800,7 @@ describe('integration and landing', () => {
   it('never asks to merge a task that changed nothing: it is done, and what was reported is its result', async () => {
     const setup = ledWorld(
       async (s) => {
-        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '' }));
+        if (s.mode === 'review') return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
         await s.engine('report_done', { summary: 'I looked: the greeting is already right, so nothing needed changing.' });
       },
       { mergeTarget: null },
@@ -872,7 +872,7 @@ describe('integration and landing', () => {
         s.write('README.md', `rewritten by ${s.who}\n`); // both stray into the same file, by command
         await s.engine('report_done', { summary: 'Rewrote the readme.' });
       }
-      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '' });
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) });
       if (s.mode === 'integrate') {
         integrateTurn = s.input.prompt;
         if (s.read('README.md').includes('<<<<<<<')) s.write('README.md', 'rewritten by Ada and Grace\n');
@@ -922,7 +922,7 @@ describe('integration and landing', () => {
       }
       if (s.mode === 'work' && s.who === 'Grace') await s.engine('request_decision', { question: 'Is a farewell really wanted?', options: [] });
       if (s.mode === 'review' && s.input.prompt.includes('has stopped with a question')) return void (await s.engine('submit_review', { verdict: 'escalate', notes: 'Only the user knows whether a farewell is wanted.' }));
-      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '' });
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) });
       if (s.mode === 'integrate') await s.engine('report_done', { summary: 'Integrated the greeting only.' });
     });
     const parent = parentTask(setup.w, { gates: ['greeting'] });

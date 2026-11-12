@@ -11,7 +11,7 @@ import * as store from '../../src/db/store.ts';
 import { caller, runTool, TOOLS, type Ctx } from '../../src/mcp/tools.ts';
 import { recordDecision } from '../../src/supervisor/record.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
-import { staged, type Scene } from '../fixtures/staged.ts';
+import { looked, staged, type Scene } from '../fixtures/staged.ts';
 import { employee, team, tempDir, world, type World } from '../helpers.ts';
 
 const people = [
@@ -151,8 +151,11 @@ describe("the company's tools for a Claude session", () => {
 
   it('says who finished a task its lead took, and keeps a card someone is deciding out of "waiting on you"', async () => {
     const c = await company(async (s) => {
-      if (s.mode === 'brief') return void (await s.engine('report_done', { summary: 'Did it myself.' }));
-      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+      if (s.mode === 'brief') {
+        s.write('TAB.md', 'Renamed.\n');
+        return void (await s.engine('report_done', { summary: 'Did it myself.' }));
+      }
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
     });
     const made = c.w.sup.createTask({ teamId: 'ios', title: 'Rename the tab', brief: 'Rename it.' });
     for (let i = 0; i < 4; i++) await c.use('now');

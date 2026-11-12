@@ -19,8 +19,9 @@ import { outside, owns } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
 import type { Decision, Employee, Finding, Gate, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
 import { countsCost } from '../shared/view.ts';
-import { TOOL_INPUT } from '../worker/protocol.ts';
+import { TOOL_INPUT, type Check } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
+import type { Claims } from './proof.ts';
 import { builtOnFor, contractProblem, issueContractVersion } from './record.ts';
 import { dirOf, entriesFor, padded, underRecord, writeRecordFiles } from './recordFiles.ts';
 import * as decisions from './decisions.ts';
@@ -49,6 +50,8 @@ export type FlowHost = {
   /** How a live run will be recorded when its worker exits. */
   /** `record` is kept with the run when it ends: a review's findings. */
   planRunEnd(runId: string, outcome: RunOutcome, reason: string, record?: Partial<Run>): void;
+  /** A report's or a review's checks, held to what the engine recorded of the run and the work's folder. */
+  verify(run: Run, checks: Check[], prose: string): Claims | { refused: string };
 };
 
 /** A review's verdict as it is written on its run. */
@@ -270,7 +273,7 @@ export class Flow {
   }
 
   onReview(run: Run, input: unknown): ToolReply {
-    const { verdict, notes, findings = [] } = TOOL_INPUT.submit_review.parse(input);
+    const { verdict, notes, findings = [], checks = [] } = TOOL_INPUT.submit_review.parse(input);
     const task = store.getTask(this.db, run.taskId)!;
     const asker = this.asked(task.id);
     if (asker) return this.onAnswer(run, task, asker, verdict, notes);
@@ -282,10 +285,14 @@ export class Flow {
     if (verdict === 'approve' && blocking.length > 0) return { ok: false, text: `You approved, and listed ${blocking.length === 1 ? 'a finding' : `${blocking.length} findings`} as blocking. If it must be fixed before this lands, send the work back. If it need not be, mark it minor.` };
     if (verdict === 'send_back' && blocking.length === 0 && findings.length > 0) return { ok: false, text: 'You sent this back with nothing blocking in it. If one of your findings must be fixed before this lands, mark it blocking. If none must, approve.' };
     if (verdict === 'send_back' && findings.length === 0 && !notes.trim()) return { ok: false, text: 'You sent this back without saying what to fix. Give each thing as a finding: its file, what is wrong, why it matters and what would fix it.' };
+    // What the reviewer says it checked counts only if it holds; an approval has to say something it checked.
+    const claims = this.host.verify(run, checks, notes);
+    if ('refused' in claims) return { ok: false, text: claims.refused };
+    if (verdict === 'approve' && claims.checks.length === 0 && claims.gates.length === 0) return { ok: false, text: 'An approval says what you checked: list at least one gate, command or file.' };
     // The verdict stays with the run: what a merge card says about the work is read from it, never from the fact that a review happened.
     this.verdicts.set(run.id, VERDICT[verdict]);
-    this.host.planRunEnd(run.id, 'done', VERDICT[verdict], { findings });
-    if (verdict === 'approve') this.host.engineWork(task.id, () => this.finish(task.id));
+    this.host.planRunEnd(run.id, 'done', VERDICT[verdict], { findings, checks: claims.checks, claimedGates: claims.gates });
+    if (verdict === 'approve') this.host.engineWork(task.id, () => this.approved(run, task, claims.gates));
     else if (verdict === 'send_back')
       this.sendBack(
         task,
@@ -631,6 +638,31 @@ export class Flow {
   // ---------- finishing ----------
 
   /** A top-level task with a repository lands before it is done. Everything else is simply done. */
+  /**
+   * An approval takes effect once every gate it claims holds on the work as it is: the reviewer ran it itself, or the
+   * engine did at the commit step. A gate nobody ran the engine runs now; one that fails sends the work back instead.
+   */
+  private async approved(review: Run, task: Task, claimed: string[]): Promise<void> {
+    const site = this.site(task);
+    const author = store.runsOf(this.db, task.id).findLast(authored);
+    const passing = (results: GateResult[] | undefined, name: string) => results?.findLast((result) => result.name === name)?.exitCode === 0;
+    const unproven = site ? claimed.filter((name) => !passing(store.getRun(this.db, review.id)?.askedGates, name) && !passing(author?.gateResults, name)) : [];
+    if (site && unproven.length > 0) {
+      const gates = this.gatesOf({ ...task, gates: [] }, site.repo, unproven);
+      const results = await this.host.gates.run(gates, site.folder, {
+        onFinish: (result) => this.change((tx) => tx.emit({ kind: 'gate_finished', runId: review.id, taskId: task.id, result })),
+        limits: this.host.gateLimits(site.folder, site.team),
+      });
+      await discardChanges(site.folder);
+      const current = store.getTask(this.db, task.id);
+      // Stopped while the gate ran: nothing more happens to it.
+      if (!current || current.state === 'done' || current.state === 'failed') return;
+      const failed = results.find((result) => result.exitCode !== 0);
+      if (failed) return this.sendBackForGate(current, failed);
+    }
+    return this.finish(task.id);
+  }
+
   async finish(taskId: string): Promise<void> {
     const task = store.getTask(this.db, taskId);
     if (!task || task.state === 'done' || task.state === 'failed') return;
