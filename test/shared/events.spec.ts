@@ -24,6 +24,8 @@ const samples: EngineEvent[] = [
   { kind: 'grant_changed', grant: { id: 'g1', taskId: 'task1', tool: 'Write', inputHash: 'abc', used: false } },
   { kind: 'health_changed', report: { at: T0.toISOString(), diskFreeGb: 80, login: 'ok', repos: [], services: [], failures: [] } },
   { kind: 'plan_usage', status: 'allowed', window: 'seven_day', utilization: 0.38, resetsAt: 1794355200 },
+  { kind: 'record_changed', entry: { id: 'D-1', n: 1, at: T0.toISOString(), statement: 'The API speaks JSON.', why: '', by: { kind: 'lead', employeeId: 'emp1' }, taskId: 'task1', repoId: null, replaces: null, replacedBy: null } },
+  { kind: 'contract_version_issued', issued: { id: 'cv1', repoId: 'repo1', version: '0.2.0', change: 'adds', summary: 'A new endpoint.', taskId: 'task1', decisions: ['D-1'], by: 'emp1', at: T0.toISOString() } },
 ];
 
 describe('the event catalogue', () => {

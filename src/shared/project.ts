@@ -7,7 +7,7 @@
 import type { EventRow } from './events.ts';
 import type { Run } from './types.ts';
 
-export type TableName = 'company' | 'repos' | 'teams' | 'employees' | 'tasks' | 'runs' | 'run_requests' | 'decisions' | 'messages' | 'grants' | 'meta';
+export type TableName = 'company' | 'repos' | 'teams' | 'employees' | 'tasks' | 'runs' | 'run_requests' | 'decisions' | 'messages' | 'grants' | 'meta' | 'record' | 'contract_versions';
 /** `row: null` removes the row. */
 export type Change = { table: TableName; id: string; row: object | null };
 export type Getter = (table: TableName, id: string) => unknown;
@@ -81,6 +81,10 @@ export function changesOf(row: EventRow, get: Getter): Change[] {
       return [put('messages', event.message)];
     case 'grant_changed':
       return [put('grants', event.grant)];
+    case 'record_changed':
+      return [put('record', event.entry)];
+    case 'contract_version_issued':
+      return [put('contract_versions', event.issued)];
     case 'health_changed':
       return [{ table: 'meta', id: 'health', row: { id: 'health', ...event.report } }];
     case 'plan_usage': {

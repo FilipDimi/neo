@@ -56,3 +56,12 @@ CREATE INDEX IF NOT EXISTS tasks_parent ON tasks (parent_id);
 CREATE INDEX IF NOT EXISTS runs_task ON runs (task_id);
 CREATE INDEX IF NOT EXISTS runs_outcome ON runs (outcome);
 CREATE INDEX IF NOT EXISTS decisions_open ON decisions (answered_at);
+-- The company's record: numbered decisions, and the versions handed out for each repository's contract.
+CREATE TABLE IF NOT EXISTS record (
+  id TEXT PRIMARY KEY, data TEXT NOT NULL,
+  n INTEGER GENERATED ALWAYS AS (json_extract(data, '$.n')) VIRTUAL
+);
+CREATE TABLE IF NOT EXISTS contract_versions (
+  id TEXT PRIMARY KEY, data TEXT NOT NULL,
+  repo_id TEXT GENERATED ALWAYS AS (json_extract(data, '$.repoId')) VIRTUAL
+);

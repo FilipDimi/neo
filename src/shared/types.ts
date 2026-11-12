@@ -27,7 +27,15 @@ export type ModelTier = z.infer<typeof ModelTier>;
 export const Gate = z.object({ name: z.string().min(1), command: z.string().min(1), timeoutMinutes: z.number().positive(), lock: z.string().nullable() });
 export type Gate = z.infer<typeof Gate>;
 
-export const Repo = z.object({ id, path: z.string().min(1), gates: z.array(Gate) });
+export const Repo = z.object({
+  id,
+  path: z.string().min(1),
+  gates: z.array(Gate),
+  /** Where the engine writes one file per decision when work lands, from the top of the repository. Absent or null: it writes none. */
+  decisionsDir: z.string().min(1).nullable().optional(),
+  /** The folders or files that are the contract between its teams. A change to them needs a version the engine handed out. Absent or null: no contract. */
+  contract: z.object({ paths: z.array(z.string().min(1)).min(1) }).nullable().optional(),
+});
 export type Repo = z.infer<typeof Repo>;
 
 export const Service = z.object({ name: z.string(), kind: z.enum(['http', 'tcp', 'cmd']), target: z.string() });
@@ -139,11 +147,57 @@ export const Task = z.object({
   /** The commit its branch began at, and, once landed, what it landed on and as what: its diff is read between these. */
   startedFrom: z.string().optional(),
   landed: z.object({ over: z.string(), tip: z.string() }).optional(),
+  /** The decisions its maker named for it (its parent's with them), and the contract's version when it was made. */
+  builtOn: z.object({ decisions: z.array(z.string()), contract: z.string().nullable() }).optional(),
+  /** The contract version the engine handed this ticket: it may change the contract, and must state this version there. */
+  contractVersion: z.string().optional(),
   createdAt: iso,
   updatedAt: iso,
   blockedAt: iso.nullable(),
 });
 export type Task = z.infer<typeof Task>;
+
+/**
+ * One decision in the company's record: a default the chief of staff took, a clarification the user gave, a
+ * choice a lead made. Numbered by the engine, never deleted: a reversal is a new entry that points back.
+ * (A `Decision` is something else: a card waiting for an answer.)
+ */
+export const RecordEntry = z.object({
+  /** "D-232". */
+  id: z.string().min(1),
+  n: z.number().int().positive(),
+  at: iso,
+  statement: z.string().min(1),
+  why: z.string(),
+  /** Who decided: the user; the chief of staff on the user's behalf; a team's lead. */
+  by: z.object({ kind: z.enum(['user', 'chief', 'lead']), employeeId: id.nullable() }),
+  taskId: id.nullable(),
+  /** The repository it is about. Null: the whole company. */
+  repoId: id.nullable(),
+  replaces: z.string().nullable(),
+  replacedBy: z.string().nullable(),
+  /** For one filed from a card: the question and the answer, whole. */
+  detail: z.string().optional(),
+  /** Imported from a log kept by hand: it lives in that file and is never written as a file of its own. */
+  archived: z.boolean().optional(),
+  /** Where an import found it, when it had to be given a new number. */
+  importedFrom: z.string().optional(),
+});
+export type RecordEntry = z.infer<typeof RecordEntry>;
+
+/** One version of a repository's contract, handed out by the engine. `start` says where counting begins. */
+export const ContractVersion = z.object({
+  id,
+  repoId: id,
+  version: z.string().regex(/^\d+\.\d+\.\d+$/),
+  change: z.enum(['breaking', 'adds', 'wording', 'start']),
+  summary: z.string(),
+  taskId: id.nullable(),
+  decisions: z.array(z.string()),
+  by: z.string().nullable(),
+  at: iso,
+});
+export type ContractVersion = z.infer<typeof ContractVersion>;
 
 export const GateResult = z.object({ name: z.string(), command: z.string(), exitCode: z.number(), output: z.string(), durationMs: z.number() });
 export type GateResult = z.infer<typeof GateResult>;

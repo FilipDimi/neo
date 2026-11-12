@@ -3,7 +3,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { leaseEnd, type TableName } from '../shared/project.ts';
-import type { Company, Decision, Employee, Grant, HealthReport, Message, PlanUsage, Repo, Run, RunRequest, Task, TaskState, Team } from '../shared/types.ts';
+import type { Company, ContractVersion, Decision, Employee, Grant, HealthReport, Message, PlanUsage, RecordEntry, Repo, Run, RunRequest, Task, TaskState, Team } from '../shared/types.ts';
 import { getRow } from './apply.ts';
 import type { Db } from './open.ts';
 
@@ -32,6 +32,12 @@ export const allEmployees = (db: Db) => rows<Employee>(db, 'employees');
 export const allRepos = (db: Db) => rows<Repo>(db, 'repos');
 export const allRuns = (db: Db) => rows<Run>(db, 'runs', 'ORDER BY rowid');
 export const allDecisions = (db: Db) => rows<Decision>(db, 'decisions').sort((a, b) => a.askedAt.localeCompare(b.askedAt));
+
+/** The record's decisions, by number. */
+export const allRecord = (db: Db) => rows<RecordEntry>(db, 'record', 'ORDER BY n');
+export const getEntry = (db: Db, id: string) => getRow<RecordEntry>(db, 'record', id);
+/** The versions handed out for one repository's contract, in the order they were. */
+export const contractVersions = (db: Db, repoId: string) => rows<ContractVersion>(db, 'contract_versions', 'WHERE repo_id = ? ORDER BY rowid', repoId);
 
 /** Tasks by priority, then age. */
 export function listTasks(db: Db, where: { state?: TaskState; parentId?: string; teamId?: string } = {}): Task[] {

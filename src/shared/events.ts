@@ -5,7 +5,7 @@
  */
 import { z } from 'zod';
 import type { RuntimeEvent } from './runtime.ts';
-import { Company, Decision, Employee, GateResult, Grant, HealthReport, Message, PlanUsage, Repo, Run, RunRequest, Task, Team } from './types.ts';
+import { Company, ContractVersion, Decision, Employee, GateResult, Grant, HealthReport, Message, PlanUsage, RecordEntry, Repo, Run, RunRequest, Task, Team } from './types.ts';
 
 export const EVENT_VERSION = 1;
 
@@ -32,6 +32,8 @@ export const EngineEvent = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('grant_changed'), grant: Grant }),
   z.object({ kind: z.literal('health_changed'), report: HealthReport }),
   z.object({ kind: z.literal('plan_usage') }).extend(PlanUsage.shape),
+  z.object({ kind: z.literal('record_changed'), entry: RecordEntry }),
+  z.object({ kind: z.literal('contract_version_issued'), issued: ContractVersion }),
 ]);
 export type EngineEvent = z.infer<typeof EngineEvent>;
 
@@ -69,6 +71,10 @@ export function subjectsOf(event: EngineEvent): Subjects {
     case 'message_sent':
     case 'message_delivered':
       return { ...NOBODY, taskId: event.message.taskId };
+    case 'record_changed':
+      return { ...NOBODY, taskId: event.entry.taskId, employeeId: event.entry.by.employeeId };
+    case 'contract_version_issued':
+      return { ...NOBODY, taskId: event.issued.taskId };
     case 'grant_changed':
       return { ...NOBODY, taskId: event.grant.taskId };
     default:
