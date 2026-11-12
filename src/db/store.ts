@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { leaseEnd, type TableName } from '../shared/project.ts';
 import type { Company, ContractVersion, Decision, Employee, Grant, HealthReport, Message, PlanUsage, RecordEntry, Repo, Run, RunRequest, Task, TaskState, Team } from '../shared/types.ts';
+import type { EventRow } from '../shared/events.ts';
 import { getRow } from './apply.ts';
 import type { Db } from './open.ts';
 
@@ -32,6 +33,19 @@ export const allEmployees = (db: Db) => rows<Employee>(db, 'employees');
 export const allRepos = (db: Db) => rows<Repo>(db, 'repos');
 export const allRuns = (db: Db) => rows<Run>(db, 'runs', 'ORDER BY rowid');
 export const allDecisions = (db: Db) => rows<Decision>(db, 'decisions').sort((a, b) => a.askedAt.localeCompare(b.askedAt));
+
+/** Everything recorded about one run, in order: its tool calls and their results among it. */
+export function eventsOfRun(db: Db, runId: string): EventRow[] {
+  return (db.prepare('SELECT id, at, task_id, run_id, employee_id, team_id, payload FROM events WHERE run_id = ? ORDER BY id').all(runId) as { id: number; at: string; task_id: string | null; run_id: string | null; employee_id: string | null; team_id: string | null; payload: string }[]).map((r) => ({
+    id: r.id,
+    at: r.at,
+    taskId: r.task_id,
+    runId: r.run_id,
+    employeeId: r.employee_id,
+    teamId: r.team_id,
+    event: JSON.parse(r.payload),
+  }));
+}
 
 /** The record's decisions, by number. */
 export const allRecord = (db: Db) => rows<RecordEntry>(db, 'record', 'ORDER BY n');

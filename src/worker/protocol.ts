@@ -6,6 +6,16 @@ import type { RuntimeEvent, ToolCall } from '../shared/runtime.ts';
 import { ADMIN_INPUT, ADMIN_TOOLS } from '../shared/adminTools.ts';
 import { Capability, Effort, Finding, RunMode } from '../shared/types.ts';
 
+/** One thing a report or review says was checked: a gate of the task's repository, a command this run ran, or a file of the work. */
+export const Check = z.union([
+  z.object({ gate: z.string().trim().min(1) }).strict(),
+  z.object({ command: z.string() }).strict(),
+  z.object({ file: z.string().trim().min(1), line: z.number().int().positive().optional() }).strict(),
+]);
+export type Check = z.infer<typeof Check>;
+/** How many things one report or review may say were checked. */
+export const MAX_CHECKS = 20;
+
 export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', 'decide', 'read_decisions', 'record_decision', 'contract_version', ...ADMIN_TOOLS] as const;
 export const EngineTool = z.enum(ENGINE_TOOLS);
 export type EngineTool = z.infer<typeof EngineTool>;
@@ -85,8 +95,8 @@ export const TOOL_INPUT = {
       )
       .min(1),
   }),
-  report_done: z.object({ summary: z.string().min(1) }),
-  submit_review: z.object({ verdict: z.enum(['approve', 'send_back', 'escalate']), notes: z.string(), findings: z.array(Finding).max(40).optional() }),
+  report_done: z.object({ summary: z.string().min(1), checks: z.array(Check).max(MAX_CHECKS).optional() }),
+  submit_review: z.object({ verdict: z.enum(['approve', 'send_back', 'escalate']), notes: z.string(), findings: z.array(Finding).max(40).optional(), checks: z.array(Check).max(MAX_CHECKS).optional() }),
   request_decision: z.object({ question: z.string().min(1), options: z.array(z.string()).max(4) }),
   set_status: z.object({ text: z.string().min(1).max(60) }),
   run_gate: z.object({ name: z.string().min(1) }),

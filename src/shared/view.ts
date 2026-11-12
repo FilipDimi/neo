@@ -5,6 +5,26 @@
  */
 import type { Company, Decision, Run, Task } from './types.ts';
 
+/** A time of day as the line shows it: "14:02", in the local time of whoever reads it. */
+const hhmm = (iso: string): string => {
+  const at = new Date(iso);
+  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+};
+
+/**
+ * What stands behind a piece of work, in one line, from what the engine verified only: the gates it ran itself,
+ * the commands the run ran and the files it cites that it found to hold. Null when there is nothing.
+ */
+export function checkedLine(run: Pick<Run, 'gateResults' | 'checks'>): string | null {
+  const gates = new Map<string, Run['gateResults'][number]>();
+  for (const result of run.gateResults ?? []) gates.set(result.name, result); // the last result of each gate is the one that stands
+  const items = [...gates.values()].map((result) => `${result.name} (gate, ${result.exitCode === 0 ? `passed${result.at ? ` ${hhmm(result.at)}` : ''}` : 'FAILED'})`);
+  const commands = (run.checks ?? []).filter((check) => check.kind === 'command').map((check) => check.shown);
+  const files = (run.checks ?? []).filter((check) => check.kind === 'file');
+  items.push(...commands, ...(files.length >= 3 ? [`cites ${files.length} files`] : files.map((check) => check.shown)));
+  return items.length === 0 ? null : `Checked: ${items.join(' · ')}`;
+}
+
 /** True where cost is counted: caps stop work and spend is shown. The engine and the screen both ask this, and nothing else decides it. */
 export const countsCost = (company: Pick<Company, 'costs'> | null | undefined): boolean => company?.costs !== 'off';
 

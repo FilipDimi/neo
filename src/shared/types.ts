@@ -202,7 +202,8 @@ export const ContractVersion = z.object({
 });
 export type ContractVersion = z.infer<typeof ContractVersion>;
 
-export const GateResult = z.object({ name: z.string(), command: z.string(), exitCode: z.number(), output: z.string(), durationMs: z.number() });
+/** `at`: when it finished, as the engine recorded it. Absent on results recorded before there was one. */
+export const GateResult = z.object({ name: z.string(), command: z.string(), exitCode: z.number(), output: z.string(), durationMs: z.number(), at: iso.optional() });
 export type GateResult = z.infer<typeof GateResult>;
 
 /**
@@ -210,6 +211,14 @@ export type GateResult = z.infer<typeof GateResult>;
  * knowing and holds nothing up. Each says where, why it matters and what would fix it, so its author
  * can act on it and the next review can check it.
  */
+/**
+ * Something a report or a review said was checked, that the engine found to hold against its own record: a command
+ * the run ran after its last change, and that succeeded; a file of the work, and a line in it. Gates are not here:
+ * their proof is the engine's own result, in `gateResults`.
+ */
+export const VerifiedCheck = z.object({ kind: z.enum(['command', 'file']), what: z.string(), line: z.number().int().positive().optional(), shown: z.string() });
+export type VerifiedCheck = z.infer<typeof VerifiedCheck>;
+
 export const Finding = z.object({
   severity: z.enum(['blocking', 'minor']),
   file: z.string(),
@@ -248,6 +257,12 @@ export const Run = z.object({
   gateResults: z.array(GateResult),
   /** On a review: what the reviewer found. Absent on runs from before reviews gave findings. */
   findings: z.array(Finding).optional(),
+  /** What its report or review said was checked and the engine found to hold. */
+  checks: z.array(VerifiedCheck).optional(),
+  /** The gates its report or review claimed; the engine runs each one itself. */
+  claimedGates: z.array(z.string()).optional(),
+  /** Gates it asked the engine to run while it worked (run_gate). Kept apart from the engine's own: for an author they came before the commit. */
+  askedGates: z.array(GateResult).optional(),
 });
 export type Run = z.infer<typeof Run>;
 
