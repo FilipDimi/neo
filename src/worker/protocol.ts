@@ -105,7 +105,7 @@ export const TOOL_INPUT = {
   decide: z.object({ option: z.string().min(1), notes: z.string() }),
   read_decisions: z.object({ ids: z.array(z.string().min(1)).max(20).optional(), search: z.string().optional() }),
   record_decision: z.object({ statement: z.string().trim().min(1).max(300), why: z.string(), replaces: z.string().min(1).optional(), onBehalfOfUser: z.boolean().optional() }),
-  contract_version: z.object({ change: z.enum(['breaking', 'adds', 'wording']), summary: z.string().trim().min(1), decisions: z.array(z.string().min(1)).optional(), subtask: z.string().min(1).optional() }),
+  contract_version: z.object({ change: z.enum(['breaking', 'adds', 'wording']), summary: z.string().trim().min(1), decisions: z.array(z.string().min(1)).optional(), ticket: z.string().min(1).optional() }),
   ...ADMIN_INPUT,
 } satisfies Record<EngineTool, z.ZodType>;
 

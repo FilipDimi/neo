@@ -12,6 +12,15 @@ import { TOOL_INPUT } from '../worker/protocol.ts';
 
 export const entryId = (n: number): string => `D-${n}`;
 
+/**
+ * A decision's number as the record keeps it, from however someone wrote it: "D-0045" as its file is named, "D-045"
+ * as a log kept by hand has it, "d-45", or "45". What is not a number comes back as it was, and matches nothing.
+ */
+export function normalId(written: string): string {
+  const number = /^\s*(?:D-?)?0*(\d+)\s*$/i.exec(written);
+  return number ? entryId(Number(number[1])) : written.trim().toUpperCase();
+}
+
 /** The first line of a text, its spaces tidied, cut where it would run past `max`. For an index, a title, a label. */
 export function oneLine(text: string, max: number): string {
   const line = (text.trim().split('\n')[0] ?? '').replace(/\s+/g, ' ').trim();
@@ -22,7 +31,7 @@ export type NewEntry = { statement: string; why: string; by: RecordEntry['by']; 
 
 /** Files one decision under the next number. A decision it replaces is marked, never removed. */
 export function recordDecision(tx: Tx, db: Db, now: Date, input: NewEntry): RecordEntry {
-  const replaced = input.replaces ? store.getEntry(db, input.replaces) : undefined;
+  const replaced = input.replaces ? store.getEntry(db, normalId(input.replaces)) : undefined;
   if (input.replaces && !replaced) throw new Error(`There is no decision ${input.replaces} to replace.`);
   if (replaced?.replacedBy) throw new Error(`${replaced.id} was already replaced by ${replaced.replacedBy}. Replace that one, if this reverses it.`);
   const n = (store.allRecord(db).at(-1)?.n ?? 0) + 1;
@@ -54,13 +63,14 @@ export type Query = { ids?: string[]; search?: string; by?: RecordEntry['by']['k
  * `search` somewhere in what they say, why, or the question and answer they came from.
  */
 export function findEntries(db: Db, query: Query): RecordEntry[] {
-  if (query.ids) return query.ids.flatMap((id) => store.getEntry(db, id.trim().toUpperCase()) ?? []);
+  if (query.ids) return query.ids.flatMap((id) => store.getEntry(db, normalId(id)) ?? []);
   const words = (query.search ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   const since = query.since?.toISOString();
   return store
     .allRecord(db)
     .filter((entry) => {
-      if (query.by && entry.by.kind !== query.by) return false;
+      // What a log kept by hand held is nobody's decision as far as the engine knows: it answers to no 'decided by'.
+      if (query.by && (entry.archived || entry.by.kind !== query.by)) return false;
       if (since && entry.at < since) return false;
       const text = `${entry.id} ${entry.statement} ${entry.why} ${entry.detail ?? ''}`.toLowerCase();
       return words.every((word) => text.includes(word));
@@ -102,7 +112,7 @@ export function issueContractVersion(tx: Tx, db: Db, now: Date, input: NewVersio
     if (!input.version || !/^\d+\.\d+\.\d+$/.test(input.version)) throw new Error('A version is three numbers with dots between them, such as 0.10.1.');
     if (highest && compareVersions(input.version, highest) <= 0) throw new Error(`${input.version} is not higher than ${highest}, which was already handed out.`);
   }
-  const cited = (input.decisions ?? []).map((id) => id.trim().toUpperCase());
+  const cited = (input.decisions ?? []).map(normalId);
   const missing = cited.find((id) => !store.getEntry(db, id));
   if (missing) throw new Error(`There is no decision ${missing} on record.`);
   const issued: ContractVersion = {
@@ -135,9 +145,11 @@ export function states(text: string, version: string): boolean {
 export function contractProblem(input: { own: string | null; parent: string | null; parts: string[]; changed: string[]; added: string }): string | null {
   if (input.changed.length === 0) return null;
   if (!input.own && !input.parent && input.parts.length === 0) {
-    return `You changed the contract (${input.changed.slice(0, 8).join(', ')}) without a version. A change to the contract needs a version from the engine: a lead gets one with mcp__engine__contract_version, and anyone else asks their lead with mcp__engine__request_decision. If the contract did not need to change, take that change out.`;
+    return `You changed the contract (${input.changed.slice(0, 8).join(', ')}) without a version. A change to the contract needs a version from the engine. On a team with a lead, the lead gets one with mcp__engine__contract_version. Anyone else asks with mcp__engine__request_decision, and the chief of staff can give this ticket one. If the contract did not need to change, take that change out.`;
   }
-  if (input.own && !states(input.added, input.own)) return `The contract's files do not state ${input.own}, the version this change was given. Write it where the contract states its version.`;
+  if (input.own && !states(input.added, input.own)) {
+    return `The contract's files do not state ${input.own}, the version this change was given. Write it where the contract lists its versions. If a later version has landed since, that one stays the current one: add yours beside it, do not put it in its place.`;
+  }
   return null;
 }
 
@@ -148,11 +160,13 @@ export function contractProblem(input: { own: string | null; parent: string | nu
  * repository's contract is at today. Undefined when that is nothing at all. A number nobody recorded is refused.
  */
 export function builtOnFor(db: Db, input: { decisions?: string[] | undefined; parent?: Task | null | undefined; repoId: string | null }): Task['builtOn'] {
-  const named = (input.decisions ?? []).map((id) => id.trim().toUpperCase());
+  const named = (input.decisions ?? []).map(normalId);
   const missing = named.find((id) => !store.getEntry(db, id));
-  if (missing) throw new Error(`There is no decision ${missing} on record. Name decisions by their numbers, such as D-12; mcp__engine__read_decisions finds them.`);
+  if (missing) throw new Error(`There is no decision ${missing} on record. Name decisions by their numbers, such as D-12.`);
   const decisions = [...new Set([...(input.parent?.builtOn?.decisions ?? []), ...named])];
-  const contract = input.repoId ? currentContract(db, input.repoId) : null;
+  // A repository that names no contract has none, whatever versions were once handed out for it.
+  const repo = input.repoId ? store.getRepo(db, input.repoId) : undefined;
+  const contract = repo?.contract ? currentContract(db, repo.id) : null;
   return decisions.length === 0 && contract === null ? undefined : { decisions, contract };
 }
 
@@ -160,7 +174,8 @@ export function builtOnFor(db: Db, input: { decisions?: string[] | undefined; pa
 const NEWEST = 20;
 const LINE = 160;
 
-export type RecordIndex = { cited: RecordEntry[]; recent: RecordEntry[]; contract: { paths: string[]; version: string | null } | null; changesContractTo: string | null };
+/** `changesContractTo`: the version this ticket itself holds. `partOfChange`: the one the task it is a part of holds. */
+export type RecordIndex = { cited: RecordEntry[]; recent: RecordEntry[]; contract: { paths: string[]; version: string | null } | null; changesContractTo: string | null; partOfChange?: string | null };
 
 /** What of the record is put in front of a run on this ticket: what the ticket is built on, the newest that still hold, the contract. */
 export function indexFor(db: Db, task: Task): RecordIndex {
@@ -177,7 +192,8 @@ export function indexFor(db: Db, task: Task): RecordIndex {
     cited,
     recent,
     contract: repo?.contract ? { paths: repo.contract.paths, version: currentContract(db, repo.id) } : null,
-    changesContractTo: task.contractVersion ?? parent?.contractVersion ?? null,
+    changesContractTo: task.contractVersion ?? null,
+    partOfChange: task.contractVersion ? null : (parent?.contractVersion ?? null),
   };
 }
 
@@ -191,8 +207,10 @@ export function recordSection(db: Db, index: RecordIndex): string {
   ].filter(Boolean);
   const contract = index.contract
     ? [
-        `The contract is ${index.contract.paths.join(', ')}${index.contract.version ? `, at version ${index.contract.version}` : ', with no version yet'}. Its files change only on a ticket the engine gave a version to.`,
+        // The newest handed out, which is not always what the files say: a ticket that holds a later one may not have landed.
+        `The contract is ${index.contract.paths.join(', ')}. ${index.contract.version ? `The newest version handed out for it is ${index.contract.version}.` : 'No version has been handed out for it yet.'} Its files change only on a ticket the engine gave a version to.`,
         index.changesContractTo ? `This ticket changes the contract. Its version is ${index.changesContractTo}: the contract's files must state it.` : '',
+        index.partOfChange ? `The task this is a part of changes the contract, as version ${index.partOfChange}. This part may change the contract's files where that is its work.` : '',
       ].filter(Boolean)
     : [];
   if (decided.length === 0 && contract.length === 0) return '';
@@ -203,7 +221,9 @@ export function recordSection(db: Db, index: RecordIndex): string {
 // ---------- in words ----------
 
 /** Who decided, as a reader is told it. */
-export function whoDecided(db: Db, entry: Pick<RecordEntry, 'by'>): string {
+export function whoDecided(db: Db, entry: Pick<RecordEntry, 'by' | 'archived'>): string {
+  // Taken over from a file: who decided each thing is in its own words, and the engine does not claim to know.
+  if (entry.archived) return 'the log kept by hand';
   const name = entry.by.employeeId ? store.getEmployee(db, entry.by.employeeId)?.name : undefined;
   if (entry.by.kind === 'user') return 'the user';
   if (entry.by.kind === 'chief') return `${name ?? 'the chief of staff'}, for the user`;
@@ -245,7 +265,7 @@ export function onRecordDecision(db: Db, now: Date, run: Run, input: unknown): T
   const employee = store.getEmployee(db, run.employeeId);
   const chief = store.getCompany(db)?.chiefOfStaffId === run.employeeId;
   const lead = Boolean(employee && store.getTeam(db, employee.teamId)?.leadId === employee.id);
-  if (!chief && !lead) return { ok: false, text: 'Decisions are recorded by a team\'s lead or the chief of staff. If something needs deciding, ask with mcp__engine__request_decision: the answer is recorded for you.' };
+  if (!chief && !lead) return { ok: false, text: 'Decisions are recorded by a team\'s lead or the chief of staff. If something needs deciding, ask with mcp__engine__request_decision.' };
   if (asked.data.onBehalfOfUser && !chief) return { ok: false, text: 'Only the chief of staff records what the user said as the user\'s. Record it as your own choice, or leave onBehalfOfUser out.' };
   const task = store.getTask(db, run.taskId);
   // A conversation is not a ticket anyone will look a decision up under: what is said in one is about the company.
@@ -271,25 +291,45 @@ export function onRecordDecision(db: Db, now: Date, run: Run, input: unknown): T
   }
 }
 
-/** `contract_version`: the next version, for the run's ticket or one of its sub-tasks. For a lead and the chief of staff. */
+/**
+ * `contract_version`: the next version, for a ticket. A lead asks for its own ticket or one of its parts. The chief of
+ * staff asks for the ticket of the card it is deciding, or for one it names: on a team without a lead, nobody else can.
+ */
 export function onContractVersion(db: Db, now: Date, run: Run, input: unknown): ToolReply {
   const asked = TOOL_INPUT.contract_version.safeParse(input);
   if (!asked.success) return { ok: false, text: 'Say what kind of change it is (breaking, adds or wording) and what it is, in one sentence.' };
   const employee = store.getEmployee(db, run.employeeId);
   const chief = store.getCompany(db)?.chiefOfStaffId === run.employeeId;
   const lead = Boolean(employee && store.getTeam(db, employee.teamId)?.leadId === employee.id);
-  if (!chief && !lead) return { ok: false, text: 'A contract version is asked for by a team\'s lead or the chief of staff. Ask your lead with mcp__engine__request_decision.' };
-  const task = store.getTask(db, run.taskId);
-  if (!task || task.kind !== 'work') return { ok: false, text: 'A version is given to a ticket, and this is a conversation. The lead of the team that takes the work asks for it on that ticket.' };
-  const ticket = asked.data.subtask ? store.getTask(db, asked.data.subtask) : task;
-  if (!ticket || (asked.data.subtask && ticket.parentId !== task.id)) return { ok: false, text: `${asked.data.subtask} is not a sub-task of this ticket.` };
+  if (!chief && !lead) return { ok: false, text: 'A contract version is given by a team\'s lead or the chief of staff. Ask with mcp__engine__request_decision.' };
+  const here = store.getTask(db, run.taskId);
+  const own = here?.kind === 'work' ? here : undefined;
+  let ticket: Task | undefined;
+  if (asked.data.ticket) {
+    const wanted = asked.data.ticket.trim();
+    const work = store.listTasks(db).filter((task) => task.kind === 'work');
+    const named = work.filter((task) => task.id === wanted);
+    const found = named.length > 0 ? named : work.filter((task) => task.state !== 'done' && task.state !== 'failed' && task.title.trim().toLowerCase() === wanted.toLowerCase());
+    if (found.length === 0) return { ok: false, text: `There is no ticket "${wanted}". Name it by its id or by its exact title.` };
+    if (found.length > 1) return { ok: false, text: `More than one ticket is called "${wanted}". Name it by its id: ${found.map((task) => task.id).join(', ')}.` };
+    ticket = found[0]!;
+    if (!chief && !(own && (ticket.id === own.id || ticket.parentId === own.id))) return { ok: false, text: `"${ticket.title}" is not this ticket or one of its sub-tasks. A lead gives a version to its own ticket and to its parts.` };
+  } else if (own) ticket = own;
+  else {
+    // Deciding a card: the version is for the ticket the card is about.
+    const card = here?.decisionId ? store.getDecision(db, here.decisionId) : undefined;
+    ticket = card?.taskId ? store.getTask(db, card.taskId) : undefined;
+  }
+  if (!ticket) return { ok: false, text: 'Name the ticket the version is for: "ticket", its id or its exact title.' };
   const repo = ticket.repoId ? store.getRepo(db, ticket.repoId) : undefined;
-  if (!repo?.contract) return { ok: false, text: 'This ticket\'s repository has no contract named, so nothing there needs a version.' };
-  if (ticket.contractVersion) return { ok: true, text: `${ticket.id === task.id ? 'This ticket' : `"${ticket.title}"`} already holds ${ticket.contractVersion}: a ticket holds one version.` };
+  if (!repo?.contract) return { ok: false, text: `The repository of "${ticket.title}" has no contract named, so nothing there needs a version.` };
+  const mine = ticket.id === own?.id;
+  if (ticket.contractVersion) return { ok: true, text: `${mine ? 'This ticket' : `"${ticket.title}"`} already holds ${ticket.contractVersion}: a ticket holds one version.` };
+  const target = ticket;
   try {
     let issued!: ContractVersion;
-    apply(db, (tx) => void (issued = issueContractVersion(tx, db, now, { repoId: repo.id, change: asked.data.change, summary: asked.data.summary, taskId: ticket.id, decisions: asked.data.decisions, by: run.employeeId })), now);
-    return { ok: true, text: `Version ${issued.version} is ${ticket.id === task.id ? 'this ticket\'s' : `"${ticket.title}"'s`}. The contract's files (${repo.contract.paths.join(', ')}) may be changed on it, and must state ${issued.version}.` };
+    apply(db, (tx) => void (issued = issueContractVersion(tx, db, now, { repoId: repo.id, change: asked.data.change, summary: asked.data.summary, taskId: target.id, decisions: asked.data.decisions, by: run.employeeId })), now);
+    return { ok: true, text: `Version ${issued.version} is ${mine ? 'this ticket\'s' : `"${target.title}"'s`}. The contract's files (${repo.contract.paths.join(', ')}) may be changed on it, and must state ${issued.version}.` };
   } catch (failure) {
     return { ok: false, text: words(failure) };
   }
@@ -303,7 +343,8 @@ export function fileAnswer(tx: Tx, db: Db, now: Date, card: Decision, given: { w
   const task = card.taskId ? store.getTask(db, card.taskId) : undefined;
   const chief = given.by !== null && store.getCompany(db)?.chiefOfStaffId === given.by;
   return recordDecision(tx, db, now, {
-    statement: `${oneLine(card.text, 120)} Answer: ${oneLine(given.words, 120)}`,
+    // The question as it was asked, where the card kept it: the card's own first line is mostly about who asked and on what.
+    statement: `${oneLine(typeof card.subject?.question === 'string' ? card.subject.question : card.text, 120)} Answer: ${oneLine(given.words, 120)}`,
     why: given.why,
     by: chief ? { kind: 'chief', employeeId: given.by } : { kind: 'user', employeeId: null },
     taskId: task?.id ?? null,

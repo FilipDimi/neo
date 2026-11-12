@@ -15,7 +15,7 @@ const sentence = (text: string): string => (/[.!?]$/.test(text.trim()) ? text.tr
 type BuiltOn = { entries: RecordEntry[]; contract: string | null; changesContractTo: string | null };
 type Detail = { task: Task; children: Task[]; runs: Run[]; events: EventRow[]; decisions: Decision[]; builtOn?: BuiltOn };
 
-const decidedBy = (entry: RecordEntry): string => entry.byName ?? (entry.by.kind === 'user' ? 'the user' : entry.by.kind === 'chief' ? 'the chief of staff, for the user' : 'a team lead');
+const decidedBy = (entry: RecordEntry): string => (entry.archived ? 'the log kept by hand' : entry.byName) ?? (entry.by.kind === 'user' ? 'the user' : entry.by.kind === 'chief' ? 'the chief of staff, for the user' : 'a team lead');
 
 /**
  * One quiet line: the decisions this task is built on and the contract it was made against. A number opens the

@@ -205,7 +205,7 @@ export class Flow {
     try {
       built = subtasks.map((sub) => builtOnFor(this.db, { decisions: sub.decisions, parent, repoId: parent.repoId }));
     } catch (failure) {
-      return { ok: false, text: `${failure instanceof Error ? failure.message : String(failure)} Propose again.` };
+      return { ok: false, text: `${failure instanceof Error ? failure.message : String(failure)} mcp__engine__read_decisions finds them. Propose again.` };
     }
     if (subtasks.some((sub) => sub.contract) && !repo?.contract) return { ok: false, text: 'A sub-task is marked as changing the contract, but this task\'s repository has no contract named. Leave "contract" out and propose again.' };
     this.change((tx, now) => {
@@ -372,6 +372,11 @@ export class Flow {
     return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
   }
 
+  /** The folders of a repository that are the engine's own, which no diff of anyone's work shows. */
+  private engines(repo: Repo): string[] {
+    return [dirOf(repo)].flatMap((dir) => dir ?? []);
+  }
+
   /** The files a ticket changed, without the decision files: those are the engine's, and no ticket has to own them. */
   private withoutRecord(task: Task, changed: string[]): string[] {
     const dir = dirOf(this.site(task)?.repo);
@@ -392,7 +397,7 @@ export class Flow {
     if (strays.length === 0) return true;
     this.sendBack(
       task,
-      `Only the engine writes in ${dirOf(site.repo)}: it keeps one file there for each decision on record. Remove ${strays.slice(0, 8).join(', ')} (what it says belongs somewhere else, or in a decision your lead records), then call mcp__engine__report_done again.`,
+      `Only the engine writes in ${dirOf(site.repo)}: it keeps one file there for each decision on record. Take your change to ${strays.slice(0, 8).join(', ')} out of it: remove a file you added there, put back one you changed or deleted. What you wrote belongs somewhere else, or in a decision your lead records. Then call mcp__engine__report_done again.`,
       `"${task.title}" put a file of its own in the engine's decisions folder`,
     );
     return false;
@@ -419,7 +424,8 @@ export class Flow {
     const problem = contractProblem({
       own: task.contractVersion ?? null,
       parent: parent?.contractVersion ?? null,
-      parts: store.listTasks(this.db, { parentId: task.id }).flatMap((child) => child.contractVersion ?? []),
+      // A part's version covers the whole it was put into, once that part is done: not one that failed or is still open.
+      parts: store.listTasks(this.db, { parentId: task.id }).flatMap((child) => (child.state === 'done' && child.contractVersion ? [child.contractVersion] : [])),
       changed,
       added: await addedLines(site.folder, this.baseOf(task, site.teamRepo), paths.map((entry) => entry.replace(/\/\*{1,2}$/, ''))),
     });
@@ -454,7 +460,7 @@ export class Flow {
     const author: Identity = { name: employee?.name ?? 'Employee', email: `${run.employeeId}@virtual-startup.invalid` };
     const commit = await commitAll(site.folder, author, `${task.title}${run.summary ? `\n\n${run.summary}` : ''}`, task.branch ?? undefined);
     await publish(site.repo.path, site.folder, task.branch!);
-    const stat = await diffStat(site.folder, this.baseOf(task, site.teamRepo));
+    const stat = await diffStat(site.folder, this.baseOf(task, site.teamRepo), this.engines(site.repo));
     this.change((tx) => tx.emit({ kind: 'run_ended', run: { ...store.getRun(this.db, run.id)!, commit, diffLines: stat.lines }, teamId: site.team.id }));
   }
 
@@ -606,7 +612,7 @@ export class Flow {
     const material = {
       summary: run.summary,
       gateResults: run.gateResults,
-      ...(site && base ? { diffStat: (await diffStat(site.folder, base)).text, patch: await patch(site.folder, base, PATCH_CAP) } : {}),
+      ...(site && base ? { diffStat: (await diffStat(site.folder, base, this.engines(site.repo))).text, patch: await patch(site.folder, base, PATCH_CAP, this.engines(site.repo)) } : {}),
       ...(before ? { previous: { by: nameOf(before.employeeId), findings: before.findings! } } : {}),
       ...(parts.length > 0 ? { whole: { by: nameOf(run.employeeId), parts: parts.map((child) => ({ title: child.title, by: nameOf(store.runsOf(this.db, child.id).findLast(authored)?.employeeId ?? child.assigneeId) })) } } : {}),
     };
@@ -784,6 +790,9 @@ export class Flow {
           const run = decision.runId ? store.getRun(this.db, decision.runId) : undefined;
           if (!run) return;
           if (run.mode === 'integrate') return this.integrated(run, task, false);
+          // What was accepted is the files outside the ticket's own. The engine's folder and the contract's version are other questions, asked now.
+          if (!(await this.recordFilesHold(task, await this.changed(task)))) return;
+          if (!(await this.contractHolds(task))) return;
           if (!(await this.gatesPass(run.id, task))) return;
           return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
         });

@@ -75,12 +75,37 @@ describe('the contract\'s versions are handed out by the engine', () => {
     expect(store.contractVersions(db, 'repo1')[0]).toMatchObject({ version: '0.1.0', change: 'adds', summary: 'A stories endpoint.', taskId: 'task1', by: 'lead' });
     // Asked again: the one it has. A ticket holds one version.
     expect(onContractVersion(db, T0, asLead, { change: 'breaking', summary: 'Again.' }).text).toMatch(/already holds 0\.1\.0/);
-    expect(onContractVersion(db, T0, asLead, { change: 'wording', summary: 'A typo.', subtask: 'part' }).text).toMatch(/0\.1\.1/);
+    expect(onContractVersion(db, T0, asLead, { change: 'wording', summary: 'A typo.', ticket: 'part' }).text).toMatch(/0\.1\.1/);
     expect(store.getTask(db, 'part')!.contractVersion).toBe('0.1.1');
-    expect(onContractVersion(db, T0, asLead, { change: 'wording', summary: 'x', subtask: 'other' })).toMatchObject({ ok: false, text: expect.stringMatching(/not a sub-task/) });
+    expect(onContractVersion(db, T0, asLead, { change: 'wording', summary: 'x', ticket: 'other' })).toMatchObject({ ok: false, text: expect.stringMatching(/not this ticket or one of its sub-tasks/) });
     expect(onContractVersion(db, T0, run({ id: 'r2', employeeId: 'emp1' }), { change: 'wording', summary: 'x' })).toMatchObject({ ok: false, text: expect.stringMatching(/lead/) });
     expect(onContractVersion(db, T0, run({ id: 'r3', employeeId: 'lead', taskId: 'bare' }), { change: 'wording', summary: 'x' })).toMatchObject({ ok: false, text: expect.stringMatching(/no contract/) });
     expect(store.contractVersions(db, 'repo1')).toHaveLength(2);
+  });
+
+  it('lets the chief of staff give a ticket its version where there is no lead to ask: for the card it is deciding, or a ticket it names', () => {
+    const db = tempDb();
+    apply(db, (tx) => {
+      tx.emit({ kind: 'company_changed', company: companyRow({ chiefOfStaffId: 'neo' }) });
+      tx.emit({ kind: 'repo_changed', repo: repo({ contract: { paths: ['docs/contract'] } }) });
+      tx.emit({ kind: 'team_changed', team: team({ id: 'office', name: 'Office', leadId: 'neo' }) });
+      tx.emit({ kind: 'team_changed', team: team({ selfManaged: true, repos: [{ repoId: 'repo1', baseBranch: 'main', mergeTarget: null }] }) });
+      for (const person of [employee({ id: 'neo', name: 'Neo', teamId: 'office' }), employee()]) tx.emit({ kind: 'employee_changed', employee: person });
+      tx.emit({ kind: 'task_changed', task: task({ title: 'Add the stories endpoint', repoId: 'repo1', state: 'blocked' }), cause: 'created' });
+      tx.emit({ kind: 'task_changed', task: task({ id: 'second', title: 'Rename a field', repoId: 'repo1', state: 'running' }), cause: 'created' });
+      tx.emit({ kind: 'decision_raised', decision: { id: 'card1', taskId: 'task1', runId: null, employeeId: 'emp1', kind: 'question', text: 'Ada asks: may I change the contract?', options: [], costSoFarUsd: 0, answer: null, askedAt: T0.toISOString(), answeredAt: null, deciderId: 'neo' } });
+      tx.emit({ kind: 'task_changed', task: task({ id: 'deciding', teamId: 'office', kind: 'chat', decisionId: 'card1', assigneeId: 'neo' }), cause: 'created' });
+      tx.emit({ kind: 'task_changed', task: task({ id: 'chat', teamId: 'office', kind: 'chat', assigneeId: 'neo' }), cause: 'created' });
+    });
+    // Deciding a card about a ticket: the version goes to that ticket.
+    expect(onContractVersion(db, T0, run({ id: 'r1', employeeId: 'neo', taskId: 'deciding', mode: 'route' }), { change: 'adds', summary: 'Stories.' })).toMatchObject({ ok: true, text: expect.stringMatching(/0\.1\.0.*"Add the stories endpoint"/s) });
+    expect(store.getTask(db, 'task1')!.contractVersion).toBe('0.1.0');
+    // In a conversation: the ticket is named, by its id or by its title.
+    const inChat = run({ id: 'r2', employeeId: 'neo', taskId: 'chat', mode: 'route' });
+    expect(onContractVersion(db, T0, inChat, { change: 'wording', summary: 'A rename.' })).toMatchObject({ ok: false, text: expect.stringMatching(/Name the ticket/) });
+    expect(onContractVersion(db, T0, inChat, { change: 'wording', summary: 'A rename.', ticket: 'rename a field' }).text).toMatch(/0\.1\.1/);
+    expect(store.getTask(db, 'second')!.contractVersion).toBe('0.1.1');
+    expect(onContractVersion(db, T0, inChat, { change: 'wording', summary: 'x', ticket: 'no such ticket' })).toMatchObject({ ok: false, text: expect.stringMatching(/no ticket/i) });
   });
 });
 
@@ -179,5 +204,29 @@ describe('no version, no change to the contract', () => {
     expect(told.Grace).not.toContain('This ticket changes the contract');
     expect(store.getTask(setup.w.db, whole.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
     expect(store.openDecisions(setup.w.db)).toEqual([]);
+  });
+
+  it('still holds a change to the contract to its version when the files outside the ticket\'s own were accepted', async () => {
+    const told: string[] = [];
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'work') {
+        told.push(s.input.prompt);
+        if (s.resumed) fs.rmSync(path.join(s.input.cwd, 'docs'), { recursive: true });
+        else s.write('docs/contract/stories.md', 'GET /v1/stories\n');
+        s.write('server/stories.txt', 'served\n');
+        await s.engine('report_done', { summary: 'Done.' });
+      }
+      if (s.mode === 'review') await approve(s);
+    });
+    const made = ticket(setup.w, { ownership: ['server'] });
+    await drain(setup);
+    const [card] = store.openDecisions(setup.w.db);
+    expect(card).toMatchObject({ kind: 'ownership' });
+    setup.w.sup.answer(card!.id, { optionId: 'accept' });
+    await drain(setup);
+    // Accepting that it changed a file outside its own is not giving the contract a version.
+    expect(told.at(-1)).toContain('without a version');
+    expect(fileAt(setup.repoPath, 'team', 'docs/contract/stories.md')).toBeNull();
+    expect(store.getTask(setup.w.db, made.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
   });
 });

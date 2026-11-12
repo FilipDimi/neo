@@ -72,15 +72,18 @@ const lines = (text: string): string[] => text.split('\n').filter(Boolean);
 const PLAIN = ['--no-ext-diff', '--no-textconv'];
 
 /** What the branch changed since it left its base. */
-export async function diffStat(dir: string, base: string): Promise<{ files: number; lines: number; text: string }> {
-  const short = await must(dir, ['diff', ...PLAIN, '--shortstat', `${base}...HEAD`]);
+/** Everything, but for folders that are not the work's own (the engine's decision files): as git is told to leave them out. */
+export const without = (folders: string[] = []): string[] => (folders.length === 0 ? [] : ['--', '.', ...folders.map((folder) => `:(exclude)${folder}`)]);
+
+export async function diffStat(dir: string, base: string, leaveOut: string[] = []): Promise<{ files: number; lines: number; text: string }> {
+  const short = await must(dir, ['diff', ...PLAIN, '--shortstat', `${base}...HEAD`, ...without(leaveOut)]);
   const count = (pattern: RegExp) => Number(pattern.exec(short)?.[1] ?? 0);
-  const text = await must(dir, ['diff', ...PLAIN, '--stat', `${base}...HEAD`]);
+  const text = await must(dir, ['diff', ...PLAIN, '--stat', `${base}...HEAD`, ...without(leaveOut)]);
   return { files: count(/(\d+) files? changed/), lines: count(/(\d+) insertions?/) + count(/(\d+) deletions?/), text };
 }
 
-export async function patch(dir: string, base: string, capBytes: number): Promise<string> {
-  const full = await must(dir, ['diff', ...PLAIN, `${base}...HEAD`]);
+export async function patch(dir: string, base: string, capBytes: number, leaveOut: string[] = []): Promise<string> {
+  const full = await must(dir, ['diff', ...PLAIN, `${base}...HEAD`, ...without(leaveOut)]);
   return full.length <= capBytes ? full : `${full.slice(0, capBytes)}…`;
 }
 

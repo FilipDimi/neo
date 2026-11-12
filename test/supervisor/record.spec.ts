@@ -178,7 +178,7 @@ describe('what a run is shown of the record, and what a ticket is built on', () 
       tx.emit({ kind: 'contract_version_issued', issued: { id: 'cv1', repoId: 'repo1', version: '0.10.1', change: 'start', summary: '', taskId: null, decisions: [], by: null, at: T0.toISOString() } });
     });
     const withContract = recordSection(db, indexFor(db, { ...ticket, contractVersion: '0.10.2' }));
-    expect(withContract).toContain('The contract is docs/contract, at version 0.10.1.');
+    expect(withContract).toContain('The contract is docs/contract. The newest version handed out for it is 0.10.1.');
     expect(withContract).toContain('This ticket changes the contract. Its version is 0.10.2: the contract\'s files must state it.');
     // Nothing on record and no contract: nothing is said.
     expect(recordSection(tempDb(), { cited: [], recent: [], contract: null, changesContractTo: null })).toBe('');
@@ -216,5 +216,40 @@ describe('what a run is shown of the record, and what a ticket is built on', () 
     expect(w.sup.createTask(base).builtOn).toBeUndefined();
     const parent = task({ builtOn: { decisions: ['D-1'], contract: '0.3.0' } });
     expect(builtOnFor(w.db, { decisions: ['D-2', 'D-1'], parent, repoId: null })).toEqual({ decisions: ['D-1', 'D-2'], contract: null });
+  });
+
+  it('knows a decision by its number however it is written: as a file names it, as a log does, in small letters, or bare', () => {
+    const db = company();
+    for (let i = 1; i <= 45; i++) add(db, `Decision number ${i}.`);
+    for (const written of ['D-0045', 'd-45', 'D-045', '45', ' D45 ']) expect(findEntries(db, { ids: [written] }).map((entry) => entry.id), written).toEqual(['D-45']);
+    expect(onReadDecisions(db, { ids: ['D-0045'] }).text).toContain('Decision number 45.');
+    expect(builtOnFor(db, { decisions: ['D-0007', 'd-7'], repoId: null })).toEqual({ decisions: ['D-7'], contract: null });
+    expect(onRecordDecision(db, T0, runOf('lead'), { statement: 'Decision number 45, revised.', why: '', replaces: 'd-0045' }).text).toBe('Recorded as D-46.');
+    expect(store.getEntry(db, 'D-45')!.replacedBy).toBe('D-46');
+    expect(findEntries(db, { ids: ['not a number'] })).toEqual([]);
+  });
+
+  it('does not pass off a log kept by hand as what the chief of staff decided', () => {
+    const db = company();
+    apply(db, (tx) => tx.emit({ kind: 'record_changed', entry: { id: 'D-1', n: 1, at: T0.toISOString(), statement: 'From the old log.', why: '', by: { kind: 'chief', employeeId: 'neo' }, taskId: null, repoId: 'repo1', replaces: null, replacedBy: null, archived: true } }));
+    onRecordDecision(db, T0, runOf('neo'), { statement: 'Launch in two regions.', why: 'Nobody said which.' });
+    // "What was assumed for me" is what the chief of staff decided, not everything a file once held.
+    expect(findEntries(db, { by: 'chief' }).map((entry) => entry.id)).toEqual(['D-2']);
+    expect(onReadDecisions(db, { ids: ['D-1'] }).text).toMatch(/^D-1 · 2026-11-09 · the log kept by hand/);
+    expect(recordSection(db, indexFor(db, task()))).toContain('- D-1 (2026-11-09, the log kept by hand): From the old log.');
+  });
+
+  it('files the question itself, not the card\'s preamble, and says no contract where a repository has none any more', () => {
+    const db = company();
+    let id = '';
+    const preamble = 'Ada has asked 3 times in a row about "Do the thing" and done no work in between. It is probably missing something an answer cannot give it.';
+    apply(db, (tx) => void (id = decisions.raise(tx, db, T0, { taskId: 'task1', kind: 'question', text: `${preamble} Its question: Which of the two layouts?`, freeText: true, options: decisions.optionsFor('question', {}), subject: { question: 'Which of the two layouts?' } }).id));
+    decisions.answer(db, T0, id, { optionId: 'answer', text: 'The new one.' });
+    expect(store.getEntry(db, 'D-1')!.statement).toBe('Which of the two layouts? Answer: The new one.');
+    // A version was handed out once; the repository names no contract now.
+    apply(db, (tx) => tx.emit({ kind: 'contract_version_issued', issued: { id: 'cv1', repoId: 'repo1', version: '0.3.0', change: 'start', summary: '', taskId: null, decisions: [], by: null, at: T0.toISOString() } }));
+    expect(builtOnFor(db, { repoId: 'repo1' })).toBeUndefined();
+    apply(db, (tx) => tx.emit({ kind: 'repo_changed', repo: repo({ contract: { paths: ['docs/contract'] } }) }));
+    expect(builtOnFor(db, { repoId: 'repo1' })).toEqual({ decisions: [], contract: '0.3.0' });
   });
 });

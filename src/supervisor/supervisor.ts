@@ -918,6 +918,8 @@ export class Supervisor {
                 : `${employee?.name ?? 'An employee'} asks about "${task?.title ?? 'a task'}": ${question}`,
               freeText: true,
               options: decisions.optionsFor('question', { choices: looping ? [] : options }),
+              // The question by itself, for the record: an answer is filed under what was asked, not under who asked.
+              subject: { question },
             }),
           now,
         );

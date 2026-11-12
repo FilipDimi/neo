@@ -31,7 +31,7 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
   record_decision:
     'Write a decision into the company\'s record, where it gets a number everyone can cite: one sentence saying what is now so, and why. For a choice others will build on or need to know (an interface, a default, a rule), not for a detail of your own task. replaces: the number of an earlier decision this one reverses.',
   contract_version:
-    'Get the next version of the contract for a ticket that will change it: say whether the change is breaking, adds something, or is wording only, and what it is in one sentence. The contract\'s files may be changed only by a ticket that holds a version, and they must state it.',
+    'Get the next version of the contract for a ticket that will change it: say whether the change is breaking, adds something, or is wording only, and what it is in one sentence. It goes to your own ticket; ticket names another, by id or exact title (for a lead one of its sub-tasks; for the chief of staff any ticket, which is how a team without a lead gets one). The contract\'s files may be changed only by a ticket that holds a version, and they must state it.',
   ...ADMIN_DESCRIPTION,
 };
 

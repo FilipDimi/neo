@@ -25,7 +25,7 @@ export type Tool = { name: string; description: string; input: z.ZodRawShape; ru
 /** What is said to every session that has these tools, before it uses one. */
 export const INSTRUCTIONS = `This is the user's line to their chief of staff (Neo, unless they renamed it) and the company it runs. When the user says "ask Neo", "tell Neo" or names the company, use chat: Neo knows every board and turns a request into tasks on the right team. These tools reach a company of AI employees that runs on this Mac: teams with boards of tasks, a chief of staff who answers questions and turns requests into tasks, and cards for the decisions that are the user's alone. The same company is on screen at http://127.0.0.1:4317.
 
-Read: now (every board, who is running, cards waiting, spend today), tasks, task (one task with its runs), cards, replies (what employees last said to the user).
+Read: now (every board, who is running, cards waiting, spend today), tasks, task (one task with its runs), cards, replies (what employees last said to the user), decisions (the company's record of what was decided, why and by whom).
 Talk: chat (the chief of staff: questions about the company, and requests it turns into tasks on the right team), morpheus (the admin, as an employee: questions about the setup, and changes to teams, people, models, caps, rules and gates said in plain words), message (one employee by name: answered as a conversation; work that is asked for goes on that employee's own team's board).
 Act: answer_card (presses one button of a card), new_task (puts a task straight on a team's board), start (starts the company when a tool says it is not running).
 Setup: company_setup reads the whole setup (teams, people, models, caps, rules, gates); create_team, update_team, remove_team, hire, update_employee, fire, update_company, add_repository, set_record, import_decisions and set_gates change it at once. Use a setup tool only when the user asked for that change, and read company_setup first.
@@ -174,7 +174,7 @@ export const TOOLS: Tool[] = [
       if (entries.length === 0) return 'Nothing on record matches.';
       const { employees } = await ctx.call<Snapshot>('GET', '/api/snapshot');
       const name = (id: string | null) => employees.find((employee) => employee.id === id)?.name;
-      const who = (entry: RecordEntry) => (entry.by.kind === 'user' ? 'you' : entry.by.kind === 'chief' ? `${name(entry.by.employeeId) ?? 'the chief of staff'}, for you` : (name(entry.by.employeeId) ?? 'a team lead'));
+      const who = (entry: RecordEntry) => (entry.archived ? 'the log kept by hand' : entry.by.kind === 'user' ? 'you' : entry.by.kind === 'chief' ? `${name(entry.by.employeeId) ?? 'the chief of staff'}, for you` : (name(entry.by.employeeId) ?? 'a team lead'));
       return entries
         .map((entry) =>
           [`${entry.id} · ${entry.at.slice(0, 10)} · ${who(entry)}`, entry.statement, entry.why ? `Why: ${entry.why}` : '', entry.replaces ? `Replaces ${entry.replaces}.` : '', entry.replacedBy ? `Replaced by ${entry.replacedBy}: it no longer holds.` : '']

@@ -291,10 +291,18 @@ export async function adminTool(ctx: HireCtx, name: string, raw: unknown): Promi
       const repo = findRepo(db, input.repo);
       const branches = input.branches ?? [(await git(repo.path, ['symbolic-ref', '-q', '--short', 'HEAD'])).out.trim()].filter(Boolean);
       if (branches.length === 0) throw new Error(`${repo.path} has no branch checked out. Name the branches to read ${input.file} on.`);
-      const done = await importDecisions({ db, now: at }, repo, input.file, branches);
-      if (done.imported === 0) return `Nothing new: all ${done.already} decision${done.already === 1 ? '' : 's'} in ${input.file} (${branches.join(', ')}) are on record already.`;
-      const moved = done.renumbered.map((entry) => `${entry.from} on ${entry.branch} is now ${entry.to}`);
-      return `Imported ${done.imported} decision${done.imported === 1 ? '' : 's'} from ${input.file} (${branches.join(', ')}), with the numbers they had.${moved.length > 0 ? ` ${moved.length === 1 ? 'One' : moved.length} had a number another branch used first, and got a new one: ${moved.join('; ')}.` : ''}`;
+      const done = await importDecisions({ db, now: at }, repo, input.file, branches, { renumber: input.renumber === true });
+      const unread = done.skipped.length > 0 ? ` ${done.skipped.length === 1 ? 'One row' : `${done.skipped.length} rows`} could not be read and ${done.skipped.length === 1 ? 'was' : 'were'} left out (a row begins with the bare number, then the date, then the decision): ${done.skipped.slice(0, 5).map((line) => `"${line.slice(0, 60)}"`).join(', ')}${done.skipped.length > 5 ? ', and more' : ''}.` : '';
+      if (done.imported === 0) return `Nothing new: all ${done.already} decision${done.already === 1 ? '' : 's'} read from ${input.file} (${branches.join(', ')}) are on record already.${unread}`;
+      const moved = (because: 'branch' | 'record') => done.renumbered.filter((entry) => entry.because === because).map((entry) => `${entry.from} on ${entry.branch} is now ${entry.to}`);
+      const byBranch = moved('branch');
+      const byRecord = moved('record');
+      return [
+        `Imported ${done.imported} decision${done.imported === 1 ? '' : 's'} from ${input.file} (${branches.join(', ')}), with the numbers they had.`,
+        byBranch.length > 0 ? ` ${byBranch.length === 1 ? 'One' : byBranch.length} had a number another branch used first, and got a new one: ${byBranch.join('; ')}.` : '',
+        byRecord.length > 0 ? ` ${byRecord.length === 1 ? 'One' : byRecord.length} had a number that a decision recorded since already holds, and got a new one: ${byRecord.join('; ')}.` : '',
+        unread,
+      ].join('');
     }
     default:
       throw new Error(`There is no admin tool ${name}.`);

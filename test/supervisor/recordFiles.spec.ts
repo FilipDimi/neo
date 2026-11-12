@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { diffOf } from '../../src/api/diff.ts';
 import { apply } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import type { RecordEntry } from '../../src/shared/types.ts';
@@ -199,5 +200,29 @@ describe('decision files reach the repository when work lands', () => {
     expect(fileAt(setup.repoPath, 'team', 'docs/decisions/D-0001.md')).toBe(render(store.getEntry(setup.w.db, entry.id)!).trimEnd());
     expect(fileAt(setup.repoPath, 'team', 'docs/decisions/my-own-notes.md')).toBeNull();
     expect(fileAt(setup.repoPath, 'team', 'OTHER.md')).toBe('More.');
+  });
+
+  it('refuses a write in the decisions folder as the run makes it, and does not count the engine\'s files as the ticket\'s change', async () => {
+    const allowed: boolean[] = [];
+    const setup = ledWorld(async (s) => {
+      if (s.mode === 'work') {
+        allowed.push(await s.tool('Write', { file_path: path.join(s.input.cwd, 'docs/decisions/D-0001.md'), content: 'mine' }));
+        allowed.push(await s.tool('Write', { file_path: path.join(s.input.cwd, 'NOTE.md'), content: 'A note.' }));
+        s.write('NOTE.md', 'A note.\n');
+        await s.engine('report_done', { summary: 'Written.' });
+      }
+      if (s.mode === 'review') await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [] });
+    });
+    add(setup.w.db, 'Notes are in markdown.');
+    const made = note(setup.w, 'First note');
+    await drain(setup);
+    // Refused in words; the run carried on to the write it may make, and to its report.
+    expect(allowed).toEqual([false, true]);
+    const landed = store.getTask(setup.w.db, made.id)!;
+    expect(landed).toMatchObject({ state: 'done', mergedInto: 'team' });
+    const diff = await diffOf(setup.w.db, landed);
+    expect(diff.patch).toContain('NOTE.md');
+    expect(diff.patch).not.toContain('D-0001');
+    expect(diff.lines).toBe(1);
   });
 });

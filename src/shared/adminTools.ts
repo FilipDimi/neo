@@ -57,7 +57,7 @@ export const ADMIN_INPUT = {
   set_gates: z.object({ repo: z.string().min(1), gates: z.array(Gate) }),
   set_record: z.object({
     repo: z.string().min(1),
-    decisionsFolder: z.string().min(1).nullable().optional().describe('where the engine writes one file per decision when work lands, from the top of the repository, such as docs/decisions; null: it writes none'),
+    decisionsFolder: z.string().min(1).nullable().optional().describe('where the engine writes one file per decision when work lands, from the top of the repository, such as docs/decisions. Everything on record about this repository or the whole company is written there, the answers given to question cards included; null: it writes none'),
     contract: z.array(z.string().min(1)).min(1).nullable().optional().describe('the folders or files that are the contract between teams, such as docs/contract; a change to them then needs a version from the engine; null: no contract'),
     contractStartsAt: z.string().optional().describe('the version the contract is at now, such as 0.10.1: counting goes on from it'),
   }),
@@ -65,6 +65,7 @@ export const ADMIN_INPUT = {
     repo: z.string().min(1),
     file: z.string().min(1).describe('a markdown table of decisions kept by hand, such as docs/decisions.md, whose rows begin | D-12 | date | decision | why |'),
     branches: z.array(z.string().min(1)).min(1).optional().describe('the branches to read it on, in order: the first to use a number keeps it. Left out: the branch checked out'),
+    renumber: z.boolean().optional().describe('true: import even though a number of the log already holds a decision recorded since; the log\'s decision then gets a new number'),
   }),
 } satisfies Record<AdminTool, z.ZodType>;
 
