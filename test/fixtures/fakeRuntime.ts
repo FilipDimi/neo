@@ -41,7 +41,12 @@ export function fakeRuntime(onTurn: (turn: Turn) => Promise<void> | void = () =>
     let sessionCost = 0;
 
     async function* run(): AsyncGenerator<RuntimeEvent> {
-      const out: RuntimeEvent[] = [];
+      // Events are passed on as they happen, as a real session streams them, not saved up until the turn is over.
+      const out: RuntimeEvent[] & { notify?: () => void } = [];
+      const push = (event: RuntimeEvent) => {
+        out.push(event);
+        out.notify?.();
+      };
       yield { kind: 'session_started', sessionId, model: input.model, loginSource: 'none', tools: [...input.tools, ...(input.engineTools?.names ?? []).map((name) => `mcp__engine__${name}`)] };
       for (let index = 0; ; index++) {
         while (inbox.length === 0 && !closed && !stopped) await new Promise<void>((resolve) => (wake = resolve));
@@ -51,10 +56,10 @@ export function fakeRuntime(onTurn: (turn: Turn) => Promise<void> | void = () =>
         factory.turns.push(text);
         const call = async (tool: string, toolInput: unknown, perform: () => Promise<{ ok: boolean; text: string }>) => {
           const id = `toolu-${sessionId}-${++calls}`;
-          out.push({ kind: 'tool_call', id, tool, input: toolInput });
+          push({ kind: 'tool_call', id, tool, input: toolInput });
           const decision = await input.decideTool({ id, tool, input: toolInput });
           const result = decision.allow ? await perform() : { ok: false, text: decision.reason ?? 'refused' };
-          out.push({ kind: 'tool_result', id, ok: result.ok });
+          push({ kind: 'tool_result', id, ok: result.ok });
           return result;
         };
         let failure: string | null = null;
@@ -64,8 +69,8 @@ export function fakeRuntime(onTurn: (turn: Turn) => Promise<void> | void = () =>
             index,
             text,
             input,
-            say: (said) => void out.push({ kind: 'assistant_text', text: said }),
-            emit: (event) => void out.push(event),
+            say: (said) => void push({ kind: 'assistant_text', text: said }),
+            emit: (event) => void push(event),
             tool: async (name, toolInput) => (await call(name, toolInput, async () => ({ ok: true, text: '' }))).ok,
             engine: (name, toolInput) => call(`mcp__engine__${name}`, toolInput, () => input.engineTools?.call(name as EngineTool, toolInput) ?? Promise.resolve({ ok: false, text: 'no such tool' })),
             fail: (reason) => {
@@ -79,8 +84,17 @@ export function fakeRuntime(onTurn: (turn: Turn) => Promise<void> | void = () =>
           if (!(error instanceof Failed)) throw error;
         });
         // A stop does not wait for the turn: the SDK aborts mid-call.
-        await Promise.race([playing, whenStopped]);
-        yield* out.splice(0);
+        let over = false;
+        void Promise.race([playing, whenStopped]).then(() => {
+          over = true;
+          out.notify?.();
+        });
+        for (;;) {
+          while (out.length > 0) yield out.shift()!;
+          if (over) break;
+          await new Promise<void>((resolve) => (out.notify = resolve));
+          out.notify = undefined;
+        }
         if (stopped) return void (yield { kind: 'finished', sessionId, ok: false, reason: 'stopped' });
         const cost = options.costPerTurn ?? 0.01;
         sessionCost += cost;

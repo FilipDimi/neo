@@ -22,6 +22,35 @@ type Ask = DistributiveOmit<Extract<ToSupervisor, { askId: string }>, 'askId'>;
 export async function runWorker(job: WorkerJob, channel: Channel, runtime: RuntimeFactory, options: { decideTimeoutMs?: number } = {}): Promise<void> {
   const waiting = new Map<string, (reply: unknown) => void>();
   let asked = 0;
+  // An engine tool call can reach this worker before the events of the session that came before it: the session hands
+  // the call over at once, while its events still queue for the loop below. The session records each call before it
+  // makes it, so a call waits until its own record has been passed on, and with it everything that came before.
+  const seen = new Map<string, number>();
+  const waitingFor = new Map<string, (() => void)[]>();
+  const passedOn = (tool: string): void => {
+    const next = waitingFor.get(tool)?.shift();
+    if (next) next();
+    else seen.set(tool, (seen.get(tool) ?? 0) + 1);
+  };
+  const ownRecord = (tool: string): Promise<void> => {
+    const already = seen.get(tool) ?? 0;
+    if (already > 0) {
+      seen.set(tool, already - 1);
+      return Promise.resolve();
+    }
+    // Never stuck on it: a session that does not record its calls is answered after a moment all the same.
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        waitingFor.set(tool, (waitingFor.get(tool) ?? []).filter((other) => other !== done));
+        resolve();
+      }, 2000);
+      waitingFor.set(tool, [...(waitingFor.get(tool) ?? []), done]);
+    });
+  };
   function ask<T>(message: Ask, fallback: T, timeoutMs?: number): Promise<T> {
     return new Promise<T>((resolve) => {
       const askId = `${job.runId}-${++asked}`;
@@ -62,6 +91,7 @@ export async function runWorker(job: WorkerJob, channel: Channel, runtime: Runti
       call: async (name: EngineTool, input: unknown) => {
         const parsed = TOOL_INPUT[name].safeParse(input);
         if (!parsed.success) return { ok: false, text: `The input does not fit the tool: ${parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}` };
+        await ownRecord(`mcp__engine__${name}`);
         const reply = await ask({ t: 'tool', name, input: parsed.data }, { ok: false, text: 'The supervisor did not answer.' });
         if (reply.ok && CLOSING_TOOLS.has(name)) reported = true;
         return reply;
@@ -106,6 +136,7 @@ export async function runWorker(job: WorkerJob, channel: Channel, runtime: Runti
 
   for await (const event of handle.events) {
     channel.send({ t: 'event', event });
+    if (event.kind === 'tool_call' && event.tool.startsWith('mcp__engine__')) passedOn(event.tool);
     if (event.kind === 'session_started') sessionId = event.sessionId;
     if (event.kind === 'assistant_text' && event.text.trim()) lastText = event.text.trim();
     if (event.kind === 'turn_finished' && event.ok && !inputClosed) {

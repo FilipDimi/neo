@@ -23,7 +23,8 @@ export const EngineEvent = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('run_activity'), runId: z.string(), taskId: z.string(), employeeId: z.string(), text: z.string() }),
   z.object({ kind: z.literal('run_event'), runId: z.string(), taskId: z.string(), employeeId: z.string(), teamId: z.string(), event: runtimeEvent }),
   z.object({ kind: z.literal('gate_started'), runId: z.string(), taskId: z.string(), name: z.string() }),
-  z.object({ kind: z.literal('gate_finished'), runId: z.string(), taskId: z.string(), result: GateResult }),
+  /** `asked`: a gate the run asked for while it worked (run_gate), kept apart from the engine's own. */
+  z.object({ kind: z.literal('gate_finished'), runId: z.string(), taskId: z.string(), result: GateResult, asked: z.boolean().optional() }),
   z.object({ kind: z.literal('run_ended'), run: Run, teamId: z.string() }),
   z.object({ kind: z.literal('decision_raised'), decision: Decision }),
   z.object({ kind: z.literal('decision_answered'), decision: Decision, result: z.enum(['applied', 'ignored', 'closed']) }),

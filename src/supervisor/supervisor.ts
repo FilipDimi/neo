@@ -12,7 +12,7 @@ import * as store from '../db/store.ts';
 import { listSkills, mountSkills, type SkillDirs, type SkillRef } from '../runtime/skills.ts';
 import type { RuntimeEvent } from '../shared/runtime.ts';
 import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task, Team } from '../shared/types.ts';
-import { TOOL_INPUT, ToSupervisor, type EngineTool } from '../worker/protocol.ts';
+import { TOOL_INPUT, ToSupervisor, type Check, type EngineTool } from '../worker/protocol.ts';
 import { unusable } from '../git/ownership.ts';
 import { GateQueue, type GateLimits } from '../git/gates.ts';
 import { ADMIN_TOOLS } from '../shared/adminTools.ts';
@@ -31,6 +31,7 @@ import { canTransition } from './taskState.ts';
 import { remember } from './memory.ts';
 import { builtOnFor, indexFor, onContractVersion, onReadDecisions, onRecordDecision, recordSection } from './record.ts';
 import { dirOf } from './recordFiles.ts';
+import { verifyClaims, type Claims } from './proof.ts';
 import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
@@ -96,6 +97,8 @@ export class Supervisor {
   /** How a run will be recorded when its worker exits, when the supervisor already knows (a question, a refusal). */
   private readonly planned = new Map<string, { outcome: RunOutcome; reason: string; record?: Partial<Run> }>();
   private readonly reports = new Map<string, string>();
+  /** What each run's report or review said was checked and held, until the run ends. */
+  private readonly claims = new Map<string, Claims>();
   /** Engine work in flight per task (commits, gates, merges): such a task is not idle. */
   private readonly busy = new Map<string, number>();
   private readonly work = new Set<Promise<void>>();
@@ -180,7 +183,7 @@ export class Supervisor {
       // A run whose end was already decided (a verdict given, a question asked, a call refused) is written down as it
       // would have ended: the next start would otherwise call it lost and forget what it had said.
       const planned = this.planned.get(runId);
-      if (planned) decided.push(() => this.finishRun(runId, planned.outcome, planned.reason, { ...planned.record, summary: this.reports.get(runId) ?? run.summary }));
+      if (planned) decided.push(() => this.finishRun(runId, planned.outcome, planned.reason, { ...planned.record, ...this.claimed(runId), summary: this.reports.get(runId) ?? run.summary }));
       else this.chargeUnfinishedTurn(run);
     }
     this.links.clear();
@@ -372,7 +375,7 @@ export class Supervisor {
   private endAsPlanned(runId: string): boolean {
     const planned = this.planned.get(runId);
     if (!planned) return false;
-    this.finishRun(runId, planned.outcome, planned.reason, { ...planned.record, summary: this.reports.get(runId) ?? store.getRun(this.db, runId)?.summary ?? null });
+    this.finishRun(runId, planned.outcome, planned.reason, { ...planned.record, ...this.claimed(runId), summary: this.reports.get(runId) ?? store.getRun(this.db, runId)?.summary ?? null });
     return true;
   }
 
@@ -597,7 +600,7 @@ export class Supervisor {
         // resumed (its record is gone). It is let go, so the next try starts afresh from what is in the folder.
         const began = store.getRun(this.db, runId)?.sessionId;
         const dead = outcome === 'failed' && !began && run.attempt > 1;
-        return this.finishRun(runId, outcome, planned?.reason ?? message.reason, { ...planned?.record, sessionId: dead ? null : (message.sessionId ?? run.sessionId), summary: this.reports.get(runId) ?? message.summary });
+        return this.finishRun(runId, outcome, planned?.reason ?? message.reason, { ...planned?.record, ...this.claimed(runId), sessionId: dead ? null : (message.sessionId ?? run.sessionId), summary: this.reports.get(runId) ?? message.summary });
       }
     }
   }
@@ -832,6 +835,19 @@ export class Supervisor {
     this.endRunNow(run, 'refused', 'path_moved');
   }
 
+  /** A report's or a review's checks, against what the engine recorded of this run and the work's folder. */
+  verify(run: Run, checks: Check[], prose: string): Claims | { refused: string } {
+    const task = store.getTask(this.db, run.taskId);
+    const repo = task?.repoId ? store.getRepo(this.db, task.repoId) : undefined;
+    return verifyClaims({ checks, prose, repoGates: (repo?.gates ?? []).map((gate) => gate.name), folder: task ? folderOf(this.paths, task) : '', rows: store.eventsOfRun(this.db, run.id) });
+  }
+
+  /** What a run's report or review said was checked, as it held: written on the run when it ends. */
+  private claimed(runId: string): Partial<Run> {
+    const claims = this.claims.get(runId);
+    return claims ? { checks: claims.checks, claimedGates: claims.gates } : {};
+  }
+
   /** The model called one of the engine's tools. */
   protected async onTool(run: Run, name: EngineTool, input: unknown): Promise<ToolReply> {
     const now = this.now();
@@ -842,7 +858,12 @@ export class Supervisor {
         return { ok: true, text: 'Noted.' };
       }
       case 'report_done': {
-        this.reports.set(run.id, TOOL_INPUT.report_done.parse(input).summary);
+        const report = TOOL_INPUT.report_done.parse(input);
+        // What the report says was checked counts only if it holds against the engine's own record.
+        const claims = this.verify(run, report.checks ?? [], report.summary);
+        if ('refused' in claims) return { ok: false, text: claims.refused };
+        this.reports.set(run.id, report.summary);
+        this.claims.set(run.id, claims);
         return { ok: true, text: 'Recorded. End your turn now: the engine takes it from here.' };
       }
       case 'request_tools': {
@@ -1001,6 +1022,7 @@ export class Supervisor {
     this.planned.delete(runId);
     this.signs.delete(runId);
     this.reports.delete(runId);
+    this.claims.delete(runId);
     this.routed.delete(runId);
     this.allowedWrites.delete(runId);
     this.engineWork(ended.taskId, () => this.afterRun(ended));

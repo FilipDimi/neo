@@ -110,7 +110,8 @@ describe('the company chat', () => {
     const working = w.sup.createTask({ teamId: 'ios', assigneeId: 'ada', title: 'Dock the glass row', brief: 'Do it.' });
     w.sup.createTask({ teamId: 'marketing', assigneeId: 'mw', title: 'App Store description', brief: 'Write it.' });
     await w.sup.tick();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Ada has said what she is doing before the question is asked.
+    for (let i = 0; i < 200 && !store.liveRuns(w.db).some((live) => live.activity); i++) await new Promise((resolve) => setTimeout(resolve, 5));
     chat(w.sup, 'Is the iOS team working on something?');
     await w.sup.tick();
     await new Promise((resolve) => setTimeout(resolve, 10));

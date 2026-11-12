@@ -71,7 +71,9 @@ export function changesOf(row: EventRow, get: Getter): Change[] {
       return [];
     case 'gate_finished': {
       const run = get('runs', event.runId) as Run | undefined;
-      return run ? [put('runs', { ...run, gateResults: [...run.gateResults, event.result] })] : [];
+      if (!run) return [];
+      const result = { ...event.result, at: event.result.at ?? row.at };
+      return [put('runs', event.asked ? { ...run, askedGates: [...(run.askedGates ?? []), result] } : { ...run, gateResults: [...run.gateResults, result] })];
     }
     case 'decision_raised':
     case 'decision_answered':

@@ -126,6 +126,17 @@ describe('runWorker', () => {
     expect(sup.exitOf()).toMatchObject({ outcome: 'stopped' });
   });
 
+  it('passes on everything the session did before an engine tool call, before the call itself', async () => {
+    const runtime = fakeRuntime(async (turn) => {
+      await turn.tool('Bash', { command: 'cargo test -p jobs' });
+      await turn.engine('report_done', { summary: 'Done.', checks: [{ command: 'cargo test -p jobs' }] });
+    });
+    const sup = await run(runtime);
+    const order = sup.said.flatMap((message) => (message.t === 'event' && (message.event.kind === 'tool_call' || message.event.kind === 'tool_result') ? [`${message.event.kind}:${message.event.kind === 'tool_call' ? message.event.tool : ''}`] : message.t === 'tool' ? [`ask:${message.name}`] : []));
+    // The command and its result, then the session's own record of the call, then the call reaches the supervisor.
+    expect(order.slice(0, 4)).toEqual(['tool_call:Bash', 'tool_result:', 'tool_call:mcp__engine__report_done', 'ask:report_done']);
+  });
+
   it('rejects an engine-tool input that breaks its schema before it reaches the supervisor', async () => {
     let reply: { ok: boolean; text: string } | undefined;
     const runtime = fakeRuntime(async (turn) => {

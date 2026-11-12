@@ -315,6 +315,8 @@ export class Flow {
     const beat = setInterval(waiting, this.host.gateHeartbeatMs ?? 60_000);
     try {
       const [result] = await this.host.gates.run([gate], site.folder, { limits: this.host.gateLimits(site.folder, site.team) });
+      // Recorded on the run, apart from the engine's own results: a reviewer's own gate run can stand as proof.
+      this.change((tx) => tx.emit({ kind: 'gate_finished', runId: run.id, taskId: task.id, result: result!, asked: true }));
       return { ok: true, text: `${name}: ${result!.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${result!.exitCode})\n${result!.output.slice(-3000)}` };
     } finally {
       clearInterval(beat);
@@ -511,16 +513,18 @@ export class Flow {
    * The gates a task names, in its own order. A gate it names that its repository no longer has is not passed over:
    * work that was to be checked would land unchecked. It stops here, and the card says which gate is missing.
    */
-  private gatesOf(task: Task, repo: Repo): Gate[] {
-    const missing = task.gates.filter((name) => !repo.gates.some((gate) => gate.name === name));
+  private gatesOf(task: Task, repo: Repo, claimed: string[] = []): Gate[] {
+    // The task's own gates, then those a report claimed: the engine runs a claimed gate itself, and its result stands for the claim.
+    const names = [...task.gates, ...claimed.filter((name) => !task.gates.includes(name))];
+    const missing = names.filter((name) => !repo.gates.some((gate) => gate.name === name));
     if (missing.length > 0) throw new Error(`the gate ${missing.map((name) => `"${name}"`).join(', ')} that this task names is no longer among the gates of ${repo.path} (${repo.gates.map((gate) => gate.name).join(', ') || 'it has none'}). Put it back under that name, then retry`);
-    return repo.gates.filter((gate) => task.gates.includes(gate.name)).sort((a, b) => task.gates.indexOf(a.name) - task.gates.indexOf(b.name));
+    return repo.gates.filter((gate) => names.includes(gate.name)).sort((a, b) => names.indexOf(a.name) - names.indexOf(b.name));
   }
 
   /** Runs the task's gates in its folder and stores the real results with the run. A failure sends the work back. */
   private async gatesPass(runId: string, task: Task): Promise<boolean> {
     const site = this.site(task);
-    const gates = site ? this.gatesOf(task, site.repo) : [];
+    const gates = site ? this.gatesOf(task, site.repo, store.getRun(this.db, runId)?.claimedGates ?? []) : [];
     if (!site || gates.length === 0) return true;
     const results = await this.host.gates.run(gates, site.folder, {
       onStart: (gate) => this.change((tx) => tx.emit({ kind: 'gate_started', runId, taskId: task.id, name: gate.name })),

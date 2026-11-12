@@ -87,7 +87,11 @@ describe('changesOf', () => {
   it('appends a gate result to its run', () => {
     const result = { name: 'tests', command: 'npm test', exitCode: 1, output: 'boom', durationMs: 3 };
     const [change] = changesOf(row({ kind: 'gate_finished', runId: 'run1', taskId: 'task1', result }), () => run({ outcome: 'done' }));
-    expect((change!.row as { gateResults: unknown[] }).gateResults).toEqual([result]);
+    // With when it finished, as the engine recorded it.
+    expect((change!.row as { gateResults: unknown[] }).gateResults).toEqual([{ ...result, at: T0.toISOString() }]);
+    // One the run asked for while it worked is kept apart from the engine's own.
+    const [asked] = changesOf(row({ kind: 'gate_finished', runId: 'run1', taskId: 'task1', result, asked: true }), () => run({ outcome: 'running' }));
+    expect(asked!.row).toMatchObject({ gateResults: [], askedGates: [{ ...result, at: T0.toISOString() }] });
   });
 
   it('changes nothing for a run it has never seen', () => {
