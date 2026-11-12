@@ -30,6 +30,7 @@ import { buildJob, folderOf, sessionEnv } from './jobs.ts';
 import { canTransition } from './taskState.ts';
 import { remember } from './memory.ts';
 import { builtOnFor, indexFor, onContractVersion, onReadDecisions, onRecordDecision, recordSection } from './record.ts';
+import { dirOf } from './recordFiles.ts';
 import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
@@ -747,6 +748,12 @@ export class Supervisor {
   }
 
   /** May this tool call run? Asked for every call of every session. A refusal that needs the user stops the run and raises a card. */
+  /** The folders of a task's repository that only the engine writes. */
+  private engineDirs(task: Task): string[] {
+    const dir = dirOf(task.repoId ? store.getRepo(this.db, task.repoId) : undefined);
+    return dir ? [dir] : [];
+  }
+
   protected judge(run: Run, call: { id: string; tool: string; input: unknown }): { allow: boolean; reason?: string; stop?: boolean } {
     const task = store.getTask(this.db, run.taskId);
     const employee = store.getEmployee(this.db, run.employeeId);
@@ -754,7 +761,7 @@ export class Supervisor {
     const company = store.getCompany(this.db);
     if (!task || !employee || !team || !company) return { allow: false, reason: 'Refused: this run has lost its task.', stop: true };
     const folder = folderOf(this.paths, task);
-    const verdict = judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: store.grantsOf(this.db, task.id), protect: engineFiles(this.paths) }, call);
+    const verdict = judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: store.grantsOf(this.db, task.id), protect: engineFiles(this.paths), engineDirs: this.engineDirs(task) }, call);
     const now = this.now();
     if (verdict.useGrant) {
       const grant = store.grantsOf(this.db, task.id).find((g) => g.id === verdict.useGrant)!;
@@ -802,7 +809,7 @@ export class Supervisor {
     const company = store.getCompany(this.db);
     if (!task || !employee || !team || !company) return;
     const folder = folderOf(this.paths, task);
-    if (judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: [], protect: engineFiles(this.paths) }, call).allow) return;
+    if (judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: [], protect: engineFiles(this.paths), engineDirs: this.engineDirs(task) }, call).allow) return;
     const named = String((call.input as { file_path?: unknown } | null)?.file_path ?? '');
     const now = this.now();
     apply(

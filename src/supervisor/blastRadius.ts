@@ -64,8 +64,11 @@ const home = (entry: string): string => {
 };
 const isEnvFile = (file: string): boolean => /^\.env(\..+)?$/i.test(path.basename(file)) && !/\.(example|sample|template)$/i.test(file);
 
-/** `protect` is the engine's own files (its token, its database): no session reads those. */
-export type Radius = { task: Task; team: Team; employee: Employee; mode: RunMode; folder: string; company: Company; grants: Grant[]; protect?: string[] | undefined };
+/**
+ * `protect` is the engine's own files (its token, its database): no session reads those.
+ * `engineDirs` are folders of the task's repository that the engine writes and nobody else does (its decision files).
+ */
+export type Radius = { task: Task; team: Team; employee: Employee; mode: RunMode; folder: string; company: Company; grants: Grant[]; protect?: string[] | undefined; engineDirs?: string[] | undefined };
 
 /**
  * What a command may touch. A session's commands and a repository's gates get the same lists:
@@ -169,6 +172,9 @@ function judge(ctx: Radius, call: ToolCall): Verdict {
       const relative = target.slice(folder.length + 1);
       if (relative === '') return refuse('wants to write over its task folder itself');
       if (relative.split(path.sep).some((part) => part.toLowerCase() === '.git')) return refuse(`wants to write ${relative}, inside a git directory, which only the engine changes`);
+      // Not a card: there is nothing for the user to allow. The session is told where such a thing belongs and carries on.
+      const engineDir = (ctx.engineDirs ?? []).find((dir) => relative === dir || relative.startsWith(`${dir}${path.sep}`));
+      if (engineDir) return { allow: false, reason: `Refused: the engine writes the files in ${engineDir}, one for each decision on record, and nobody else does. A decision gets there by being recorded: mcp__engine__record_decision, which is a lead's tool (ask yours with mcp__engine__request_decision).` };
       if (!owns(ctx.task.ownership, relative)) return refuse(`wants to change ${relative}, which is outside what this task owns (${ctx.task.ownership.join(', ')})`);
       return { allow: true };
     }

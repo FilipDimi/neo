@@ -22,6 +22,7 @@ import { countsCost } from '../shared/view.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import { builtOnFor, contractProblem, issueContractVersion } from './record.ts';
+import { dirOf, entriesFor, padded, underRecord, writeRecordFiles } from './recordFiles.ts';
 import * as decisions from './decisions.ts';
 import { writtenFiles } from '../api/files.ts';
 import { buildDecidingTurn, buildFirstTurn, findingLines, type Part } from './definition.ts';
@@ -337,7 +338,9 @@ export class Flow {
       case 'work': {
         if (this.site(task)) {
           if (!(await this.committed(run, task))) return;
-          if (!this.ownershipHolds(run, await this.changed(task), task)) return;
+          const changed = await this.changed(task);
+          if (!this.ownershipHolds(run, this.withoutRecord(task, changed), task)) return;
+          if (!(await this.recordFilesHold(task, changed))) return;
           if (!(await this.contractHolds(task))) return;
           if (!(await this.gatesPass(run.id, task))) return;
         }
@@ -360,11 +363,46 @@ export class Flow {
       if (!(await isMerged(site.folder, child.branch!))) return this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'integrate', employeeId: run.employeeId, reason: 'integrate' }, now) }));
     }
     // A split is not a way around what the task owns: what the parts changed between them, and what the lead changed putting them together, is held to it.
-    if (checkOwnership && !this.ownershipHolds(run, await this.changed(task), task, true)) return;
+    const changed = await this.changed(task);
+    if (checkOwnership && !this.ownershipHolds(run, this.withoutRecord(task, changed), task, true)) return;
+    if (!(await this.recordFilesHold(task, changed))) return;
     if (!(await this.contractHolds(task))) return;
     if (!(await this.gatesPass(run.id, task))) return;
     // Each part was reviewed on its own; how they were put together was not. That is reviewed too before anything lands.
     return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
+  }
+
+  /** The files a ticket changed, without the decision files: those are the engine's, and no ticket has to own them. */
+  private withoutRecord(task: Task, changed: string[]): string[] {
+    const dir = dirOf(this.site(task)?.repo);
+    return dir ? changed.filter((file) => !file.startsWith(`${dir}/`)) : changed;
+  }
+
+  /**
+   * Only the engine writes in the decisions folder. A decision's file that was changed or removed is put back as the
+   * engine wrote it, and nothing more is said. A file of the ticket's own there sends the work back: false.
+   */
+  private async recordFilesHold(task: Task, changed: string[]): Promise<boolean> {
+    const site = this.site(task)!;
+    const { ours, strays } = underRecord(this.db, site.repo, changed);
+    if (ours.length > 0 && writeRecordFiles(this.db, site.repo, site.folder, ours).length > 0) {
+      await commitAll(site.folder, ENGINE, 'Record: decision files put back as the engine wrote them', task.branch ?? undefined);
+      await publish(site.repo.path, site.folder, task.branch!);
+    }
+    if (strays.length === 0) return true;
+    this.sendBack(
+      task,
+      `Only the engine writes in ${dirOf(site.repo)}: it keeps one file there for each decision on record. Remove ${strays.slice(0, 8).join(', ')} (what it says belongs somewhere else, or in a decision your lead records), then call mcp__engine__report_done again.`,
+      `"${task.title}" put a file of its own in the engine's decisions folder`,
+    );
+    return false;
+  }
+
+  /** At a landing the repository is given the decisions it does not have yet, as one commit of the engine's. Nothing new, no commit. */
+  private async writeRecord(task: Task): Promise<void> {
+    const site = this.site(task)!;
+    if (writeRecordFiles(this.db, site.repo, site.folder).length === 0) return;
+    await commitAll(site.folder, ENGINE, `Record: decisions up to ${padded(entriesFor(this.db, site.repo).at(-1)!.id)}`, task.branch ?? undefined);
   }
 
   /**
@@ -664,6 +702,7 @@ export class Flow {
       failedGate = results.find((r) => r.exitCode !== 0);
       return failedGate === undefined;
     };
+    await this.writeRecord(task);
     for (let attempt = 0; attempt < 3; attempt++) {
       const landing = await landOn(site.repo.path, site.folder, task.branch!, target, ENGINE, recheck);
       switch (landing.result) {

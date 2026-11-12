@@ -26,6 +26,7 @@ export function recordDecision(tx: Tx, db: Db, now: Date, input: NewEntry): Reco
   if (input.replaces && !replaced) throw new Error(`There is no decision ${input.replaces} to replace.`);
   if (replaced?.replacedBy) throw new Error(`${replaced.id} was already replaced by ${replaced.replacedBy}. Replace that one, if this reverses it.`);
   const n = (store.allRecord(db).at(-1)?.n ?? 0) + 1;
+  const about = input.taskId ? store.getTask(db, input.taskId) : undefined;
   const entry: RecordEntry = {
     id: entryId(n),
     n,
@@ -38,6 +39,8 @@ export function recordDecision(tx: Tx, db: Db, now: Date, input: NewEntry): Reco
     replaces: replaced?.id ?? null,
     replacedBy: null,
     ...(input.detail ? { detail: input.detail } : {}),
+    byName: whoDecided(db, { by: input.by }),
+    ...(about ? { taskTitle: about.title } : {}),
   };
   tx.emit({ kind: 'record_changed', entry });
   if (replaced) tx.emit({ kind: 'record_changed', entry: { ...replaced, replacedBy: entry.id } });
@@ -200,7 +203,7 @@ export function recordSection(db: Db, index: RecordIndex): string {
 // ---------- in words ----------
 
 /** Who decided, as a reader is told it. */
-export function whoDecided(db: Db, entry: RecordEntry): string {
+export function whoDecided(db: Db, entry: Pick<RecordEntry, 'by'>): string {
   const name = entry.by.employeeId ? store.getEmployee(db, entry.by.employeeId)?.name : undefined;
   if (entry.by.kind === 'user') return 'the user';
   if (entry.by.kind === 'chief') return `${name ?? 'the chief of staff'}, for the user`;

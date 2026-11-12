@@ -178,6 +178,9 @@ export const RecordEntry = z.object({
   replacedBy: z.string().nullable(),
   /** For one filed from a card: the question and the answer, whole. */
   detail: z.string().optional(),
+  /** Who decided and on which ticket, in the words of the day it was recorded. Its file is written from these, so a later rename changes no file. */
+  byName: z.string().optional(),
+  taskTitle: z.string().optional(),
   /** Imported from a log kept by hand: it lives in that file and is never written as a file of its own. */
   archived: z.boolean().optional(),
   /** Where an import found it, when it had to be given a new number. */
