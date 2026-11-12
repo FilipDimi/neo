@@ -846,7 +846,7 @@ export class Supervisor {
   /** What a run's report or review said was checked, as it held: written on the run when it ends. */
   private claimed(runId: string): Partial<Run> {
     const claims = this.claims.get(runId);
-    return claims ? { checks: claims.checks, claimedGates: claims.gates } : {};
+    return claims ? { checks: claims.checks, claimedGates: claims.gates, claimedFromProse: claims.fromProse } : {};
   }
 
   /** The model called one of the engine's tools. */

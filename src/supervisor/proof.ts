@@ -12,21 +12,29 @@ import type { Check } from '../worker/protocol.ts';
 
 export type Proof = { holds: true } | { holds: false; why: string };
 
-const PASSING = /\b(pass|passed|passes|passing|green|clean|succeed|succeeded|ok)\b/i;
-/** How far from a gate's name a word that says it passed may be, in characters, either side. */
+const PASSING = /\b(pass|passed|passes|passing|green|clean|succeed|succeeds|succeeded|success|successful|ok)\b/i;
+/** A sentence that says a thing does not pass, or will only later, claims nothing: "fails", "not green", "will pass once…". */
+const DOUBT = /\b(not|no|never|cannot|fail|fails|failed|failing|until|once|will|yet)\b|n't\b/i;
+/** How far from a gate's name a word that says it passed may be, in characters, either side, inside one sentence. */
 const WINDOW = 40;
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** The gates of a repository that a text says passed: a gate's name, as a word of its own, near a word that says so. */
+/**
+ * The gates of a repository that a text says passed: a gate's name, as a word of its own (not part of a word or of a
+ * path), in a sentence that says it passed and does not doubt it.
+ */
 export function gatesNamedAsPassing(text: string, gates: string[]): string[] {
+  const sentences = text.split(/(?<=[.!?;])\s+|\n+/);
   return gates.filter((gate) => {
-    // A name is a word of its own when no letter, digit or dash touches it on either side.
-    const named = new RegExp(`(?<![\\w-])${escape(gate)}(?![\\w-])`, 'gi');
-    for (const found of text.matchAll(named)) {
-      const near = text.slice(Math.max(0, found.index - WINDOW), found.index + gate.length + WINDOW);
-      if (PASSING.test(near)) return true;
-    }
-    return false;
+    const named = new RegExp(`(?<![\\w./-])${escape(gate)}(?![\\w/-]|\\.\\w)`, 'gi');
+    return sentences.some((sentence) => {
+      if (DOUBT.test(sentence)) return false;
+      for (const found of sentence.matchAll(named)) {
+        const near = sentence.slice(Math.max(0, found.index - WINDOW), found.index + gate.length + WINDOW);
+        if (PASSING.test(near)) return true;
+      }
+      return false;
+    });
   });
 }
 
@@ -34,16 +42,26 @@ const tidy = (command: string): string => command.replace(/\s+/g, ' ').trim();
 type Inner = { kind: string; id?: string; tool?: string; input?: unknown; ok?: boolean };
 const inner = (row: EventRow): Inner | null => (row.event.kind === 'run_event' ? (row.event.event as Inner) : null);
 
-/** A command the run ran: it ran it with the Bash tool after its last Write or Edit, and the call did not come back as an error. */
-export function commandProof(rows: EventRow[], command: string): Proof {
+/** A call that succeeds whatever the command in it does: its success says nothing. */
+const HIDES_FAILURE = /\|\|\s*(true|:)\b|;\s*(true|:|exit 0)\s*$|&\s*$|^\s*echo\b/;
+
+/**
+ * A command the run ran: the last call that holds it, after the run's last Write or Edit, ran with the Bash tool and
+ * did not come back as an error. What is shown is that call as it was made, not the words the claim used.
+ */
+export function commandProof(rows: EventRow[], command: string): { holds: true; ran: string } | { holds: false; why: string } {
   const wanted = tidy(command);
   if (!wanted) return { holds: false, why: 'a command check names the command it ran' };
   const events = rows.flatMap((row) => inner(row) ?? []);
   const lastChange = events.findLastIndex((event) => event.kind === 'tool_call' && (event.tool === 'Write' || event.tool === 'Edit'));
   const results = new Map(events.filter((event) => event.kind === 'tool_result').map((event) => [event.id, event.ok === true]));
-  const ran = events.slice(lastChange + 1).filter((event) => event.kind === 'tool_call' && event.tool === 'Bash' && tidy(String((event.input as { command?: unknown } | undefined)?.command ?? '')).includes(wanted));
-  if (ran.length === 0) return { holds: false, why: `this run did not run \`${wanted}\` after its last change` };
-  return ran.some((call) => results.get(call.id) === true) ? { holds: true } : { holds: false, why: `this run ran \`${wanted}\` after its last change, and it failed` };
+  const commandOf = (event: Inner) => tidy(String((event.input as { command?: unknown } | undefined)?.command ?? ''));
+  const last = events.slice(lastChange + 1).findLast((event) => event.kind === 'tool_call' && event.tool === 'Bash' && commandOf(event).includes(wanted));
+  if (!last) return { holds: false, why: `this run did not run \`${wanted}\` after its last change` };
+  const ran = commandOf(last);
+  if (HIDES_FAILURE.test(ran)) return { holds: false, why: `this run ran \`${ran}\`, which succeeds whatever the command does` };
+  if (!results.has(last.id)) return { holds: false, why: `this run ran \`${wanted}\` and its result is not in yet` };
+  return results.get(last.id) ? { holds: true, ran } : { holds: false, why: `this run ran \`${wanted}\` after its last change, and it failed` };
 }
 
 /** A file the work has, and a line in it: inside the work's folder, never outside it. */
@@ -65,7 +83,17 @@ export function fileProof(folder: string, file: string, line?: number): Proof {
   return { holds: true };
 }
 
-export type Claims = { checks: VerifiedCheck[]; gates: string[] };
+/** `fromProse`: the gates among `gates` that were not listed, only named as passing in the prose. */
+/** True when a folder holds a file, git's own aside: something a check could cite. */
+export function hasFiles(folder: string): boolean {
+  try {
+    return (fs.readdirSync(folder, { recursive: true }) as string[]).some((name) => !name.split(path.sep).includes('.git') && fs.statSync(path.join(folder, name)).isFile());
+  } catch {
+    return false;
+  }
+}
+
+export type Claims = { checks: VerifiedCheck[]; gates: string[]; fromProse: string[] };
 
 /**
  * A report's or a review's checks, verified: what holds is returned, with the gates claimed in the list or named as
@@ -83,7 +111,7 @@ export function verifyClaims(input: { checks: Check[]; prose: string; repoGates:
     } else if ('command' in check) {
       const proof = commandProof(input.rows, check.command);
       if (!proof.holds) return { refused: `Your checks list \`${tidy(check.command)}\`, but ${proof.why}. List only what you ran after your last change and what succeeded, or run it now.` };
-      checks.push({ kind: 'command', what: tidy(check.command), shown: `ran ${tidy(check.command)}` });
+      checks.push({ kind: 'command', what: proof.ran, shown: `ran ${proof.ran.length > 120 ? `${proof.ran.slice(0, 119)}…` : proof.ran}` });
     } else {
       const proof = fileProof(input.folder, check.file, check.line);
       const where = `${check.file.trim().replace(/^\.\//, '')}${check.line ? `:${check.line}` : ''}`;
@@ -91,6 +119,7 @@ export function verifyClaims(input: { checks: Check[]; prose: string; repoGates:
       checks.push({ kind: 'file', what: check.file.trim().replace(/^\.\//, ''), ...(check.line ? { line: check.line } : {}), shown: `cites ${where}` });
     }
   }
+  const listed = new Set(gates);
   for (const gate of gatesNamedAsPassing(input.prose, input.repoGates)) gates.add(gate);
-  return { checks, gates: [...gates] };
+  return { checks, gates: [...gates], fromProse: [...gates].filter((gate) => !listed.has(gate)) };
 }

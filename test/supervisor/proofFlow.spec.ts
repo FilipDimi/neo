@@ -73,12 +73,15 @@ describe('a done report says what was checked, and only what holds is kept', () 
     expect(replies[1]!.text).toMatch(/There is no gate "lint" here \(the gates are: greeting, farewell\)/);
     // The prose said the farewell gate passes. The engine ran it: it failed, and the work went back with its output.
     expect(told[1]).toMatch(/"farewell" failed/);
+    // The author is told why a gate it never named was run: its own words.
+    expect(told[1]).toContain('Your report said the gate "farewell" passes, so the engine ran it.');
     const [first] = store.runsOf(setup.w.db, task.id).filter((run) => run.mode === 'work');
     expect(first!.checks).toEqual([
-      { kind: 'command', what: 'cargo test -p jobs', shown: 'ran cargo test -p jobs' },
+      { kind: 'command', what: 'cd sub && cargo test -p jobs', shown: 'ran cd sub && cargo test -p jobs' },
       { kind: 'file', what: 'GREETING.md', line: 1, shown: 'cites GREETING.md:1' },
     ]);
     expect(first!.claimedGates).toEqual(['farewell']);
+    expect(first!.claimedFromProse).toEqual(['farewell']);
     expect(first!.gateResults.map((result) => [result.name, result.exitCode === 0])).toEqual([['greeting', true], ['farewell', false]]);
     expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
     expect(fileAt(setup.repoPath, 'team', 'FAREWELL.md')).toBe('Goodbye.');
@@ -118,7 +121,7 @@ describe('a review says what it checked, and an approval waits for the gates it 
     const task = greet(setup.w);
     await drain(setup);
     expect(replies.map((reply) => reply.ok)).toEqual([false, true]);
-    expect(replies[0]!.text).toBe('An approval says what you checked: list at least one gate, command or file.');
+    expect(replies[0]!.text).toBe('An approval says what you checked: list at least one gate or file.');
     const review = store.runsOf(setup.w.db, task.id).find((run) => run.mode === 'review')!;
     expect(review.checks).toEqual([{ kind: 'file', what: 'GREETING.md', line: 1, shown: 'cites GREETING.md:1' }]);
     expect(store.getTask(setup.w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
@@ -144,6 +147,9 @@ describe('a review says what it checked, and an approval waits for the gates it 
     expect(reviews).toBe(2);
     expect(told[1]).toMatch(/"farewell" failed/);
     const [first, second] = store.runsOf(setup.w.db, task.id).filter((run) => run.mode === 'review');
+    // An approval whose gate then failed is not an approval: it sent the work back.
+    expect(first!.reason).toBe('sent_back');
+    expect(second!.reason).toBe('approved');
     expect(first!.claimedGates).toEqual(['farewell']);
     expect(first!.gateResults.map((result) => [result.name, result.exitCode === 0])).toEqual([['farewell', false]]);
     expect(second!.gateResults.map((result) => [result.name, result.exitCode === 0])).toEqual([['farewell', true]]);
@@ -194,5 +200,45 @@ describe('a review says what it checked, and an approval waits for the gates it 
     await drain(setup);
     expect(store.getTask(w.db, task.id)).toMatchObject({ state: 'failed', mergedInto: null });
     expect(fileAt(repoPath, 'team', 'GREETING.md')).toBeNull();
+  });
+
+  it('approves work on a team without a repository that left nothing to cite', async () => {
+    const replies: { ok: boolean }[] = [];
+    const fixture = inProcess(
+      staged(async (s) => {
+        if (s.mode === 'work') await s.engine('report_done', { summary: 'The answer is in this report: use the second layout.' });
+        if (s.mode === 'review') replies.push(await s.engine('submit_review', { verdict: 'approve', notes: 'Sound.', findings: [] }));
+      }),
+    );
+    const w = (open = world(fixture.spawn, { teams: [team({ leadId: 'lead' })], employees: people }));
+    const task = w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Pick a layout', brief: 'Say which.', doneCondition: 'One is picked.', capUsd: 2 });
+    await drain({ w, fixture, repoPath: '' });
+    expect(replies.map((reply) => reply.ok)).toEqual([true]);
+    expect(store.getTask(w.db, task.id)!.state).toBe('done');
+  });
+
+  it('clears what a gate the reviewer ran left in the folder, so the author does not commit it', async () => {
+    const litter: Gate = { name: 'litter', command: 'echo built > BUILD-INFO.txt', timeoutMinutes: 1, lock: null };
+    let reviews = 0;
+    const fixture = inProcess(
+      staged(async (s) => {
+        if (s.mode === 'work') {
+          s.write('GREETING.md', s.resumed ? 'Hello, and welcome.\n' : 'yo\n');
+          await s.engine('report_done', { summary: 'Added.' });
+        }
+        if (s.mode === 'review') {
+          if (++reviews === 1) {
+            await s.engine('run_gate', { name: 'litter' });
+            await s.engine('submit_review', { verdict: 'send_back', notes: 'Too curt.', findings: [] });
+          } else await s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], checks: [{ file: 'GREETING.md' }] });
+        }
+      }),
+    );
+    const repoPath = gitRepo();
+    const w = (open = world(fixture.spawn, { repos: [repo({ path: repoPath, gates: [...GATES, litter] })], teams: [team({ leadId: 'lead', repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: 'team' }] })], employees: people }));
+    const task = greet(w);
+    await drain({ w, fixture, repoPath });
+    expect(store.getTask(w.db, task.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+    expect(fileAt(repoPath, 'team', 'BUILD-INFO.txt')).toBeNull();
   });
 });

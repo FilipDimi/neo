@@ -21,12 +21,13 @@ import type { Decision, Employee, Finding, Gate, GateResult, Repo, Run, RunOutco
 import { checkedLine, countsCost } from '../shared/view.ts';
 import { TOOL_INPUT, type Check } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
-import type { Claims } from './proof.ts';
+import { hasFiles, type Claims } from './proof.ts';
 import { builtOnFor, contractProblem, issueContractVersion } from './record.ts';
 import { dirOf, entriesFor, padded, underRecord, writeRecordFiles } from './recordFiles.ts';
 import * as decisions from './decisions.ts';
 import { writtenFiles } from '../api/files.ts';
 import { buildDecidingTurn, buildFirstTurn, findingLines, type Part } from './definition.ts';
+import { folderOf } from './jobs.ts';
 import { reviewerFor } from './scheduler.ts';
 import { canTransition } from './taskState.ts';
 
@@ -288,11 +289,14 @@ export class Flow {
     // What the reviewer says it checked counts only if it holds; an approval has to say something it checked.
     const claims = this.host.verify(run, checks, notes);
     if ('refused' in claims) return { ok: false, text: claims.refused };
-    if (verdict === 'approve' && claims.checks.length === 0 && claims.gates.length === 0) return { ok: false, text: 'An approval says what you checked: list at least one gate, command or file.' };
+    // Something must be named, where there is anything to name: work with no repository that left no file is judged on its report.
+    const citable = Boolean(this.site(task)) || hasFiles(folderOf(this.host.paths, task));
+    if (verdict === 'approve' && citable && claims.checks.length === 0 && claims.gates.length === 0) return { ok: false, text: 'An approval says what you checked: list at least one gate or file.' };
     // The verdict stays with the run: what a merge card says about the work is read from it, never from the fact that a review happened.
     this.verdicts.set(run.id, VERDICT[verdict]);
-    this.host.planRunEnd(run.id, 'done', VERDICT[verdict], { findings, checks: claims.checks, claimedGates: claims.gates });
-    if (verdict === 'approve') this.host.engineWork(task.id, () => this.approved(run, task, claims.gates));
+    const record = { findings, checks: claims.checks, claimedGates: claims.gates, claimedFromProse: claims.fromProse };
+    this.host.planRunEnd(run.id, 'done', VERDICT[verdict], record);
+    if (verdict === 'approve') this.host.engineWork(task.id, () => this.approved(run, task, claims, record));
     else if (verdict === 'send_back')
       this.sendBack(
         task,
@@ -324,6 +328,8 @@ export class Flow {
       const [result] = await this.host.gates.run([gate], site.folder, { limits: this.host.gateLimits(site.folder, site.team) });
       // Recorded on the run, apart from the engine's own results: a reviewer's own gate run can stand as proof.
       this.change((tx) => tx.emit({ kind: 'gate_finished', runId: run.id, taskId: task.id, result: result!, asked: true }));
+      // A reviewer has no work of its own in the folder: what the gate wrote there is cleared, or the author's next commit would take it.
+      if (run.mode === 'review') await discardChanges(site.folder);
       return { ok: true, text: `${name}: ${result!.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${result!.exitCode})\n${result!.output.slice(-3000)}` };
     } finally {
       clearInterval(beat);
@@ -547,7 +553,9 @@ export class Flow {
     // send-back would only repeat it: the lead who chose the gate judges it in review, with the failure in front of it.
     // The gates of the whole task are the user's, and those hold: they are run when the parts are put together.
     if (current.parentId && this.failedLastTime(current.id, runId, failed.name) && this.hasReviewer(current, runId)) return true;
-    this.sendBackForGate(current, failed);
+    // A gate the task never named ran because the report said it passes: the author is told that was why.
+    const said = store.getRun(this.db, runId)?.claimedFromProse?.includes(failed.name) ? `Your report said the gate "${failed.name}" passes, so the engine ran it. ` : '';
+    this.sendBackForGate(current, failed, said);
     return false;
   }
 
@@ -567,10 +575,10 @@ export class Flow {
     return reviewer !== undefined && !reviewer.fired;
   }
 
-  private sendBackForGate(task: Task, failed: GateResult): void {
+  private sendBackForGate(task: Task, failed: GateResult, why = ''): void {
     this.sendBack(
       task,
-      `The engine ran the gates on your work and "${failed.name}" failed (exit ${failed.exitCode}):\n\`\`\`\n${failed.output.trim().slice(-3000) || '(no output)'}\n\`\`\`\nFix it, then call mcp__engine__report_done again.${
+      `${why}The engine ran the gates on your work and "${failed.name}" failed (exit ${failed.exitCode}):\n\`\`\`\n${failed.output.trim().slice(-3000) || '(no output)'}\n\`\`\`\nFix it, then call mcp__engine__report_done again.${
         task.parentId
           ? `\nIf it fails only because of files this sub-task does not own (it owns ${task.ownership.join(', ') || 'everything in its folder'}), do not touch those files and do not ask about it: call mcp__engine__report_done again and say in your summary what the gate needs that is not yours. Your lead decides from there.`
           : ''
@@ -643,10 +651,14 @@ export class Flow {
    * An approval takes effect once every gate it claims holds on the work as it is: the reviewer ran it itself, or the
    * engine did at the commit step. A gate nobody ran the engine runs now; one that fails sends the work back instead.
    */
-  private async approved(review: Run, task: Task, claimed: string[]): Promise<void> {
+  private async approved(review: Run, task: Task, claims: Claims, record: Partial<Run>): Promise<void> {
     const site = this.site(task);
     const author = store.runsOf(this.db, task.id).findLast(authored);
     const passing = (results: GateResult[] | undefined, name: string) => results?.findLast((result) => result.name === name)?.exitCode === 0;
+    // A gate only named in the notes, that the engine already ran on this work, is not run again: the engine's result stands
+    // (a lead may approve knowing a gate fails for a reason outside this part).
+    const ranAlready = (name: string) => author?.gateResults.some((result) => result.name === name) ?? false;
+    const claimed = claims.gates.filter((name) => !(claims.fromProse.includes(name) && ranAlready(name)));
     const unproven = site ? claimed.filter((name) => !passing(store.getRun(this.db, review.id)?.askedGates, name) && !passing(author?.gateResults, name)) : [];
     if (site && unproven.length > 0) {
       const gates = this.gatesOf({ ...task, gates: [] }, site.repo, unproven);
@@ -659,7 +671,14 @@ export class Flow {
       // Stopped while the gate ran: nothing more happens to it.
       if (!current || current.state === 'done' || current.state === 'failed') return;
       const failed = results.find((result) => result.exitCode !== 0);
-      if (failed) return this.sendBackForGate(current, failed);
+      if (failed) {
+        // Not an approval after all: what it claimed failed, and the work goes back. The review is recorded as that.
+        this.verdicts.set(review.id, VERDICT.send_back);
+        const run = store.getRun(this.db, review.id);
+        if (run?.outcome === 'running') this.host.planRunEnd(review.id, 'done', VERDICT.send_back, record);
+        else if (run) this.change((tx) => tx.emit({ kind: 'run_ended', run: { ...run, reason: VERDICT.send_back }, teamId: task.teamId }));
+        return this.sendBackForGate(current, failed, claims.fromProse.includes(failed.name) ? `The review said the gate "${failed.name}" passes, so the engine ran it. ` : '');
+      }
     }
     return this.finish(task.id);
   }

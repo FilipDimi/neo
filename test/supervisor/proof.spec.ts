@@ -27,8 +27,8 @@ describe('what counts as proof', () => {
 
   it('holds a command this run ran after its last write, and says why when it does not', () => {
     const rows = [call('w1', 'Write', { file_path: 'a.rs' }), result('w1', true), call('c1', 'Bash', { command: 'cargo  test -p jobs' }), result('c1', true), call('c2', 'Bash', { command: 'cd backend && cargo test -p api' }), result('c2', true), call('c3', 'Bash', { command: 'cargo clippy' }), result('c3', false)];
-    expect(commandProof(rows, 'cargo test -p jobs')).toEqual({ holds: true });
-    expect(commandProof(rows, 'cargo test -p api')).toEqual({ holds: true });
+    expect(commandProof(rows, 'cargo test -p jobs')).toEqual({ holds: true, ran: 'cargo test -p jobs' });
+    expect(commandProof(rows, 'cargo test -p api')).toEqual({ holds: true, ran: 'cd backend && cargo test -p api' });
     expect(commandProof(rows, 'cargo clippy')).toEqual({ holds: false, why: 'this run ran `cargo clippy` after its last change, and it failed' });
     expect(commandProof(rows, 'cargo fmt --check')).toEqual({ holds: false, why: 'this run did not run `cargo fmt --check` after its last change' });
     // A change after the command: the command no longer speaks for the work as it is.
@@ -59,5 +59,27 @@ describe('what counts as proof', () => {
     expect(checkedLine({ gateResults: [], checks: files.slice(0, 2) })).toBe('Checked: cites a.rs · cites b.rs');
     expect(checkedLine({ gateResults: [] })).toBeNull();
     expect(checkedLine({ gateResults: [gate('rust', 0), gate('rust', 0)] })).toMatch(/^Checked: rust \(gate, passed \d\d:\d\d\)$/);
+  });
+
+  it('does not take a gate said not to pass, a gate in another sentence, or a folder of a path, as claimed', () => {
+    const gates = ['tests', 'contract', 'ios', 'rust'];
+    expect(gatesNamedAsPassing('The tests gate fails only because of the other half; it will pass once integrated.', gates)).toEqual([]);
+    expect(gatesNamedAsPassing('rust is not green yet. contract does not pass.', gates)).toEqual([]);
+    expect(gatesNamedAsPassing("tests won't pass until the fixture lands.", gates)).toEqual([]);
+    expect(gatesNamedAsPassing('Unit tests pass. Did not touch the contract.', gates)).toEqual(['tests']);
+    expect(gatesNamedAsPassing('Edited backend/rust/src/main.rs and it is ok.', gates)).toEqual([]);
+    expect(gatesNamedAsPassing('The ios gate succeeds now. rust: success.', gates)).toEqual(['ios', 'rust']);
+    expect(gatesNamedAsPassing('tests passed.', gates)).toEqual(['tests']);
+  });
+
+  it('decides a command on its last run, does not count one whose failure was hidden, and shows what ran', () => {
+    const rows = [call('c1', 'Bash', { command: 'cargo test' }), result('c1', true), call('c2', 'Bash', { command: 'cargo test' }), result('c2', false)];
+    expect(commandProof(rows, 'cargo test')).toEqual({ holds: false, why: 'this run ran `cargo test` after its last change, and it failed' });
+    for (const hidden of ['cargo test || true', 'cargo test; true', 'echo cargo test', 'cargo test &']) {
+      const masked = [call('h1', 'Bash', { command: hidden }), result('h1', true)];
+      expect(commandProof(masked, 'cargo test'), hidden).toEqual({ holds: false, why: `this run ran \`${hidden}\`, which succeeds whatever the command does` });
+    }
+    const piped = [call('p1', 'Bash', { command: 'cd backend && cargo test 2>&1 | tail -20' }), result('p1', true)];
+    expect(commandProof(piped, 'cargo test')).toEqual({ holds: true, ran: 'cd backend && cargo test 2>&1 | tail -20' });
   });
 });

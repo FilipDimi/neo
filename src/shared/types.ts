@@ -261,6 +261,8 @@ export const Run = z.object({
   checks: z.array(VerifiedCheck).optional(),
   /** The gates its report or review claimed; the engine runs each one itself. */
   claimedGates: z.array(z.string()).optional(),
+  /** Of those, the ones only named as passing in the prose, not listed: the author is told so if one fails. */
+  claimedFromProse: z.array(z.string()).optional(),
   /** Gates it asked the engine to run while it worked (run_gate). Kept apart from the engine's own: for an author they came before the commit. */
   askedGates: z.array(GateResult).optional(),
 });

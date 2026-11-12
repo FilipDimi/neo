@@ -219,6 +219,8 @@ describe('buildFirstTurn', () => {
     expect(turn).toContain("What the engine verified of the author's checks:\n- ran cargo test -p jobs\n- cites GREETING.md:2");
     expect(turn).not.toContain('What the author reported');
     for (const part of ['In mcp__engine__submit_review, list in checks what you checked yourself', 'mcp__engine__run_gate', 'An approval with nothing listed is refused']) expect(turn, part).toContain(part);
+    // A reviewer has no shell: it is not offered a command as a check.
+    expect(turn).not.toMatch(/checks what you checked yourself[^\n]*a command you ran/);
     const none = buildFirstTurn({ ...base, task: task(), mode: 'review', material: { summary: 'Done.' } });
     expect(none).toContain("What the engine verified of the author's checks:\n(the author listed nothing it checked)");
   });
