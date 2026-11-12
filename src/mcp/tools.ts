@@ -8,7 +8,7 @@
  */
 import { z } from 'zod';
 import { ADMIN_DESCRIPTION, ADMIN_INPUT, ADMIN_TOOLS } from '../shared/adminTools.ts';
-import type { Decision, Employee, Message, Run, Task, Team } from '../shared/types.ts';
+import type { Decision, Employee, Message, RecordEntry, Run, Task, Team } from '../shared/types.ts';
 import { countsCost } from '../shared/view.ts';
 
 export type Call = <T>(method: 'GET' | 'POST', route: string, body?: unknown) => Promise<T>;
@@ -157,6 +157,31 @@ export const TOOLS: Tool[] = [
       const { result } = await ctx.call<{ result: 'applied' | 'ignored' }>('POST', `/api/decisions/${card.id}/answer`, { optionId: option.id, ...(text(args.text) ? { text: text(args.text) } : {}) });
       if (result === 'ignored') return 'That card had already been answered, so nothing was pressed.';
       return `Pressed "${option.label}" on the card: ${card.text.split('\n')[0]}`;
+    },
+  },
+  {
+    name: 'decisions',
+    description:
+      'The company\'s record of decisions, newest first: what was decided, why and by whom. With by "chief" it is what the chief of staff decided on the user\'s behalf, which is how to answer "what was assumed for me". Costs nothing.',
+    input: {
+      search: z.string().optional().describe('Words every decision returned must contain.'),
+      by: z.enum(['user', 'chief', 'lead']).optional().describe('"user": what the user said. "chief": what the chief of staff decided for the user. "lead": what a team\'s lead chose.'),
+      since: z.enum(['today', 'week']).optional(),
+    },
+    run: async (args, ctx) => {
+      const query = new URLSearchParams(Object.entries({ search: text(args.search), by: text(args.by), since: text(args.since) }).filter(([, value]) => value));
+      const { entries } = await ctx.call<{ entries: RecordEntry[] }>('GET', `/api/record${query.size > 0 ? `?${query}` : ''}`);
+      if (entries.length === 0) return 'Nothing on record matches.';
+      const { employees } = await ctx.call<Snapshot>('GET', '/api/snapshot');
+      const name = (id: string | null) => employees.find((employee) => employee.id === id)?.name;
+      const who = (entry: RecordEntry) => (entry.by.kind === 'user' ? 'you' : entry.by.kind === 'chief' ? `${name(entry.by.employeeId) ?? 'the chief of staff'}, for you` : (name(entry.by.employeeId) ?? 'a team lead'));
+      return entries
+        .map((entry) =>
+          [`${entry.id} · ${entry.at.slice(0, 10)} · ${who(entry)}`, entry.statement, entry.why ? `Why: ${entry.why}` : '', entry.replaces ? `Replaces ${entry.replaces}.` : '', entry.replacedBy ? `Replaced by ${entry.replacedBy}: it no longer holds.` : '']
+            .filter(Boolean)
+            .join('\n'),
+        )
+        .join('\n\n');
     },
   },
   {

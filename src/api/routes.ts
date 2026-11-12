@@ -26,6 +26,7 @@ import { chat, messageEmployee } from '../supervisor/chat.ts';
 import { companyNow } from '../supervisor/companyNow.ts';
 import { edit, fire, hire, type HireCtx, removeTeam } from '../supervisor/hiring.ts';
 import { readIndex } from '../supervisor/memory.ts';
+import { findEntries, indexFor } from '../supervisor/record.ts';
 import { AlreadySetUp, setupCompany, TEAM_DEFAULTS } from '../supervisor/setup.ts';
 import type { Supervisor } from '../supervisor/supervisor.ts';
 
@@ -73,6 +74,9 @@ const TaskBody = z.object({
 });
 const TaskPatch = z.object({ priority: priority.optional(), assigneeId: z.string().nullable().optional(), cancel: z.boolean().optional() });
 const TextBody = z.object({ text });
+const RecordQuery = z.object({ search: z.string().optional(), by: z.enum(['user', 'chief', 'lead']).optional(), since: z.enum(['today', 'week']).optional() });
+/** How many decisions one read of the record gives. */
+const RECORD_SHOWN = 50;
 const AnswerBody = z.object({ optionId: text, text: z.string().optional() });
 
 const record = (map: Map<string, number>): Record<string, number> => Object.fromEntries(map);
@@ -262,7 +266,17 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
   app.get('/api/tasks/:id', async (request) => {
     const task = found(store.getTask(db, id(request)), 'such task');
     const events = readEvents(db, 0, 100_000, task.id).slice(-200);
-    return { task, children: store.listTasks(db, { parentId: task.id }), runs: store.runsOf(db, task.id), events, decisions: store.openDecisions(db, task.id) };
+    // What it is built on, with the decisions themselves: the record is not in the snapshot, so the drawer gets what it shows from here.
+    const builtOn = { entries: indexFor(db, task).cited, contract: task.builtOn?.contract ?? null, changesContractTo: task.contractVersion ?? null };
+    return { task, children: store.listTasks(db, { parentId: task.id }), runs: store.runsOf(db, task.id), events, decisions: store.openDecisions(db, task.id), builtOn };
+  });
+
+  /** The company's record of decisions, newest first: all of it, or what holds some words, was decided by someone, or is recent. */
+  app.get('/api/record', async (request) => {
+    const query = RecordQuery.parse(request.query);
+    const at = now();
+    const since = query.since === 'today' ? new Date(midnight(at)) : query.since === 'week' ? new Date(at.getTime() - 7 * 86_400_000) : undefined;
+    return { entries: findEntries(db, { search: query.search ?? '', ...(query.by ? { by: query.by } : {}), ...(since ? { since } : {}) }).slice(0, RECORD_SHOWN) };
   });
 
   app.patch('/api/tasks/:id', async (request) => {

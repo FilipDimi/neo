@@ -9,6 +9,7 @@ import { buildServer } from '../../src/api/server.ts';
 import { apply } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import { caller, runTool, TOOLS, type Ctx } from '../../src/mcp/tools.ts';
+import { recordDecision } from '../../src/supervisor/record.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
 import { staged, type Scene } from '../fixtures/staged.ts';
 import { employee, team, tempDir, world, type World } from '../helpers.ts';
@@ -179,6 +180,22 @@ describe("the company's tools for a Claude session", () => {
     const said = await c.use('answer_card', { card: card!.id, option: 'choice1' });
     expect(said.text).toMatch(/already been answered/);
     expect(said.text).not.toMatch(/Pressed/);
+  });
+
+  it('answers "what was decided" from the record: all of it, by who decided, by words, or nothing', async () => {
+    const c = await company(() => {});
+    const add = (statement: string, why: string, by: 'user' | 'chief' | 'lead', employeeId: string | null) => apply(c.w.db, (tx) => void recordDecision(tx, c.w.db, c.w.clock.now(), { statement, why, by: { kind: by, employeeId } }));
+    expect((await c.use('decisions')).text).toBe('Nothing on record matches.');
+    add('Launch in one region.', 'Nobody said which, and one is cheaper to run.', 'chief', 'neo');
+    add('Errors are problem+json.', 'One shape for every client.', 'lead', 'lead');
+    add('The store page is friendly.', '', 'user', null);
+    const all = (await c.use('decisions')).text;
+    expect(all).toMatch(/^D-3 · \d{4}-\d\d-\d\d · you\nThe store page is friendly\.\n\nD-2 · .* · Priya\nErrors are problem\+json\.\nWhy: One shape for every client\./);
+    const mine = (await c.use('decisions', { by: 'chief' })).text;
+    expect(mine).toMatch(/^D-1 · .* · Neo, for you\nLaunch in one region\.\nWhy: Nobody said which/);
+    expect(mine).not.toContain('D-2');
+    expect((await c.use('decisions', { search: 'problem json', since: 'today' })).text).toMatch(/^D-2 /);
+    expect((await c.use('decisions', { search: 'nothing like it' })).text).toBe('Nothing on record matches.');
   });
 
   it('says plainly when the company is not running', async () => {

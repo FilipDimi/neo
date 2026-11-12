@@ -7,6 +7,7 @@ import { openDb } from '../../src/db/open.ts';
 import * as store from '../../src/db/store.ts';
 import { loadToken } from '../../src/api/security.ts';
 import { buildServer } from '../../src/api/server.ts';
+import { recordDecision } from '../../src/supervisor/record.ts';
 import { Supervisor } from '../../src/supervisor/supervisor.ts';
 import { exit, scripted } from '../fixtures/scriptedLink.ts';
 import { employee, gitIn, gitRepo, plus, run, T0, task, team, tempDir, world, type World } from '../helpers.ts';
@@ -408,5 +409,24 @@ describe('what a plain mistake cannot break', () => {
     expect((await call('POST', '/api/admin/update_team', { team: 'team1', mergeTarget: 'team' })).status).toBe(200);
     apply(w.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(w.db, 'open')!, state: 'done' }, cause: 'state' }));
     expect((await call('PATCH', '/api/teams/team1', { repos: [] })).status).toBe(200);
+  });
+
+  it('reads the record by words, by who decided and by when, and tells a task what it is built on', async () => {
+    const { call, w } = await fresh(scripted().spawn, { company: { chiefOfStaffId: 'emp2' } });
+    const add = (statement: string, by: 'user' | 'chief' | 'lead', at: Date) => apply(w.db, (tx) => void recordDecision(tx, w.db, at, { statement, why: 'Because.', by: { kind: by, employeeId: by === 'user' ? null : 'emp2' } }), at);
+    add('The API speaks JSON.', 'lead', plus(T0, -10 * 86_400));
+    add('Dates are ISO 8601.', 'chief', plus(T0, -3 * 86_400));
+    add('Money is in cents.', 'user', plus(T0, -3600));
+    const ids = async (query: string) => (await call('GET', `/api/record${query}`)).json.entries.map((entry: { id: string }) => entry.id);
+    expect(await ids('')).toEqual(['D-3', 'D-2', 'D-1']);
+    expect(await ids('?search=iso%20dates')).toEqual(['D-2']);
+    expect(await ids('?by=chief')).toEqual(['D-2']);
+    expect(await ids('?since=today')).toEqual(['D-3']);
+    expect(await ids('?since=week')).toEqual(['D-3', 'D-2']);
+    expect((await call('GET', '/api/record?by=nobody')).status).toBe(400);
+    const made = (await call('POST', '/api/tasks', { teamId: 'team1', assigneeId: 'emp1', title: 'T', brief: 'B', decisions: ['D-2'] })).json.task;
+    expect(made.builtOn).toEqual({ decisions: ['D-2'], contract: null });
+    expect((await call('GET', `/api/tasks/${made.id}`)).json.builtOn).toMatchObject({ entries: [{ id: 'D-2', statement: 'Dates are ISO 8601.' }], contract: null, changesContractTo: null });
+    expect((await call('POST', '/api/tasks', { teamId: 'team1', assigneeId: 'emp1', title: 'T', brief: 'B', decisions: ['D-99'] })).json.error).toMatch(/no decision D-99/);
   });
 });

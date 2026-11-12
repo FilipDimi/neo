@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
 import type { EventRow } from '../../../src/shared/events.ts';
-import type { Decision, Message, Run, Task } from '../../../src/shared/types.ts';
+import type { Decision, Message, RecordEntry, Run, Task } from '../../../src/shared/types.ts';
 import { useApi, useUi, type TaskTab } from '../app/context.ts';
 import { money } from '../format.ts';
 import { MessageBox } from '../frame/MessageBox.tsx';
@@ -11,7 +11,61 @@ import { useStore } from '../store/store.ts';
 
 const sentence = (text: string): string => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 
-type Detail = { task: Task; children: Task[]; runs: Run[]; events: EventRow[]; decisions: Decision[] };
+/** What a task stands on in the company's record: the decisions its maker named, and the contract's version. */
+type BuiltOn = { entries: RecordEntry[]; contract: string | null; changesContractTo: string | null };
+type Detail = { task: Task; children: Task[]; runs: Run[]; events: EventRow[]; decisions: Decision[]; builtOn?: BuiltOn };
+
+const decidedBy = (entry: RecordEntry): string => entry.byName ?? (entry.by.kind === 'user' ? 'the user' : entry.by.kind === 'chief' ? 'the chief of staff, for the user' : 'a team lead');
+
+/**
+ * One quiet line: the decisions this task is built on and the contract it was made against. A number opens the
+ * decision in place: what was decided, why, and who decided it.
+ */
+function BuiltOnLine({ builtOn }: { builtOn: BuiltOn }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const { entries, contract, changesContractTo } = builtOn;
+  if (entries.length === 0 && !contract && !changesContractTo) return null;
+  const shown = entries.find((entry) => entry.id === open);
+  const parts = [
+    entries.length > 0 && (
+      <>
+        Built on{' '}
+        {entries.map((entry, index) => (
+          <Fragment key={entry.id}>
+            {index > 0 && (index === entries.length - 1 ? ' and ' : ', ')}
+            <button type="button" className="ref" aria-expanded={open === entry.id} onClick={() => setOpen(open === entry.id ? null : entry.id)}>
+              {entry.id}
+            </button>
+          </Fragment>
+        ))}
+      </>
+    ),
+    contract && `contract ${contract}`,
+    changesContractTo && `changes the contract to ${changesContractTo}`,
+  ].filter(Boolean);
+  return (
+    <section className="built-on">
+      <p aria-label="What this task is built on">
+        {parts.map((part, index) => (
+          <Fragment key={index}>
+            {index > 0 && ' · '}
+            {part}
+          </Fragment>
+        ))}
+      </p>
+      {shown && (
+        <div className="decision-open">
+          <Prose text={shown.statement} />
+          {shown.why && <Prose className="muted" text={shown.why} />}
+          <div className="label">
+            {decidedBy(shown)} · {shown.at.slice(0, 10)}
+            {shown.replacedBy ? ` · replaced by ${shown.replacedBy}` : ''}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
 type Diff = { stat: string; patch: string; lines: number };
 
 /** One line of the feed for an event worth showing, or null. */
@@ -171,6 +225,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
           )}
         </section>
       )}
+      {detail?.builtOn && <BuiltOnLine builtOn={detail.builtOn} />}
 
       {/* A brief that is no longer than its summary is already said above: only what is left of it is folded here. */}
       {(!briefSaid || task.doneCondition || task.gates.length > 0 || task.ownership.length > 0) && (

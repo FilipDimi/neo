@@ -9,6 +9,8 @@ import { apply } from '../src/db/apply.ts';
 import { paths } from '../src/db/dataDir.ts';
 import type { Db } from '../src/db/open.ts';
 import type { Capability, Employee, Team } from '../src/shared/types.ts';
+import * as store from '../src/db/store.ts';
+import { recordDecision } from '../src/supervisor/record.ts';
 import { setupCompany, TEAM_DEFAULTS } from '../src/supervisor/setup.ts';
 
 export function seedDemoCompany(input: { db: Db; dataDir: string; repoPath: string; now: Date; leaseMinutes: number }): void {
@@ -29,7 +31,7 @@ export function seedDemoCompany(input: { db: Db; dataDir: string; repoPath: stri
   apply(
     db,
     (tx) => {
-      tx.emit({ kind: 'repo_changed', repo: { id: 'receipts', path: repoPath, gates: [{ name: 'tests', command: 'test -f README.md', timeoutMinutes: 1, lock: null }] } });
+      tx.emit({ kind: 'repo_changed', repo: { id: 'receipts', path: repoPath, gates: [{ name: 'tests', command: 'test -f README.md', timeoutMinutes: 1, lock: null }], decisionsDir: 'docs/decisions' } });
       tx.emit({ kind: 'team_changed', team: team('ios', 'Engineering · iOS', 'Builds the iPhone app.', { leadId: 'ios-lead', dailyCapUsd: 20, repos: [{ repoId: 'receipts', baseBranch: 'track/ios', mergeTarget: 'track/ios' }] }) });
       tx.emit({ kind: 'team_changed', team: team('rust', 'Engineering · Rust', 'Builds the backend.', { leadId: 'rust-lead', dailyCapUsd: 15, repos: [{ repoId: 'receipts', baseBranch: 'track/rust', mergeTarget: null }] }) });
       tx.emit({ kind: 'team_changed', team: team('marketing', 'Marketing', 'Writes what people read about the product.', { selfManaged: true, dailyCapUsd: 5 }) });
@@ -47,6 +49,9 @@ export function seedDemoCompany(input: { db: Db; dataDir: string; repoPath: stri
         person('mw', 'MW', 'marketing', 'Writes store descriptions and announcements.', ['read_files', 'write_code', 'web_search']),
       ];
       for (const employee of cast) tx.emit({ kind: 'employee_changed', employee });
+      // A record to look at: one decision a lead made and one the chief of staff took for the user.
+      recordDecision(tx, db, now, { statement: 'Every screen opens with one motion, the same one.', why: 'Two kinds of opening read as two apps.', by: { kind: 'lead', employeeId: 'ios-lead' }, repoId: 'receipts' });
+      recordDecision(tx, db, now, { statement: 'The first release is for one country.', why: 'Nobody said which markets, and one is the least to get wrong.', by: { kind: 'chief', employeeId: store.getCompany(db)?.chiefOfStaffId ?? null }, repoId: null });
     },
     now,
   );

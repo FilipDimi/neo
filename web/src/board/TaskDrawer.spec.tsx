@@ -162,4 +162,30 @@ describe('TaskDrawer', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(closed).toBe(2));
   });
+
+  it('says what the task is built on, and opens a decision in place', async () => {
+    const entry = (n: number, statement: string, why: string) => ({ id: `D-${n}`, n, at: T0.toISOString(), statement, why, by: { kind: 'chief' as const, employeeId: 'emp2' }, taskId: null, repoId: null, replaces: null, replacedBy: null, byName: 'Grace, for the user' });
+    const builtOn = { entries: [entry(231, 'Errors are problem+json.', 'One shape for every client.'), entry(228, 'Dates are ISO 8601.', '')], contract: '0.10.1', changesContractTo: '0.10.2' };
+    const api = fakeApi(() => ({ ...detail([]), builtOn }));
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
+    const line = await screen.findByLabelText('What this task is built on');
+    expect(line.textContent).toBe('Built on D-231 and D-228 · contract 0.10.1 · changes the contract to 0.10.2');
+    const opener = within(line).getByRole('button', { name: 'D-231' });
+    expect(opener.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Errors are problem+json.')).toBeNull();
+    await userEvent.click(opener);
+    expect(opener.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Errors are problem+json.')).toBeTruthy();
+    expect(screen.getByText('One shape for every client.')).toBeTruthy();
+    expect(screen.getByText(/Grace, for the user · 2026-11-09/)).toBeTruthy();
+    await userEvent.click(opener);
+    expect(screen.queryByText('Errors are problem+json.')).toBeNull();
+  });
+
+  it('says nothing of the record for a task built on nothing, where there is no contract', async () => {
+    const api = fakeApi(() => ({ ...detail([said(3, 'Loaded.')]), builtOn: { entries: [], contract: null, changesContractTo: null } }));
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
+    await screen.findByText('Loaded.');
+    expect(screen.queryByLabelText('What this task is built on')).toBeNull();
+  });
 });
