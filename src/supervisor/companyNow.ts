@@ -5,7 +5,7 @@
  */
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
-import { ago, countsCost, WHY } from '../shared/view.ts';
+import { ago, checkedLine, countsCost, WHY } from '../shared/view.ts';
 
 const SHOWN_PER_TEAM = 12;
 
@@ -19,6 +19,12 @@ export function companyNow(db: Db, now: Date): string {
   const work = store.listTasks(db).filter((task) => task.kind === 'work');
   // Who did the work: a task its lead took has no assignee, so the name comes from the last run that made something.
   const authorOf = (taskId: string): string | undefined => store.runsOf(db, taskId).findLast((run) => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate')?.employeeId;
+  // What stands behind finished work, from what the engine verified only.
+  const checkedOf = (taskId: string): string => {
+    const last = store.runsOf(db, taskId).findLast((run) => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate');
+    const line = last ? checkedLine(last) : null;
+    return line ? ` (${line.replace(/^Checked: /, 'checked: ')})` : '';
+  };
   const lines: string[] = [];
 
   for (const team of store.allTeams(db)) {
@@ -39,7 +45,7 @@ export function companyNow(db: Db, now: Date): string {
           : card
             ? `waiting on the user (${WHY[card.kind]}) for ${ago(card.askedAt, now)}`
             : task.state === 'done'
-              ? `finished today by ${name(authorOf(task.id) ?? task.assigneeId ?? team.leadId)}${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}`
+              ? `finished today by ${name(authorOf(task.id) ?? task.assigneeId ?? team.leadId)}${checkedOf(task.id)}${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}`
               : task.state === 'failed'
                 ? 'stopped today'
                 : task.state === 'queued'

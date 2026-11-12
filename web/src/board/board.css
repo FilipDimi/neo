@@ -73,3 +73,6 @@
 .built-on .ref { padding: 0; border: 0; background: none; font: inherit; color: var(--text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .built-on .ref[aria-expanded='true'] { text-decoration-thickness: 2px; }
 .decision-open { margin-top: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: var(--input); background: var(--raised); color: var(--text); }
+
+/* What stands behind the work: one quiet line under the glance. */
+.checked { margin: 0; font-size: 13px; color: var(--soft); }

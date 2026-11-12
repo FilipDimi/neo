@@ -146,6 +146,8 @@ describe("the company's tools for a Claude session", () => {
     const one = await c.use('task', { id: task!.id });
     expect(one.text).toContain('Draft three taglines.');
     expect(one.text).toMatch(/work by Mara: done.*Three taglines written\./s);
+    // No gate and nothing listed: nothing is said to have been checked.
+    expect(one.text).not.toContain('Checked:');
     expect((await c.use('new_task', { team: 'Sales', title: 'x', brief: 'y' })).text).toMatch(/There is no team "Sales".*Office, Engineering iOS, Marketing/);
   });
 

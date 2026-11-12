@@ -270,5 +270,7 @@ describe('what a lead puts together is reviewed before it lands', () => {
     const [card] = store.openDecisions(setup.w.db);
     expect(card).toMatchObject({ kind: 'merge' });
     expect(card!.text).toMatch(/Its 2 sub-tasks were each approved by a reviewer and the whole by Ada, gates green \(greeting, farewell\);/);
+    // What stands behind it, from what the engine verified only.
+    expect(card!.text).toMatch(/Checked: greeting \(gate, passed \d\d:\d\d\) · farewell \(gate, passed \d\d:\d\d\)\.$/);
   });
 });

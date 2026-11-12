@@ -207,4 +207,26 @@ describe('buildFirstTurn', () => {
     expect(turn).toMatch(/gates: the names of the gates .* must pass/);
     expect(TOOL_INPUT.create_task.parse({ teamId: 'team1', title: 'T', brief: 'b', priority: 2, doneCondition: 'd', capUsd: 1, gates: ['rust'] }).gates).toEqual(['rust']);
   });
+
+  it('shows a reviewer what the engine verified apart from what the author says, and asks it for its own checks', () => {
+    const turn = buildFirstTurn({
+      ...base,
+      task: task({ title: 'Write the greeting' }),
+      mode: 'review',
+      material: { summary: 'Done. All tests pass.', gateResults: [{ name: 'tests', command: 'npm test', exitCode: 0, output: '', durationMs: 5 }], checks: [{ kind: 'command', what: 'cargo test -p jobs', shown: 'ran cargo test -p jobs' }, { kind: 'file', what: 'GREETING.md', line: 2, shown: 'cites GREETING.md:2' }] },
+    });
+    expect(turn).toContain('What the author says:\nDone. All tests pass.');
+    expect(turn).toContain("What the engine verified of the author's checks:\n- ran cargo test -p jobs\n- cites GREETING.md:2");
+    expect(turn).not.toContain('What the author reported');
+    for (const part of ['In mcp__engine__submit_review, list in checks what you checked yourself', 'mcp__engine__run_gate', 'An approval with nothing listed is refused']) expect(turn, part).toContain(part);
+    const none = buildFirstTurn({ ...base, task: task(), mode: 'review', material: { summary: 'Done.' } });
+    expect(none).toContain("What the engine verified of the author's checks:\n(the author listed nothing it checked)");
+  });
+
+  it('tells an author to list what it checked, and that only what holds counts', () => {
+    for (const mode of ['work', 'integrate'] as const) {
+      const turn = buildFirstTurn({ ...base, task: task(), mode, material: { parts: [] } });
+      for (const part of ['checks', 'a gate by its name', 'the engine runs it itself', 'only what holds counts']) expect(turn, `${mode}: ${part}`).toContain(part);
+    }
+  });
 });

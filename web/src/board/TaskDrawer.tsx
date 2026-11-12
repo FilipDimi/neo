@@ -5,7 +5,7 @@ import { useApi, useUi, type TaskTab } from '../app/context.ts';
 import { money } from '../format.ts';
 import { MessageBox } from '../frame/MessageBox.tsx';
 import { Prose } from '../frame/Prose.tsx';
-import { countsCost } from '../../../src/shared/view.ts';
+import { checkedLine, countsCost } from '../../../src/shared/view.ts';
 import { glance, liveRuns } from '../model/select.ts';
 import { useStore } from '../store/store.ts';
 
@@ -165,6 +165,9 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   }, [detail]);
 
   if (!task) return null;
+  // What stands behind the last work on it, from what the engine verified only.
+  const lastWork = runs.filter((one) => (one.mode === 'work' || one.mode === 'brief' || one.mode === 'integrate') && one.endedAt).sort((a, b) => a.startedAt.localeCompare(b.startedAt)).at(-1);
+  const checked = lastWork ? checkedLine(lastWork) : null;
   const briefSaid = !task.summary?.trim() && seen?.summary === task.brief.trim();
   // Whom the engine delivers to: the task's assignee, or its team's lead. Not whoever happens to be running on it (a reviewer, say).
   const recipient = nameOf(task.assigneeId ?? team?.leadId ?? null);
@@ -224,6 +227,11 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
             </div>
           )}
         </section>
+      )}
+      {checked && (
+        <p className="checked" aria-label="What was checked">
+          {checked}
+        </p>
       )}
       {detail?.builtOn && <BuiltOnLine builtOn={detail.builtOn} />}
 

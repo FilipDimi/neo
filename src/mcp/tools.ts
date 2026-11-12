@@ -9,7 +9,7 @@
 import { z } from 'zod';
 import { ADMIN_DESCRIPTION, ADMIN_INPUT, ADMIN_TOOLS } from '../shared/adminTools.ts';
 import type { Decision, Employee, Message, RecordEntry, Run, Task, Team } from '../shared/types.ts';
-import { countsCost } from '../shared/view.ts';
+import { checkedLine, countsCost } from '../shared/view.ts';
 
 export type Call = <T>(method: 'GET' | 'POST', route: string, body?: unknown) => Promise<T>;
 export type Ctx = {
@@ -214,6 +214,8 @@ export const TOOLS: Tool[] = [
         task.doneCondition.trim() ? `Done when: ${task.doneCondition.trim()}` : '',
         children.length > 0 ? `Sub-tasks:\n${children.map((child) => `- ${child.id} "${child.title}" (${child.state})`).join('\n')}` : '',
         runs.length > 0 ? `Runs:\n${runs.map((run) => `- ${run.mode} by ${name(run.employeeId)}: ${run.outcome}${run.reason ? ` (${run.reason})` : ''}${priced ? `, ${usd(run.costUsd)}` : ''}${run.summary ? `\n  ${run.summary.trim().replace(/\n/g, '\n  ')}` : ''}`).join('\n')}` : 'No run yet.',
+        // What stands behind the last work on it, from what the engine verified only.
+        checkedLine(runs.filter((run) => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate').at(-1) ?? { gateResults: [] }) ?? '',
         // A card the chief of staff is deciding is not on the user's desk, and cannot be pressed from here.
         ...[...new Set(decisions.map((card) => card.deciderId ?? ''))].map((decider) => `${decider ? `${name(decider)} is deciding for you` : 'Waiting on you'}:\n${decisions.filter((card) => (card.deciderId ?? '') === decider).map((card) => `- card ${card.id}: ${card.text}`).join('\n')}`),
       ]

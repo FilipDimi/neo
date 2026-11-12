@@ -18,7 +18,7 @@ import { isMerged, landOn, mergeInto } from '../git/merge.ts';
 import { outside, owns } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
 import type { Decision, Employee, Finding, Gate, GateResult, Repo, Run, RunOutcome, RunRequest, Task, Team, TeamRepo } from '../shared/types.ts';
-import { countsCost } from '../shared/view.ts';
+import { checkedLine, countsCost } from '../shared/view.ts';
 import { TOOL_INPUT, type Check } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import type { Claims } from './proof.ts';
@@ -623,6 +623,7 @@ export class Flow {
     const material = {
       summary: run.summary,
       gateResults: run.gateResults,
+      checks: run.checks,
       ...(site && base ? { diffStat: (await diffStat(site.folder, base, this.engines(site.repo))).text, patch: await patch(site.folder, base, PATCH_CAP, this.engines(site.repo)) } : {}),
       ...(before ? { previous: { by: nameOf(before.employeeId), findings: before.findings! } } : {}),
       ...(parts.length > 0 ? { whole: { by: nameOf(run.employeeId), parts: parts.map((child) => ({ title: child.title, by: nameOf(store.runsOf(this.db, child.id).findLast(authored)?.employeeId ?? child.assigneeId) })) } } : {}),
@@ -735,7 +736,9 @@ export class Flow {
       const green = gates.length === 0 ? 'no gates' : gates.every((g) => g.exitCode === 0) ? `gates green (${gates.map((g) => g.name).join(', ')})` : 'gates NOT green';
       // The card says how much stands behind the work, so Merge is never pressed on something nobody looked at without knowing it.
       const checked = this.standing(task, green, gates.length);
-      return ask(`Merge "${task.title}" into ${site.teamRepo.baseBranch}? ${checked[0]!.toUpperCase()}${checked.slice(1)}; the diff is ${lastRun?.diffLines ?? 0} lines. Merging there is outside the team's limits.`, site.teamRepo.baseBranch);
+      // And what stands behind it, from what the engine verified only.
+      const line = lastRun ? checkedLine(lastRun) : null;
+      return ask(`Merge "${task.title}" into ${site.teamRepo.baseBranch}? ${checked[0]!.toUpperCase()}${checked.slice(1)}; the diff is ${lastRun?.diffLines ?? 0} lines. Merging there is outside the team's limits.${line ? ` ${line}.` : ''}`, site.teamRepo.baseBranch);
     }
     let failedGate: GateResult | undefined;
     const recheck = async () => {

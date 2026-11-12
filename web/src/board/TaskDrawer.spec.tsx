@@ -188,4 +188,17 @@ describe('TaskDrawer', () => {
     await screen.findByText('Loaded.');
     expect(screen.queryByLabelText('What this task is built on')).toBeNull();
   });
+
+  it('says what was checked on the last work, from what the engine verified, and nothing for work from before there were checks', async () => {
+    const checked = run({ id: 'run2', mode: 'work', outcome: 'done', endedAt: T0.toISOString(), gateResults: [{ name: 'tests', command: 'npm test', exitCode: 0, output: '', durationMs: 5, at: T0.toISOString() }], checks: [{ kind: 'command', what: 'npm run lint', shown: 'ran npm run lint' }] });
+    const withChecks = fromSnapshot({ ...base, tasks: [theTask], runs: [checked] });
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: withChecks, now: T0, api: fakeApi(() => detail([])) });
+    expect(screen.getByLabelText('What was checked').textContent).toMatch(/^Checked: tests \(gate, passed \d\d:\d\d\) · ran npm run lint$/);
+  });
+
+  it('shows no line of checks for work done before there were any', () => {
+    const old = run({ id: 'run2', mode: 'work', outcome: 'done', endedAt: T0.toISOString(), gateResults: [] });
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: fromSnapshot({ ...base, tasks: [theTask], runs: [old] }), now: T0, api: fakeApi(() => detail([])) });
+    expect(screen.queryByLabelText('What was checked')).toBeNull();
+  });
 });

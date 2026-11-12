@@ -5,7 +5,7 @@
  */
 import { skillSets } from '../shared/skills.ts';
 import { availableCapabilities, CAPABILITIES } from './blastRadius.ts';
-import type { Capability, Company, Decision, DecisionOption, Employee, Finding, GateResult, Repo, RunMode, Task, Team } from '../shared/types.ts';
+import type { Capability, Company, Decision, DecisionOption, Employee, Finding, GateResult, Repo, RunMode, Task, Team, VerifiedCheck } from '../shared/types.ts';
 
 const usd = (amount: number): string => `$${amount.toFixed(2)}`;
 
@@ -114,7 +114,7 @@ export type Question = { from: string; text: string; choices: string[] };
 export type Previous = { by: string; findings: Finding[] };
 /** A task its lead split, put together again: who did that, and the parts, each reviewed on its own already. */
 export type Whole = { by: string; parts: { title: string; by: string }[] };
-export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; notes?: string; mergeState?: string; parts?: Part[]; question?: Question; previous?: Previous; whole?: Whole };
+export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; checks?: VerifiedCheck[] | undefined; notes?: string; mergeState?: string; parts?: Part[]; question?: Question; previous?: Previous; whole?: Whole };
 
 /** Findings as numbered lines: severity, where, what, why, and what would fix it. The number is how its author answers it. */
 export function findingLines(findings: Finding[]): string {
@@ -235,7 +235,7 @@ ${assignable.map((mate) => `- ${mate.name} (assigneeId: ${mate.id}): ${mate.role
     case 'work':
       return `${header}
 
-Do this task in your folder. When the work is finished, call mcp__engine__report_done with a short summary of what you did. The engine then commits your files and runs the gates itself; you can run one first with mcp__engine__run_gate.${material.notes ? `\n\nNotes for this run:\n${material.notes}` : ''}`;
+Do this task in your folder. When the work is finished, call mcp__engine__report_done with a short summary of what you did, and in checks what you checked: a gate by its name (the engine runs it itself), a command you ran after your last change, or a file and line; only what holds counts, and what does not is refused. The engine then commits your files and runs the gates itself; you can run one first with mcp__engine__run_gate.${material.notes ? `\n\nNotes for this run:\n${material.notes}` : ''}`;
     case 'review':
       // Not a review of finished work: a member stopped with a question, and on a led team the lead is asked first.
       if (material.question)
@@ -260,8 +260,11 @@ ${
     ? `\nThis work was sent back before. What ${material.previous.by} found then:\n${findingLines(material.previous.findings)}\nCheck each one against the files as they are now and against what the author reports below: it is fixed, or the author says why it was left and is right to. One that is still open and still right is blocking. Check too that the fixes broke nothing.\n`
     : ''
 }
-What the author reported:
+What the author says:
 ${material.summary?.trim() || '(no summary)'}
+
+What the engine verified of the author's checks:
+${material.checks && material.checks.length > 0 ? material.checks.map((check) => `- ${check.shown}`).join('\n') : '(the author listed nothing it checked)'}
 
 What changed:
 ${material.diffStat?.trim() || '(no diff)'}
@@ -270,7 +273,8 @@ Gates, run by the engine:
 ${material.gateResults && material.gateResults.length > 0 ? gateLines(material.gateResults) : '(none)'}
 ${stillFailing(material.gateResults)}${material.patch ? `\nThe patch${material.patch.endsWith('…') ? ' (cut short; read the files for the rest)' : ''}:\n\`\`\`diff\n${material.patch}\n\`\`\`\n` : ''}
 Check the work against the brief and the done-condition, as someone who has to sign it off. Give what you find as findings, each with its file, the line if there is one, what is wrong, why it matters and what would fix it. Mark a finding blocking when it must be fixed before this lands: a bug, something the brief or the done-condition asks for that is missing, a company rule broken, a risk to data or security. Mark it minor when it is worth knowing and should hold nothing up.
-Then call mcp__engine__submit_review: "approve" when nothing is blocking, "send_back" when something is, or "escalate" if someone above you has to decide.`;
+Then call mcp__engine__submit_review: "approve" when nothing is blocking, "send_back" when something is, or "escalate" if someone above you has to decide.
+In mcp__engine__submit_review, list in checks what you checked yourself: a gate by its name (run it first with mcp__engine__run_gate, or name it and the engine runs it before your approval takes effect), a command you ran, or a file and the line you read. An approval with nothing listed is refused. What the author checked is above as the engine verified it: rely on that, never on the author's own words about it.`;
     case 'integrate':
       // No repository: nothing was merged anywhere. Each part is still where its author left it.
       if (material.parts)
@@ -279,13 +283,13 @@ Then call mcp__engine__submit_review: "approve" when nothing is blocking, "send_
 Every sub-task of this task is finished and approved. This team has no repository, so nothing was merged: each sub-task left its files in a folder of its own. Read them there.
 ${material.parts.map((part) => `- "${part.title}", by ${part.by}, in ${part.folder}\n    Files: ${part.files.join(', ') || 'no files'}${part.more > 0 ? ` and ${part.more} more` : ''}\n    Reported: ${part.summary?.trim() || '(no summary)'}`).join('\n') || '(no finished sub-tasks)'}
 
-Put the whole together in your own folder, so that it meets the done-condition and stands on its own: someone who opens only your folder should find the finished thing. Then call mcp__engine__report_done with a short summary.`;
+Put the whole together in your own folder, so that it meets the done-condition and stands on its own: someone who opens only your folder should find the finished thing. Then call mcp__engine__report_done with a short summary, and in checks what you checked: a gate by its name (the engine runs it itself), a command you ran after your last change, or a file and line; only what holds counts.`;
       return `${header}
 
 Every sub-task of this task is finished and approved. The engine merged their branches into this task's branch in your folder:
 ${material.mergeState?.trim() || '(nothing to merge)'}
 
-Check that the whole fits together and meets the done-condition. If conflicts are listed, resolve them by editing the files (leave no conflict markers; do not run git). Then call mcp__engine__report_done: the engine commits and runs the gates on the whole.`;
+Check that the whole fits together and meets the done-condition. If conflicts are listed, resolve them by editing the files (leave no conflict markers; do not run git). Then call mcp__engine__report_done: the engine commits and runs the gates on the whole. In checks, list what you checked: a gate by its name (the engine runs it itself), a command you ran after your last change, or a file and line; only what holds counts.`;
   }
 }
 
