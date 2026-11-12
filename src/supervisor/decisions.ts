@@ -8,6 +8,7 @@ import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { Capability, type Decision, type DecisionKind, type DecisionOption, type Effect, type Run, type RunRequest, type Task } from '../shared/types.ts';
 import { CAPABILITIES } from './blastRadius.ts';
+import { fileAnswer } from './record.ts';
 import { requestFor } from './scheduler.ts';
 import { canTransition, transition, type TaskEvent } from './taskState.ts';
 
@@ -161,6 +162,9 @@ export function answer(db: Db, now: Date, decisionId: string, given: Answer): An
       const option = decision.options.find((o) => o.id === given.optionId);
       if (!option) throw new Error(`decision ${decisionId} has no option "${given.optionId}"`);
       tx.emit({ kind: 'decision_answered', decision: answered, result: 'applied' });
+      // A question that was answered is a decision about the product: the engine files it, so it does not depend on anyone remembering to.
+      const words = given.text?.trim() || (typeof option.params?.text === 'string' ? option.params.text : '');
+      if (decision.kind === 'question' && option.effect === 'resume_with_answer' && words) fileAnswer(tx, db, now, answered, { words, by: given.by ?? null, why: given.why ?? '' });
       applyEffect(tx, db, now, answered, option, given.text);
       out = { result: 'applied', decision: answered, effect: option.effect, option };
     },

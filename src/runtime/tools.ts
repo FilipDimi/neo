@@ -26,6 +26,12 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
   create_task: 'Put a task on a team\'s board, with a summary: one or two plain sentences on what it delivers, for someone who will never read the brief. Leave the assignee out for a led team, so its lead briefs the task; a self-managed team needs an assignee. gates: the names of the team\'s gates the finished work must pass before it lands; a task given none is checked by none.',
   decide:
     'Answer the card you were given, on the user\'s behalf: name one of its buttons by id, or "ask_user" to hand it to the user. The notes say why; for a send-back or an answer they are the exact words the employee gets. Call it once.',
+  read_decisions:
+    'Read the company\'s record of decisions: what was decided, why and by whom. Give numbers ("D-231") to get those whole, or words to search for; with neither you get the newest. Read the ones your work touches before you rely on memory or guess.',
+  record_decision:
+    'Write a decision into the company\'s record, where it gets a number everyone can cite: one sentence saying what is now so, and why. For a choice others will build on or need to know (an interface, a default, a rule), not for a detail of your own task. replaces: the number of an earlier decision this one reverses.',
+  contract_version:
+    'Get the next version of the contract for a ticket that will change it: say whether the change is breaking, adds something, or is wording only, and what it is in one sentence. The contract\'s files may be changed only by a ticket that holds a version, and they must state it.',
   ...ADMIN_DESCRIPTION,
 };
 

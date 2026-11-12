@@ -6,7 +6,7 @@ import type { RuntimeEvent, ToolCall } from '../shared/runtime.ts';
 import { ADMIN_INPUT, ADMIN_TOOLS } from '../shared/adminTools.ts';
 import { Capability, Effort, Finding, RunMode } from '../shared/types.ts';
 
-export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', 'decide', ...ADMIN_TOOLS] as const;
+export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', 'decide', 'read_decisions', 'record_decision', 'contract_version', ...ADMIN_TOOLS] as const;
 export const EngineTool = z.enum(ENGINE_TOOLS);
 export type EngineTool = z.infer<typeof EngineTool>;
 
@@ -99,6 +99,9 @@ export const TOOL_INPUT = {
     gates: z.array(z.string().min(1)).optional(),
   }),
   decide: z.object({ option: z.string().min(1), notes: z.string() }),
+  read_decisions: z.object({ ids: z.array(z.string().min(1)).max(20).optional(), search: z.string().optional() }),
+  record_decision: z.object({ statement: z.string().trim().min(1).max(300), why: z.string(), replaces: z.string().min(1).optional(), onBehalfOfUser: z.boolean().optional() }),
+  contract_version: z.object({ change: z.enum(['breaking', 'adds', 'wording']), summary: z.string().trim().min(1), decisions: z.array(z.string().min(1)).optional(), subtask: z.string().min(1).optional() }),
   ...ADMIN_INPUT,
 } satisfies Record<EngineTool, z.ZodType>;
 

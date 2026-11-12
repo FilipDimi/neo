@@ -41,7 +41,7 @@ describe('the company chat', () => {
     expect(store.openRequests(w.db)).toMatchObject([{ mode: 'route', employeeId: 'neo' }]);
     await w.sup.tick();
     await fixture.idle();
-    expect(fixture.jobs[0]).toMatchObject({ mode: 'route', engineTools: ['create_task', 'set_status'], tools: ['Read', 'Glob', 'Grep'] });
+    expect(fixture.jobs[0]).toMatchObject({ mode: 'route', engineTools: ['create_task', 'set_status', 'read_decisions', 'record_decision', 'contract_version'], tools: ['Read', 'Glob', 'Grep'] });
     for (const part of ['Make the open seamless', 'teamId: ios', 'teamId: marketing', 'Mara (id: mw)', 'mcp__engine__create_task']) expect(turn, part).toContain(part);
   });
 
@@ -177,7 +177,8 @@ describe('Morpheus, the admin', () => {
     });
     chat(w.sup, 'remove marketing');
     await drain(w, fixture);
-    expect(fixture.jobs[0]!.engineTools).toEqual(['create_task', 'set_status']);
+    // The chief of staff has its own tools and the record's; the setup tools stay the admin's.
+    expect(fixture.jobs[0]!.engineTools).toEqual(['create_task', 'set_status', 'read_decisions', 'record_decision', 'contract_version']);
     expect(said[0]).toMatch(/Only the admin changes the setup/);
     expect(store.allTeams(w.db).map((entry) => entry.name)).toContain('Marketing');
   });

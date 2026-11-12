@@ -29,6 +29,7 @@ import { companyNow } from './companyNow.ts';
 import { buildJob, folderOf, sessionEnv } from './jobs.ts';
 import { canTransition } from './taskState.ts';
 import { remember } from './memory.ts';
+import { onReadDecisions, onRecordDecision } from './record.ts';
 import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
@@ -938,6 +939,10 @@ export class Supervisor {
         return this.flow.onReview(run, input);
       case 'run_gate':
         return this.flow.runGateTool(run, input);
+      case 'read_decisions':
+        return onReadDecisions(this.db, input);
+      case 'record_decision':
+        return onRecordDecision(this.db, now, run, input);
       default:
         if ((ADMIN_TOOLS as readonly string[]).includes(name)) return this.adminCall(run, name, input);
         return { ok: false, text: `The tool ${name} is not available in this run.` };

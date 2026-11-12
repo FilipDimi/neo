@@ -81,7 +81,7 @@ describe('cards go to the chief of staff first', () => {
 
     // Neo was shown the card, its buttons by id, the task and where its files are.
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.tools).toEqual(['decide', 'set_status']);
+    expect(seen[0]!.tools).toEqual(['decide', 'set_status', 'read_decisions', 'record_decision', 'contract_version']);
     for (const part of ['Priya could not decide on "Add a greeting"', 'public tone', '- send_back: Send back', '- accept: Accept as it is', '- stop: Stop it', '- ask_user', 'One friendly line in GREETING.md.', 'GREETING.md', store.getTask(setup.w.db, task.id)!.folder!, 'mcp__engine__decide'])
       expect(seen[0]!.prompt, part).toContain(part);
 

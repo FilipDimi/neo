@@ -22,6 +22,17 @@ export const ENGINE_TOOLS_FOR: Record<RunMode, EngineTool[]> = {
   route: ['create_task', 'set_status'],
 };
 
+/**
+ * The engine's tools for one run. Everyone can read the company's record of decisions. Writing to it, and
+ * asking for a contract version, is for those who decide for others: a team's lead and the chief of staff.
+ */
+export function engineToolsFor(input: { mode: RunMode; deciding: boolean; admin: boolean; chief: boolean; lead: boolean }): EngineTool[] {
+  // The admin's conversations change the setup: they get the setup tools, and no one else's do.
+  // A conversation about a card has one thing to do: answer it.
+  const own = input.deciding ? DECIDING_TOOLS : input.admin && input.mode === 'route' ? [...ENGINE_TOOLS_FOR.route, ...ADMIN_TOOLS] : ENGINE_TOOLS_FOR[input.mode];
+  return [...own, 'read_decisions', ...(input.chief || input.lead ? (['record_decision', 'contract_version'] as const) : [])];
+}
+
 /** The chief of staff deciding a card for the user: it reads, then answers the card. */
 export const DECIDING_TOOLS: EngineTool[] = ['decide', 'set_status'];
 const DECIDING_TURNS = 40;
@@ -94,9 +105,7 @@ export function buildJob(input: JobInput): WorkerJob {
     ...(employee.effort && (run.mode !== 'route' || task.decisionId) ? { effort: employee.effort } : {}),
     env: { ...withToolchains(sessionEnv(company)), BASH_DEFAULT_TIMEOUT_MS: bashTimeout, BASH_MAX_TIMEOUT_MS: bashTimeout },
     tools: shape.tools,
-    // The admin's conversations change the setup: they get the setup tools, and no one else's do.
-    // A conversation about a card has one thing to do: answer it.
-    engineTools: task.decisionId ? DECIDING_TOOLS : admin && run.mode === 'route' ? [...ENGINE_TOOLS_FOR.route, ...ADMIN_TOOLS] : ENGINE_TOOLS_FOR[run.mode],
+    engineTools: engineToolsFor({ mode: run.mode, deciding: Boolean(task.decisionId), admin, chief: company.chiefOfStaffId === employee.id, lead: team.leadId === employee.id }),
     skills: input.mounted.skills,
     plugins: input.mounted.plugins,
     additionalDirectories: shape.additionalDirectories,
