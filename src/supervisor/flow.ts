@@ -21,6 +21,7 @@ import type { Decision, Employee, Finding, Gate, GateResult, Repo, Run, RunOutco
 import { countsCost } from '../shared/view.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
+import { builtOnFor } from './record.ts';
 import * as decisions from './decisions.ts';
 import { writtenFiles } from '../api/files.ts';
 import { buildDecidingTurn, buildFirstTurn, findingLines, type Part } from './definition.ts';
@@ -198,10 +199,17 @@ export class Flow {
       this.host.planRunEnd(run.id, 'stopped', 'briefing');
       return { ok: true, text: 'The proposal was refused a second time, so the user has been asked. End your turn now.' };
     }
+    // What each part is built on: the decisions the lead named for it, with the whole's own. A number nobody recorded is said now.
+    let built: Task['builtOn'][];
+    try {
+      built = subtasks.map((sub) => builtOnFor(this.db, { decisions: sub.decisions, parent, repoId: parent.repoId }));
+    } catch (failure) {
+      return { ok: false, text: `${failure instanceof Error ? failure.message : String(failure)} Propose again.` };
+    }
     this.change((tx, now) => {
-      for (const [index, sub] of subtasks.entries()) {
+      for (const [index, { decisions: _cited, ...sub }] of subtasks.entries()) {
         // Created a millisecond apart, so that creation order is the order they were proposed in.
-        const child = store.newTask({ ...sub, teamId: parent.teamId, parentId: parent.id, repoId: parent.repoId, createdBy: run.employeeId }, new Date(now.getTime() + index));
+        const child = store.newTask({ ...sub, teamId: parent.teamId, parentId: parent.id, repoId: parent.repoId, createdBy: run.employeeId, ...(built[index] ? { builtOn: built[index] } : {}) }, new Date(now.getTime() + index));
         tx.emit({ kind: 'task_changed', task: child, cause: 'created' });
         tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: child.id, mode: 'work', employeeId: sub.assigneeId, reason: 'new' }, new Date(now.getTime() + index)) });
       }

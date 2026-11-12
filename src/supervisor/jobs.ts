@@ -75,6 +75,8 @@ export type JobInput = {
   /** The chosen skills as the session names them, and the plugin folders that carry them. */
   mounted: { skills: string[]; plugins: string[] };
   messages: Message[];
+  /** What of the company's record this run is shown at its start, in words. */
+  record?: string;
   nameOf: (id: string) => string;
   runtimeModule?: string;
 };
@@ -98,7 +100,8 @@ export function buildJob(input: JobInput): WorkerJob {
     mode: run.mode,
     cwd,
     systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode, admin }),
-    firstTurn: [first, messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
+    // The record is shown at the start of a session. One that carries on has it already, and the tool to read what is new.
+    firstTurn: [first, request.resumeSessionId ? '' : (input.record ?? ''), messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
     model: employee.model,
     // A conversation is answered at the model's own effort, so that it stays quick. Work runs at the effort the employee was hired with.
     // Deciding a card for the user is judgement, not small talk: it gets the effort too.

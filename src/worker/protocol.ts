@@ -78,6 +78,7 @@ export const TOOL_INPUT = {
           priority: z.union([z.literal(1), z.literal(2), z.literal(3)]),
           capUsd: z.number().positive(),
           retryAllowed: z.boolean(),
+          decisions: z.array(z.string().min(1)).optional(),
         }),
       )
       .min(1),
@@ -97,6 +98,7 @@ export const TOOL_INPUT = {
     doneCondition: z.string().min(1),
     capUsd: z.number().positive(),
     gates: z.array(z.string().min(1)).optional(),
+    decisions: z.array(z.string().min(1)).optional(),
   }),
   decide: z.object({ option: z.string().min(1), notes: z.string() }),
   read_decisions: z.object({ ids: z.array(z.string().min(1)).max(20).optional(), search: z.string().optional() }),

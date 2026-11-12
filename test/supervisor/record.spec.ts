@@ -4,8 +4,9 @@ import * as store from '../../src/db/store.ts';
 import type { RecordEntry } from '../../src/shared/types.ts';
 import * as decisions from '../../src/supervisor/decisions.ts';
 import { engineToolsFor } from '../../src/supervisor/jobs.ts';
-import { entryId, findEntries, oneLine, onReadDecisions, onRecordDecision, recordDecision } from '../../src/supervisor/record.ts';
-import { company as companyRow, employee, plus, repo, run, T0, task, team, tempDb } from '../helpers.ts';
+import { builtOnFor, entryId, findEntries, indexFor, oneLine, onReadDecisions, onRecordDecision, recordDecision, recordSection } from '../../src/supervisor/record.ts';
+import { exit, scripted } from '../fixtures/scriptedLink.ts';
+import { company as companyRow, employee, plus, repo, run, T0, task, team, tempDb, world } from '../helpers.ts';
 
 const lead = { kind: 'lead' as const, employeeId: 'lead' };
 type Over = Partial<Parameters<typeof recordDecision>[3]>;
@@ -147,5 +148,73 @@ describe('writing and reading decisions with the tools', () => {
     expect(engineToolsFor({ ...base, mode: 'route', chief: true, deciding: true })).toEqual(['decide', 'set_status', 'read_decisions', 'record_decision', 'contract_version']);
     expect(engineToolsFor({ ...base, mode: 'route', admin: true })).toEqual(expect.arrayContaining(['create_task', 'company_setup', 'set_gates', 'read_decisions']));
     expect(engineToolsFor({ ...base, mode: 'route', admin: true })).not.toContain('record_decision');
+  });
+});
+
+describe('what a run is shown of the record, and what a ticket is built on', () => {
+  it('lists the decisions a ticket is built on with their why, then the newest twenty that still hold, then the contract', () => {
+    const db = company();
+    for (let i = 1; i <= 25; i++) add(db, `Decision number ${i}.`, { why: `Reason ${i}.`, by: { kind: i === 2 ? 'chief' : 'lead', employeeId: i === 2 ? 'neo' : 'lead' } }, plus(T0, i));
+    add(db, 'Decision number 24, revised.', { replaces: 'D-24' }, plus(T0, 30));
+    const ticket = task({ repoId: 'repo1', builtOn: { decisions: ['D-2', 'D-99'], contract: null } });
+    const index = indexFor(db, ticket);
+    expect(index.cited.map((entry) => entry.id)).toEqual(['D-2']);
+    expect(index.recent).toHaveLength(20);
+    expect(index.recent.map((entry) => entry.id)).toEqual(expect.not.arrayContaining(['D-2', 'D-24']));
+    expect(index.recent[0]!.id).toBe('D-26');
+    const section = recordSection(db, index);
+    expect(section).toContain('- D-2 (2026-11-09, Neo, for the user): Decision number 2. Why: Reason 2.');
+    expect(section).toContain('- D-26 (2026-11-09, Priya): Decision number 24, revised.');
+    expect(section.indexOf('D-2 (')).toBeLessThan(section.indexOf('D-26 ('));
+    expect(section).toContain('mcp__engine__read_decisions');
+    expect(section).not.toMatch(/contract/i);
+    // Every line of the index is one line, however long the decision.
+    add(db, `${'A very long statement. '.repeat(20)}\nAnd a second line.`);
+    for (const line of recordSection(db, indexFor(db, ticket)).split('\n')) expect(line.length).toBeLessThanOrEqual(220);
+
+    // A repository with a contract: where it is, its version, and that this ticket changes it.
+    apply(db, (tx) => {
+      tx.emit({ kind: 'repo_changed', repo: repo({ contract: { paths: ['docs/contract'] } }) });
+      tx.emit({ kind: 'contract_version_issued', issued: { id: 'cv1', repoId: 'repo1', version: '0.10.1', change: 'start', summary: '', taskId: null, decisions: [], by: null, at: T0.toISOString() } });
+    });
+    const withContract = recordSection(db, indexFor(db, { ...ticket, contractVersion: '0.10.2' }));
+    expect(withContract).toContain('The contract is docs/contract, at version 0.10.1.');
+    expect(withContract).toContain('This ticket changes the contract. Its version is 0.10.2: the contract\'s files must state it.');
+    // Nothing on record and no contract: nothing is said.
+    expect(recordSection(tempDb(), { cited: [], recent: [], contract: null, changesContractTo: null })).toBe('');
+  });
+
+  it('puts the index in the first turn of a fresh run and not in one that carries on a session', async () => {
+    const fake = scripted((worker) => {
+      if (fake.workers.length > 1) return;
+      worker.say({ t: 'event', event: { kind: 'session_started', sessionId: 'sess-1', model: 'm', loginSource: 'none', tools: [] } });
+      worker.say(exit('failed', 'crashed', 'sess-1'));
+    });
+    const w = world(fake.spawn);
+    add(w.db, 'The API speaks JSON.');
+    w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Write the note', brief: 'Write it.' });
+    for (let i = 0; i < 3; i++) {
+      await w.sup.tick();
+      await new Promise((resolve) => setImmediate(resolve));
+      await w.sup.settle();
+    }
+    expect(fake.workers).toHaveLength(2);
+    expect(fake.workers[0]!.job.firstTurn).toContain('- D-1 (2026-11-09, a team lead): The API speaks JSON.');
+    expect(fake.workers[1]!.job.resumeSessionId).toBe('sess-1');
+    expect(fake.workers[1]!.job.firstTurn).not.toContain('D-1');
+    await w.sup.stop();
+  });
+
+  it('records what a ticket is built on: the decisions its maker named, its parent\'s with them, and the contract of the day', () => {
+    const w = world(scripted().spawn);
+    add(w.db, 'The API speaks JSON.');
+    add(w.db, 'Dates are ISO 8601.');
+    const base = { teamId: 'team1', assigneeId: 'emp1', title: 'Write the note', brief: 'Write it.' };
+    expect(() => w.sup.createTask({ ...base, decisions: ['D-1', 'D-9'] })).toThrow(/no decision D-9/);
+    expect(w.sup.createTask({ ...base, decisions: ['d-2', 'D-2'] }).builtOn).toEqual({ decisions: ['D-2'], contract: null });
+    // A ticket built on nothing, where there is no contract, says nothing.
+    expect(w.sup.createTask(base).builtOn).toBeUndefined();
+    const parent = task({ builtOn: { decisions: ['D-1'], contract: '0.3.0' } });
+    expect(builtOnFor(w.db, { decisions: ['D-2', 'D-1'], parent, repoId: null })).toEqual({ decisions: ['D-1', 'D-2'], contract: null });
   });
 });

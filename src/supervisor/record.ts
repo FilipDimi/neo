@@ -7,7 +7,7 @@ import { apply, type Tx } from '../db/apply.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import type { ToolReply } from '../runtime/tools.ts';
-import type { Decision, RecordEntry, Run } from '../shared/types.ts';
+import type { Decision, RecordEntry, Run, Task } from '../shared/types.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
 
 export const entryId = (n: number): string => `D-${n}`;
@@ -63,6 +63,80 @@ export function findEntries(db: Db, query: Query): RecordEntry[] {
       return words.every((word) => text.includes(word));
     })
     .reverse();
+}
+
+// ---------- the contract's version ----------
+
+const parts = (version: string): number[] => version.split('.').map(Number);
+/** Which of two versions is the later: negative when `a` is, positive when `b` is. */
+export function compareVersions(a: string, b: string): number {
+  const [x, y] = [parts(a), parts(b)];
+  return (x[0] ?? 0) - (y[0] ?? 0) || (x[1] ?? 0) - (y[1] ?? 0) || (x[2] ?? 0) - (y[2] ?? 0);
+}
+
+/** The version a repository's contract is at: the highest ever handed out for it. Null before any was. */
+export function currentContract(db: Db, repoId: string): string | null {
+  const issued = store.contractVersions(db, repoId).map((entry) => entry.version);
+  return issued.length === 0 ? null : issued.reduce((highest, version) => (compareVersions(version, highest) > 0 ? version : highest));
+}
+
+// ---------- what a ticket is built on, and what a run is shown ----------
+
+/**
+ * What a new ticket is built on: the decisions its maker named, after its parent's, each once; and the version its
+ * repository's contract is at today. Undefined when that is nothing at all. A number nobody recorded is refused.
+ */
+export function builtOnFor(db: Db, input: { decisions?: string[] | undefined; parent?: Task | null | undefined; repoId: string | null }): Task['builtOn'] {
+  const named = (input.decisions ?? []).map((id) => id.trim().toUpperCase());
+  const missing = named.find((id) => !store.getEntry(db, id));
+  if (missing) throw new Error(`There is no decision ${missing} on record. Name decisions by their numbers, such as D-12; mcp__engine__read_decisions finds them.`);
+  const decisions = [...new Set([...(input.parent?.builtOn?.decisions ?? []), ...named])];
+  const contract = input.repoId ? currentContract(db, input.repoId) : null;
+  return decisions.length === 0 && contract === null ? undefined : { decisions, contract };
+}
+
+/** How many of the newest decisions a run is shown without asking. */
+const NEWEST = 20;
+const LINE = 160;
+
+export type RecordIndex = { cited: RecordEntry[]; recent: RecordEntry[]; contract: { paths: string[]; version: string | null } | null; changesContractTo: string | null };
+
+/** What of the record is put in front of a run on this ticket: what the ticket is built on, the newest that still hold, the contract. */
+export function indexFor(db: Db, task: Task): RecordIndex {
+  const cited = (task.builtOn?.decisions ?? []).flatMap((id) => store.getEntry(db, id) ?? []);
+  const shown = new Set(cited.map((entry) => entry.id));
+  const recent = store
+    .allRecord(db)
+    .filter((entry) => !entry.replacedBy && !shown.has(entry.id))
+    .slice(-NEWEST)
+    .reverse();
+  const repo = task.repoId ? store.getRepo(db, task.repoId) : undefined;
+  const parent = task.parentId ? store.getTask(db, task.parentId) : undefined;
+  return {
+    cited,
+    recent,
+    contract: repo?.contract ? { paths: repo.contract.paths, version: currentContract(db, repo.id) } : null,
+    changesContractTo: task.contractVersion ?? parent?.contractVersion ?? null,
+  };
+}
+
+/** The index as a run reads it at its start. One line per decision; empty when there is nothing to say. */
+export function recordSection(db: Db, index: RecordIndex): string {
+  const line = (entry: RecordEntry, withWhy: boolean): string =>
+    `- ${entry.id} (${entry.at.slice(0, 10)}, ${whoDecided(db, entry)}): ${oneLine(entry.statement, LINE)}${withWhy && entry.why ? ` Why: ${oneLine(entry.why, LINE)}` : ''}${entry.replacedBy ? ` (replaced by ${entry.replacedBy})` : ''}`;
+  const decided = [
+    index.cited.length > 0 ? `This ticket is built on:\n${index.cited.map((entry) => line(entry, true)).join('\n')}` : '',
+    index.recent.length > 0 ? `The newest:\n${index.recent.map((entry) => line(entry, false)).join('\n')}` : '',
+  ].filter(Boolean);
+  const contract = index.contract
+    ? [
+        `The contract is ${index.contract.paths.join(', ')}${index.contract.version ? `, at version ${index.contract.version}` : ', with no version yet'}. Its files change only on a ticket the engine gave a version to.`,
+        index.changesContractTo ? `This ticket changes the contract. Its version is ${index.changesContractTo}: the contract's files must state it.` : '',
+      ].filter(Boolean)
+    : [];
+  if (decided.length === 0 && contract.length === 0) return '';
+  const head = decided.length > 0 ? 'Decisions on record. This is the company\'s own numbered list of what was decided: go by it, not by memory. Read any one whole, or search them all, with mcp__engine__read_decisions.' : '';
+  return [head, ...decided, ...contract].filter(Boolean).join('\n\n');
 }
 
 // ---------- in words ----------

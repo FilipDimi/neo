@@ -65,6 +65,7 @@ const TaskBody = z.object({
   doneCondition: z.string().optional(),
   repoId: z.string().nullable().optional(),
   gates: z.array(z.string()).optional(),
+  decisions: z.array(z.string()).optional(),
   ownership: z.array(z.string()).optional(),
   capUsd: z.number().positive().optional(),
   retryAllowed: z.boolean().optional(),

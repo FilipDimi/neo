@@ -29,7 +29,7 @@ import { companyNow } from './companyNow.ts';
 import { buildJob, folderOf, sessionEnv } from './jobs.ts';
 import { canTransition } from './taskState.ts';
 import { remember } from './memory.ts';
-import { onReadDecisions, onRecordDecision } from './record.ts';
+import { builtOnFor, indexFor, onReadDecisions, onRecordDecision, recordSection } from './record.ts';
 import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
@@ -61,7 +61,10 @@ export type SupervisorOptions = {
 };
 
 export type NewTaskInput = Pick<Task, 'teamId' | 'title' | 'brief'> &
-  Partial<Pick<Task, 'summary' | 'createdBy' | 'assigneeId' | 'reviewerId' | 'parentId' | 'kind' | 'priority' | 'doneCondition' | 'repoId' | 'gates' | 'ownership' | 'capUsd' | 'retryAllowed' | 'leaseMinutes'>>;
+  Partial<Pick<Task, 'summary' | 'createdBy' | 'assigneeId' | 'reviewerId' | 'parentId' | 'kind' | 'priority' | 'doneCondition' | 'repoId' | 'gates' | 'ownership' | 'capUsd' | 'retryAllowed' | 'leaseMinutes'>> & {
+    /** The numbers of the decisions on record this ticket is built on. */
+    decisions?: string[] | undefined;
+  };
 
 type ToolReply = { ok: boolean; text: string };
 const DEFAULT_WORKER = new URL('../worker/worker.ts', import.meta.url).pathname;
@@ -225,8 +228,10 @@ export class Supervisor {
     const vague = unusable(input.ownership ?? []);
     if (vague.length > 0) throw new Error(`${vague.map((entry) => `"${entry}"`).join(', ')} names no file or folder a task can own. Name files or folders by their path from the top of the repository, such as src/api or README.md`);
 
+    const { decisions: cited, ...fields } = input;
+    const builtOn = builtOnFor(this.db, { decisions: cited, repoId });
     const now = this.now();
-    const task = store.newTask({ createdBy: 'user', ...input, repoId }, now);
+    const task = store.newTask({ createdBy: 'user', ...fields, repoId, ...(builtOn ? { builtOn } : {}) }, now);
     const who = requestFor(task, team);
     if ('problem' in who && who.problem === 'no_assignee') throw new Error(`a task on the self-managed team ${team.name} needs an assignee`);
     apply(
@@ -515,6 +520,7 @@ export class Supervisor {
         teammates: everyone.filter((e) => e.teamId === team.id),
         teams,
         board: request.mode === 'route' ? companyNow(this.db, now) : undefined,
+        record: recordSection(this.db, indexFor(this.db, prepared)),
         remainingUsd: countsCost(company) ? Math.max(0, task.capUsd - store.spentOn(this.db, task.id)) : Infinity,
         envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)),
         ...(budget !== undefined ? { maxBudgetUsd: budget } : {}),
