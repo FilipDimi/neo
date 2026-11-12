@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { apply } from '../../src/db/apply.ts';
@@ -7,7 +8,7 @@ import * as store from '../../src/db/store.ts';
 import type { SkillRef } from '../../src/runtime/skills.ts';
 import { ADMIN_TOOLS } from '../../src/shared/adminTools.ts';
 import { adminTool, companySetup } from '../../src/supervisor/admin.ts';
-import { company, employee, gitRepo, repo, T0, team, tempDir } from '../helpers.ts';
+import { company, employee, gitIn, gitRepo, repo, T0, team, tempDir } from '../helpers.ts';
 
 const skill = (id: string): SkillRef => ({ id, label: id, description: id, source: 'user', path: `/skills/${id}` });
 const SKILLS = [skill('dataviz'), skill('user:rust-skills'), ...['swift', 'swiftui', 'testing'].map((name) => skill(`apple-skills:${name}`))];
@@ -106,7 +107,7 @@ describe("Morpheus's tools", () => {
   });
 
   it('lists every tool it offers', () => {
-    expect(ADMIN_TOOLS).toEqual(['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'add_repository', 'set_gates']);
+    expect(ADMIN_TOOLS).toEqual(['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'add_repository', 'set_gates', 'set_record', 'import_decisions']);
   });
 
   it('registers a repository after the company was set up, so a team can be given it', async () => {
@@ -118,5 +119,38 @@ describe("Morpheus's tools", () => {
     expect(store.allRepos(db).map((entry) => entry.path)).toContain(second);
     await expect(use('add_repository', { path: second })).rejects.toThrow(/already registered/);
     expect(await use('update_team', { team: 'Rust', repo: second, baseBranch: 'team' })).toMatch(/Rust/);
+  });
+
+  it("names a repository's decisions folder and contract, starts the contract's count, and shows them in the setup", async () => {
+    const { db, ctx, use, repoPath } = setup();
+    expect(await use('set_record', { repo: repoPath, decisionsFolder: 'docs/decisions/', contract: ['docs/contract'], contractStartsAt: '0.10.1' })).toMatch(/decisions in docs\/decisions.*contract docs\/contract.*0\.10\.1/s);
+    expect(store.getRepo(db, 'receipts')).toMatchObject({ decisionsDir: 'docs/decisions', contract: { paths: ['docs/contract'] } });
+    expect(companySetup(ctx)).toMatch(/decisions in docs\/decisions; contract docs\/contract at 0\.10\.1/);
+    // Counting starts once, and never backwards.
+    await expect(use('set_record', { repo: repoPath, contractStartsAt: '0.9.0' })).rejects.toThrow(/not higher than 0\.10\.1/);
+    await expect(use('set_record', { repo: repoPath, decisionsFolder: '../elsewhere' })).rejects.toThrow(/names no folder/);
+    await expect(use('set_record', { repo: repoPath, contract: ['docs/*.yaml'] })).rejects.toThrow(/names no file or folder/);
+    // Null takes either away; what is not named is left as it was.
+    expect(await use('set_record', { repo: repoPath, contract: null })).toMatch(/no contract/);
+    expect(store.getRepo(db, 'receipts')).toMatchObject({ decisionsDir: 'docs/decisions', contract: null });
+    expect(await use('set_record', { repo: repoPath, decisionsFolder: null })).toMatch(/no decision files/);
+  });
+
+  it('imports a log of decisions kept by hand, and says what it had to renumber', async () => {
+    const { db, use, repoPath } = setup();
+    const table = (rows: string) => `| ID | Date | Decision | Why |\n|---|---|---|---|\n${rows}`;
+    for (const [branch, rows] of [['main', '| D-001 | 2026-11-07 | The API speaks JSON. | Parsers. |\n'], ['track/rust', '| D-001 | 2026-11-07 | Errors carry a code. | Clients. |\n']] as const) {
+      gitIn(repoPath, 'checkout', '-q', branch);
+      fs.mkdirSync(path.join(repoPath, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(repoPath, 'docs/decisions.md'), table(rows));
+      gitIn(repoPath, 'add', '-A');
+      gitIn(repoPath, 'commit', '-q', '-m', 'log');
+    }
+    gitIn(repoPath, 'checkout', '-q', 'main');
+    const said = await use('import_decisions', { repo: repoPath, file: 'docs/decisions.md', branches: ['main', 'track/rust'] });
+    expect(said).toMatch(/Imported 2 decisions/);
+    expect(said).toMatch(/D-1 on track\/rust is now D-2/);
+    expect(store.allRecord(db).map((entry) => entry.statement)).toEqual(['The API speaks JSON.', 'Errors carry a code.']);
+    expect(await use('import_decisions', { repo: repoPath, file: 'docs/decisions.md' })).toMatch(/Nothing new/);
   });
 });

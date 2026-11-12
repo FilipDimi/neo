@@ -17,7 +17,11 @@ import { countsCost } from '../shared/view.ts';
 import { ADMIN_INPUT, type AdminTool } from '../shared/adminTools.ts';
 import { Capability, Company, Effort, Team, TeamRepo, type Employee, type Gate, type Repo } from '../shared/types.ts';
 import { CAPABILITIES } from './blastRadius.ts';
+import { unusable } from '../git/ownership.ts';
 import { repoProblem } from './health.ts';
+import { currentContract, issueContractVersion } from './record.ts';
+import { dirOf } from './recordFiles.ts';
+import { importDecisions } from './recordImport.ts';
 import { edit, fire, hire, removeTeam, type HireCtx } from './hiring.ts';
 import { TEAM_DEFAULTS } from './setup.ts';
 
@@ -82,6 +86,13 @@ export async function checkRepo(db: Db, given: Repo): Promise<Repo> {
   const problem = await repoProblem(repo.path);
   if (problem && !/progress|lock/.test(problem)) throw new Error(`${repo.path}: ${problem}.`);
   return repo;
+}
+
+/** Where a repository keeps the record, in a few words: for the setup and for the answer of `set_record`. */
+function recordOf(db: Db, repo: Repo): string {
+  const dir = dirOf(repo);
+  const version = repo.contract ? currentContract(db, repo.id) : null;
+  return `${dir ? `decisions in ${dir}` : 'no decision files'}; ${repo.contract ? `contract ${repo.contract.paths.join(', ')}${version ? ` at ${version}` : ', no version yet'}` : 'no contract'}`;
 }
 
 /** A gate that unfinished work names stays, under its name: taken away or renamed, that work would have nothing to pass. */
@@ -156,7 +167,7 @@ export function companySetup(ctx: HireCtx): string {
     const lines = people.map((employee) => `  - ${employee.name}${employee.id === team.leadId ? ' (lead)' : ''}: ${labelOf(employee.model)}, ${effortOf(employee.effort)}; tools ${toolsOf(employee.capabilities)}; skills ${skillsInBrief(employee.skills) || 'none'}. Role: ${employee.role}`);
     return [`- ${describeTeam(db, team)}. ${team.purpose}`.trim(), ...lines].join('\n');
   });
-  const repos = store.allRepos(db).map((repo) => `- ${repo.path} (id ${repo.id}): ${repo.gates.length === 0 ? 'no gates' : repo.gates.map((gate) => `${gate.name} (\`${gate.command}\`, ${gate.timeoutMinutes} min${gate.lock ? `, lock ${gate.lock}` : ''})`).join('; ')}`);
+  const repos = store.allRepos(db).map((repo) => `- ${repo.path} (id ${repo.id}): ${repo.gates.length === 0 ? 'no gates' : repo.gates.map((gate) => `${gate.name} (\`${gate.command}\`, ${gate.timeoutMinutes} min${gate.lock ? `, lock ${gate.lock}` : ''})`).join('; ')}${repo.decisionsDir || repo.contract ? `; ${recordOf(db, repo)}` : ''}`);
   const { sets, singles } = skillSets(ctx.skills.map((skill) => skill.id));
   return [
     `${company.name}. ${countsCost(company) ? `Daily cap ${usd(company.dailyCapUsd)}, ` : ''}${company.concurrency} runs at once. Chief of staff: ${name(company.chiefOfStaffId)}. Admin: ${name(company.adminId)}.`,
@@ -251,6 +262,39 @@ export async function adminTool(ctx: HireCtx, name: string, raw: unknown): Promi
       checkGates(db, repo, input.gates);
       apply(db, (tx) => tx.emit({ kind: 'repo_changed', repo: { ...repo, gates: input.gates } }), at);
       return `Gates of ${repo.path}: ${input.gates.map((gate) => `${gate.name} (${gate.timeoutMinutes} min${gate.lock ? `, lock ${gate.lock}` : ''})`).join(', ') || 'none'}.`;
+    }
+    case 'set_record': {
+      const input = ADMIN_INPUT.set_record.parse(raw);
+      const repo = findRepo(db, input.repo);
+      const next: Repo = { ...repo };
+      if (input.decisionsFolder !== undefined) {
+        if (input.decisionsFolder !== null && unusable([input.decisionsFolder]).length > 0) throw new Error(`"${input.decisionsFolder}" names no folder in the repository. Give its path from the top, such as docs/decisions.`);
+        next.decisionsDir = dirOf({ decisionsDir: input.decisionsFolder });
+      }
+      if (input.contract !== undefined) {
+        const vague = unusable(input.contract ?? []);
+        if (vague.length > 0) throw new Error(`${vague.map((entry) => `"${entry}"`).join(', ')} names no file or folder of the repository. Give each by its path from the top, such as docs/contract.`);
+        next.contract = input.contract === null ? null : { paths: input.contract.map((entry) => dirOf({ decisionsDir: entry })!) };
+      }
+      apply(
+        db,
+        (tx) => {
+          tx.emit({ kind: 'repo_changed', repo: next });
+          if (input.contractStartsAt !== undefined) issueContractVersion(tx, db, at, { repoId: repo.id, change: 'start', summary: 'Where counting begins.', taskId: null, by: null, version: input.contractStartsAt.trim() });
+        },
+        at,
+      );
+      return `Record of ${repo.path}: ${recordOf(db, next)}.`;
+    }
+    case 'import_decisions': {
+      const input = ADMIN_INPUT.import_decisions.parse(raw);
+      const repo = findRepo(db, input.repo);
+      const branches = input.branches ?? [(await git(repo.path, ['symbolic-ref', '-q', '--short', 'HEAD'])).out.trim()].filter(Boolean);
+      if (branches.length === 0) throw new Error(`${repo.path} has no branch checked out. Name the branches to read ${input.file} on.`);
+      const done = await importDecisions({ db, now: at }, repo, input.file, branches);
+      if (done.imported === 0) return `Nothing new: all ${done.already} decision${done.already === 1 ? '' : 's'} in ${input.file} (${branches.join(', ')}) are on record already.`;
+      const moved = done.renumbered.map((entry) => `${entry.from} on ${entry.branch} is now ${entry.to}`);
+      return `Imported ${done.imported} decision${done.imported === 1 ? '' : 's'} from ${input.file} (${branches.join(', ')}), with the numbers they had.${moved.length > 0 ? ` ${moved.length === 1 ? 'One' : moved.length} had a number another branch used first, and got a new one: ${moved.join('; ')}.` : ''}`;
     }
     default:
       throw new Error(`There is no admin tool ${name}.`);

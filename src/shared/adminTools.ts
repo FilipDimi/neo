@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { Capability, Effort, Gate } from './types.ts';
 
-export const ADMIN_TOOLS = ['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'add_repository', 'set_gates'] as const;
+export const ADMIN_TOOLS = ['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'add_repository', 'set_gates', 'set_record', 'import_decisions'] as const;
 export type AdminTool = (typeof ADMIN_TOOLS)[number];
 
 const teamFields = {
@@ -55,6 +55,17 @@ export const ADMIN_INPUT = {
   }),
   add_repository: z.object({ path: z.string().min(1).describe('the folder of a git repository on this machine'), gates: z.array(Gate).optional() }),
   set_gates: z.object({ repo: z.string().min(1), gates: z.array(Gate) }),
+  set_record: z.object({
+    repo: z.string().min(1),
+    decisionsFolder: z.string().min(1).nullable().optional().describe('where the engine writes one file per decision when work lands, from the top of the repository, such as docs/decisions; null: it writes none'),
+    contract: z.array(z.string().min(1)).min(1).nullable().optional().describe('the folders or files that are the contract between teams, such as docs/contract; a change to them then needs a version from the engine; null: no contract'),
+    contractStartsAt: z.string().optional().describe('the version the contract is at now, such as 0.10.1: counting goes on from it'),
+  }),
+  import_decisions: z.object({
+    repo: z.string().min(1),
+    file: z.string().min(1).describe('a markdown table of decisions kept by hand, such as docs/decisions.md, whose rows begin | D-12 | date | decision | why |'),
+    branches: z.array(z.string().min(1)).min(1).optional().describe('the branches to read it on, in order: the first to use a number keeps it. Left out: the branch checked out'),
+  }),
 } satisfies Record<AdminTool, z.ZodType>;
 
 export const ADMIN_DESCRIPTION: Record<AdminTool, string> = {
@@ -67,5 +78,7 @@ export const ADMIN_DESCRIPTION: Record<AdminTool, string> = {
   fire: 'Fire someone. Their memory is archived. A lead leaves their team without a lead.',
   update_company: 'Change the company: the daily cap for all teams together, how many runs may happen at once, the rules every employee gets, whether cost is counted at all, and who decides cards first (the user, or the chief of staff on the user\'s behalf).',
   add_repository: 'Register a git repository on this machine, so teams can be given it to work in (update_team, with a base branch). Gates can be given now or set later.',
+  set_record: "Say where a repository keeps the company's record: the folder the engine writes decision files into, and the files that are its contract. Either can be taken away with null.",
+  import_decisions: 'Take a log of decisions that was kept by hand into the record, with the numbers it had. Safe to run again: what is on record already is left alone.',
   set_gates: "Replace a repository's gates: named commands the engine runs to check work. Gates that share a lock never run side by side.",
 };
