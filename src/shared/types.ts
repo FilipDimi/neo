@@ -24,7 +24,18 @@ export const ModelTier = z.enum(['lead', 'member', 'routine']);
 export type ModelTier = z.infer<typeof ModelTier>;
 
 /** A named command that must pass. `lock` serialises gates that cannot run side by side (one Xcode run at a time). */
-export const Gate = z.object({ name: z.string().min(1), command: z.string().min(1), timeoutMinutes: z.number().positive(), lock: z.string().nullable() });
+export const Gate = z.object({
+  name: z.string().min(1),
+  command: z.string().min(1),
+  timeoutMinutes: z.number().positive(),
+  lock: z.string().nullable(),
+  /**
+   * Its result depends on nothing but the files in the folder: not on what is committed, not on anything running
+   * beside it. Only then does a pass the employee's own run got on exactly the committed files stand at the commit,
+   * without the gate being run a second time.
+   */
+  byFiles: z.boolean().optional().describe('true only for a gate whose result depends on nothing but the files in the folder (not on git history, not on a running service): a pass on exactly the committed files is then not run again at the commit'),
+});
 export type Gate = z.infer<typeof Gate>;
 
 export const Repo = z.object({

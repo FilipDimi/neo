@@ -176,47 +176,54 @@ export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promi
  * `label`: whose gates these are, in words, for whoever waits behind them. `onQueued`: this gate waits its turn behind
  * a lock, held by the one named (null: someone who gave no name).
  */
-export type GateOptions = { onStart?: (gate: Gate) => void; onFinish?: (result: GateResult) => void; limits?: GateLimits; label?: string; onQueued?: (gate: Gate, heldBy: string | null) => void };
+export type GateOptions = {
+  onStart?: (gate: Gate) => void;
+  onFinish?: (result: GateResult) => void;
+  limits?: GateLimits;
+  label?: string;
+  /** Called when this gate has to wait, and again each time the lock changes hands while it does. */
+  onQueued?: (gate: Gate, heldBy: string | null) => void;
+  /** Awaited right before the gate runs, its turn having come: the moment to look at what it will run on. */
+  before?: (gate: Gate) => Promise<void>;
+};
 
 /** Runs a task's gates in order, stopping at the first failure. Gates that share a lock never run side by side. */
 export class GateQueue {
   private readonly tails = new Map<string, Promise<unknown>>();
-  /** How many gates hold or wait for each lock, and who holds it now. */
-  private readonly taken = new Map<string, number>();
-  private readonly holders = new Map<string, string | null>();
+  /** Who holds each lock (the first in line) and who waits behind, in order. */
+  private readonly lines = new Map<string, { label: string | null; tell: (heldBy: string | null) => void }[]>();
 
   async run(gates: Gate[], cwd: string, options: GateOptions = {}): Promise<GateResult[]> {
     const results: GateResult[] = [];
     for (const gate of gates) {
       const once = async () => {
+        await options.before?.(gate);
         options.onStart?.(gate);
         const result = await runGate(gate, cwd, options.limits);
         options.onFinish?.(result);
         return result;
       };
-      // Someone has the lock, or is ahead in line for it: this gate waits, and says for whom.
-      if (gate.lock && (this.taken.get(gate.lock) ?? 0) > 0) options.onQueued?.(gate, this.holders.get(gate.lock) ?? null);
-      const result = gate.lock ? await this.locked(gate.lock, options.label ?? null, once) : await once();
+      const result = gate.lock ? await this.locked(gate.lock, options.label ?? null, (heldBy) => options.onQueued?.(gate, heldBy), once) : await once();
       results.push(result);
       if (result.exitCode !== 0) break;
     }
     return results;
   }
 
-  private locked<T>(lock: string, label: string | null, work: () => Promise<T>): Promise<T> {
-    const free = (this.taken.get(lock) ?? 0) === 0;
-    this.taken.set(lock, (this.taken.get(lock) ?? 0) + 1);
-    // Free: it is this one's from now, though its work starts a moment later.
-    if (free) this.holders.set(lock, label);
+  private locked<T>(lock: string, label: string | null, tell: (heldBy: string | null) => void, work: () => Promise<T>): Promise<T> {
+    const line = this.lines.get(lock) ?? [];
+    this.lines.set(lock, line);
+    const me = { label, tell };
+    // Someone has the lock, or is ahead in line for it: this gate waits, and is told for whom.
+    if (line.length > 0) tell(line[0]!.label);
+    line.push(me);
     const release = () => {
-      const left = (this.taken.get(lock) ?? 1) - 1;
-      this.taken.set(lock, left);
-      if (left === 0) this.holders.delete(lock);
+      line.splice(line.indexOf(me), 1);
+      // The lock has changed hands: whoever still waits is told whose it is now.
+      for (const waiter of line.slice(1)) waiter.tell(line[0]!.label);
+      if (line.length === 0) this.lines.delete(lock);
     };
-    const held = () => {
-      this.holders.set(lock, label);
-      return work().finally(release);
-    };
+    const held = () => work().finally(release);
     const next = (this.tails.get(lock) ?? Promise.resolve()).then(held, held);
     this.tails.set(
       lock,

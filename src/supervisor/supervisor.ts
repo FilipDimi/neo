@@ -33,8 +33,8 @@ import { builtOnFor, indexFor, onContractVersion, onReadDecisions, onRecordDecis
 import { dirOf } from './recordFiles.ts';
 import { holdMeeting, meetingReply, planMeeting, proposalsOf, type MeetingCall, type Proposals } from './meeting.ts';
 import { verifyClaims, type Claims } from './proof.ts';
-import { account, askText, BUDGET, called, looked, MOVES, newWatch, progressed, refusal, resulted, type Budget, type Watch } from './progress.ts';
-import { treeOf } from '../git/tree.ts';
+import { account, askText, BUDGET, called, looked, MOVES, newWatch, progressed, refusal, refused, resulted, undelivered, type Budget, type Watch } from './progress.ts';
+import { printOf, treeOf } from '../git/tree.ts';
 import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
@@ -607,6 +607,13 @@ export class Supervisor {
             link.send({ t: 'tool_result', askId: message.askId, ...reply });
           });
       case 'message_result': {
+        // The question where it stands could not be put to the session (it had stopped listening): it has not been asked.
+        const watch = this.watches.get(runId);
+        if (watch?.askId === message.id) {
+          if (message.delivered) watch.askId = null;
+          else undelivered(watch);
+          return;
+        }
         const waiting = store.waitingMessages(this.db, run.employeeId).find((m) => m.id === message.id);
         const now = this.now();
         if (waiting && message.delivered) apply(this.db, (tx) => tx.emit({ kind: 'message_delivered', message: { ...waiting, state: 'delivered', deliveredAt: now.toISOString() } }), now);
@@ -675,15 +682,15 @@ export class Supervisor {
     if (watch.looking) return;
     watch.looking = true;
     const task = store.getTask(this.db, run.taskId);
-    void (task ? treeOf(folderOf(this.paths, task)) : Promise.resolve(null))
+    const folder = task ? folderOf(this.paths, task) : null;
+    void (folder ? treeOf(folder) : Promise.resolve(null))
       .catch(() => null)
       .then((tree) => {
         watch.looking = false;
         const live = store.getRun(this.db, run.id);
-        if (!live || live.outcome !== 'running' || this.watches.get(run.id) !== watch || this.planned.has(run.id)) return;
-        // A folder git cannot read says nothing: where there is a repository, only a tree counts.
-        if (tree === null && task?.repoId) return;
-        const verdict = looked(watch, tree, this.now(), this.budget);
+        if (!live || live.outcome !== 'running' || this.watches.get(run.id) !== watch || this.planned.has(run.id) || !folder) return;
+        // Where there is no tree to go by (no repository, or one git cannot read here), the folder's print says whether anything changed.
+        const verdict = looked(watch, tree ?? printOf(folder), this.now(), this.budget);
         if (verdict === 'ask') this.askWhereItStands(live, watch);
         if (verdict === 'stop') this.stopForNoProgress(live, watch);
       });
@@ -691,7 +698,8 @@ export class Supervisor {
 
   private askWhereItStands(run: Run, watch: Watch): void {
     this.change((tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, text: `asked where it stands: ${watch.calls} calls with nothing new` }));
-    this.links.get(run.id)?.send({ t: 'message', id: store.newId(), text: askText(watch.calls, Math.max(1, this.budget.stopAfter - watch.calls)) });
+    watch.askId = store.newId();
+    this.links.get(run.id)?.send({ t: 'message', id: watch.askId, text: askText(watch.calls, Math.max(1, this.budget.stopAfter - this.budget.askAfter)) });
   }
 
   /** The run is stopped, and a card says what it was doing: the count, its last status, what it called. */
@@ -848,8 +856,12 @@ export class Supervisor {
     const company = store.getCompany(this.db);
     if (!task || !employee || !team || !company) return { allow: false, reason: 'Refused: this run has lost its task.', stop: true };
     // A command that just failed the same way three times is not run a fourth: it would fail again.
-    const looping = this.watches.has(run.id) ? refusal(this.watches.get(run.id)!, call) : null;
-    if (looping) return { allow: false, reason: looping };
+    const watch = this.watches.get(run.id);
+    const looping = watch ? refusal(watch, call) : null;
+    if (looping) {
+      refused(watch!, call.id);
+      return { allow: false, reason: looping };
+    }
     const folder = folderOf(this.paths, task);
     const verdict = judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: store.grantsOf(this.db, task.id), protect: engineFiles(this.paths), engineDirs: this.engineDirs(task) }, call);
     const now = this.now();
@@ -881,6 +893,8 @@ export class Supervisor {
       allowed.set(call.id, call);
       this.allowedWrites.set(run.id, allowed);
     }
+    // A call that is refused is never made: its "failure" is not the command's.
+    if (!verdict.allow && watch) refused(watch, call.id);
     return { allow: verdict.allow, ...(verdict.reason !== undefined && { reason: verdict.reason }), ...(verdict.stop && { stop: true }) };
   }
 

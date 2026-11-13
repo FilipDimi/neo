@@ -359,10 +359,11 @@ export class Flow {
     const gate = site?.repo.gates.find((g) => g.name === name);
     if (!site || !gate) return { ok: false, text: `There is no gate named "${name}" for this task. The gates are: ${site?.repo.gates.map((g) => g.name).join(', ') || 'none'}.` };
     // A gate is not run twice on the same files: the engine knows exactly what is in the folder, and what each result ran on.
-    const tree = await treeOf(site.folder);
     const asked = (store.getRun(this.db, run.id)?.askedGates ?? []).filter((result) => result.name === name);
-    const refusal = this.sameFiles(task, name, tree, asked);
+    const refusal = this.sameFiles(run, task, gate, await treeOf(site.folder), asked);
     if (refusal) return refusal;
+    // What it runs on is looked at when its turn has come: waiting behind a lock, the folder may still change.
+    let tree: string | null = null;
     // A gate may take longer than the lease, or wait its turn behind a lock. The run is not silent: it is waiting for the engine, and says what for.
     let doing = `running the gate "${name}"`;
     const waiting = () => {
@@ -372,6 +373,7 @@ export class Flow {
     try {
       const [ran] = await this.host.gates.run([gate], site.folder, {
         limits: this.host.gateLimits(site.folder, site.team),
+        before: async () => void (tree = await treeOf(site.folder)),
         ...this.waits(run.id, task, (text) => {
           doing = text;
           waiting();
@@ -388,44 +390,79 @@ export class Flow {
       return { ok: true, text: `${name}: ${result.exitCode === 0 ? 'passed' : 'FAILED'} (exit ${result.exitCode})\n${result.output.slice(-3000)}` };
     } finally {
       clearInterval(beat);
-      this.waitsFor(run.id, task.id, null);
+      this.waitOver(run.id, task.id);
     }
   }
 
   /**
    * What a gate asked for again is answered with, when the engine already knows: it ran on exactly these files (a pass
-   * stands; a failure is run once more, then not again), or it has failed too often in this run. Null: run it.
+   * stands; a failure is run once more, a third time only if a command went through since, and never a fourth), or it
+   * has failed too often in this run. Null: run it.
    */
-  private sameFiles(task: Task, name: string, tree: string | null, asked: GateResult[]): ToolReply | null {
+  private sameFiles(run: Run, task: Task, gate: Gate, tree: string | null, asked: GateResult[]): ToolReply | null {
     const now = this.host.now();
+    const name = gate.name;
+    // A reviewer has no report to make: it gives its verdict from what it has.
+    const instead = run.mode === 'review' ? 'give your verdict from what you have and say what fails' : 'call mcp__engine__report_done and say what fails';
     const failed = asked.filter((result) => result.exitCode !== 0);
     if (failed.length >= GATE_FAILS_PER_RUN) {
-      return { ok: false, text: `"${name}" has failed ${failed.length} times in this run, and the engine does not run it again for this run. Call mcp__engine__report_done with what you have and say what fails: the engine runs the gate on your report, and what happens next is decided from its result. Its last output:\n${failed.at(-1)!.output.slice(-1500)}` };
+      return { ok: false, text: `"${name}" has failed ${failed.length} times in this run, and the engine does not run it again for this run. Stop here: ${instead}. Its last output:\n${failed.at(-1)!.output.slice(-1500)}` };
     }
     if (!tree) return null;
-    // Every result for this gate on this task, the engine's own included, that ran on these files or left them like this.
+    // Every result of this gate as it is now defined, on this task, the engine's own included, that ran on these files or left them like this.
     const here = store
       .runsOf(this.db, task.id)
       .flatMap((earlier) => [...earlier.gateResults, ...(earlier.askedGates ?? [])])
-      .filter((result) => result.name === name && (result.tree === tree || result.treeAfter === tree))
+      .filter((result) => result.name === name && result.command === gate.command && !result.reused && (result.tree === tree || result.treeAfter === tree))
       .sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
     const last = here.at(-1);
     if (!last) return null;
     if (last.exitCode === 0) return { ok: true, text: `${name}: passed (exit 0) ${minutesAgo(last.at, now)}, on exactly these files. Not run again: its result stands.` };
     const fails = here.filter((result) => result.exitCode !== 0).length;
     if (fails < 2) return null;
-    return { ok: false, text: `"${name}" failed twice on exactly these files (exit ${last.exitCode}), the last time ${minutesAgo(last.at, now)}. Running it a third time would give the same result, so the engine does not. Change something, or call mcp__engine__report_done and say what fails. Its output:\n${last.output.slice(-1500)}` };
+    const output = `Its output:\n${last.output.slice(-1500)}`;
+    if (fails >= 3) {
+      return { ok: false, text: `"${name}" has failed ${fails} times on exactly these files (exit ${last.exitCode}), the last time ${minutesAgo(last.at, now)}, and the engine does not run it on them again. Change something in them, or ${instead}. If it needs something outside your files (an install, a service, a file the repository ignores), say so there. ${output}` };
+    }
+    // Twice on the same files. Something the files do not show may have changed since (an install, a file the repository ignores): a command that went through is the sign of it.
+    if (this.commandSince(run.id, name)) return null;
+    return { ok: false, text: `"${name}" has failed twice on exactly these files (exit ${last.exitCode}), the last time ${minutesAgo(last.at, now)}, and nothing has run since that could change it, so the engine does not run it a third time now. Change something, or ${instead}. ${output}` };
   }
 
-  /** Writes down what a run waits for from the engine, or that it waits for nothing. On a run that has ended, it is its task that waits. */
-  private waitsFor(runId: string, taskId: string, waiting: { on: 'lock' | 'gate'; what: string } | null): void {
-    const run = store.getRun(this.db, runId);
-    if (!run || (waiting === null && !run.waiting)) return;
-    this.change((tx, now) => tx.emit({ kind: 'run_waiting', runId, taskId, waiting: waiting ? { ...waiting, since: now.toISOString() } : null }));
+  /** Whether a command of this run went through since the gate last finished in it: something outside the files may be different now. */
+  private commandSince(runId: string, gate: string): boolean {
+    const all = store.eventsOfRun(this.db, runId);
+    // By the order things were recorded in, not by the clock: two things in one moment still have an order.
+    const rows = all.slice(all.findLastIndex((row) => row.event.kind === 'gate_finished' && row.event.result.name === gate) + 1);
+    const commands = new Set<string>();
+    for (const row of rows) {
+      const event = row.event.kind === 'run_event' ? row.event.event : null;
+      if (event?.kind === 'tool_call' && event.tool === 'Bash') commands.add(event.id);
+      if (event?.kind === 'tool_result' && event.ok && commands.has(event.id)) return true;
+    }
+    return false;
+  }
+
+  /** How many gate runs each run is waiting for right now: one that asked for two at once waits until both are over. */
+  private readonly waitingOn = new Map<string, number>();
+
+  /** Writes down what a run waits for from the engine. On a run that has ended, it is its task that waits. */
+  private waitsFor(runId: string, taskId: string, waiting: { on: 'lock' | 'gate'; what: string }): void {
+    if (!store.getRun(this.db, runId)) return;
+    this.change((tx, now) => tx.emit({ kind: 'run_waiting', runId, taskId, waiting: { ...waiting, since: now.toISOString() } }));
+  }
+
+  /** One wait of a run is over. When it was the last, the run waits for nothing. */
+  private waitOver(runId: string, taskId: string): void {
+    const left = (this.waitingOn.get(runId) ?? 1) - 1;
+    if (left > 0) return void this.waitingOn.set(runId, left);
+    this.waitingOn.delete(runId);
+    if (store.getRun(this.db, runId)?.waiting) this.change((tx) => tx.emit({ kind: 'run_waiting', runId, taskId, waiting: null }));
   }
 
   /** The parts of a gate run that say what is waited for: its turn behind a lock, then the gate itself. */
   private waits(runId: string, task: Task, say?: (text: string) => void): Pick<GateOptions, 'label' | 'onQueued' | 'onStart'> {
+    this.waitingOn.set(runId, (this.waitingOn.get(runId) ?? 0) + 1);
     return {
       label: task.title,
       onQueued: (gate, heldBy) => {
@@ -657,7 +694,10 @@ export class Flow {
     if (!site || gates.length === 0) return true;
     // A gate this run already passed on exactly these files is not run again: the engine ran it then, and nothing is different.
     const tree = await treeOf(site.folder);
-    const passed = (gate: Gate) => (tree ? (store.getRun(this.db, runId)?.askedGates ?? []).findLast((result) => result.name === gate.name && result.tree === tree && result.exitCode === 0) : undefined);
+    // Only for a gate marked as depending on the files alone, and only its result as the gate is defined now: another gate
+    // may read what is committed, or lean on something the session had running, and would go differently here.
+    const passed = (gate: Gate) =>
+      tree && gate.byFiles ? (store.getRun(this.db, runId)?.askedGates ?? []).findLast((result) => result.name === gate.name && result.command === gate.command && result.tree === tree && result.exitCode === 0) : undefined;
     const stands = gates.flatMap((gate) => passed(gate) ?? []).map((result) => ({ ...result, reused: true }));
     if (stands.length > 0) this.change((tx) => void stands.map((result) => tx.emit({ kind: 'gate_finished', runId, taskId: task.id, result })));
     const waits = this.waits(runId, task);
@@ -671,7 +711,7 @@ export class Flow {
         onFinish: (result) => this.change((tx) => tx.emit({ kind: 'gate_finished', runId, taskId: task.id, result: { ...result, ...(tree ? { tree } : {}) } })),
         limits: this.host.gateLimits(site.folder, site.team),
       })
-      .finally(() => this.waitsFor(runId, task.id, null));
+      .finally(() => this.waitOver(runId, task.id));
     const results = [...stands, ...fresh];
     await discardChanges(site.folder);
     const failed = results.find((r) => r.exitCode !== 0);
@@ -808,7 +848,7 @@ export class Flow {
           onFinish: (result) => this.change((tx) => tx.emit({ kind: 'gate_finished', runId: review.id, taskId: task.id, result: { ...result, ...(tree ? { tree } : {}) } })),
           limits: this.host.gateLimits(site.folder, site.team),
         })
-        .finally(() => this.waitsFor(review.id, task.id, null));
+        .finally(() => this.waitOver(review.id, task.id));
       await discardChanges(site.folder);
       const current = store.getTask(this.db, task.id);
       // Stopped while the gate ran: nothing more happens to it.

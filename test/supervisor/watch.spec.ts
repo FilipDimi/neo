@@ -6,7 +6,7 @@ import * as store from '../../src/db/store.ts';
 import { GateQueue } from '../../src/git/gates.ts';
 import type { Gate } from '../../src/shared/types.ts';
 import { companyNow } from '../../src/supervisor/companyNow.ts';
-import { called, looked, newWatch, refusal, resulted } from '../../src/supervisor/progress.ts';
+import { called, looked, newWatch, refusal, refused, resulted, undelivered } from '../../src/supervisor/progress.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
 import { staged, type Scene } from '../fixtures/staged.ts';
 import { employee, gitRepo, repo, team, tempDir, world, type World } from '../helpers.ts';
@@ -24,6 +24,10 @@ afterEach(async () => {
 const GATES: Gate[] = [
   { name: 'greeting', command: 'echo ran >> runs.log; test -f GREETING.md', timeoutMinutes: 1, lock: null },
   { name: 'never', command: 'echo ran >> never.log; false', timeoutMinutes: 1, lock: null },
+  // Marked as depending on nothing but the files: only such a gate's pass is taken over at the commit.
+  { name: 'pure', command: 'echo ran >> pure.log; test -f GREETING.md', timeoutMinutes: 1, lock: null, byFiles: true },
+  { name: 'slow', command: 'sleep 0.4', timeoutMinutes: 1, lock: null },
+  { name: 'slower', command: 'sleep 0.8', timeoutMinutes: 1, lock: null },
 ];
 const ran = (folder: string, log = 'runs.log'): number => (fs.existsSync(path.join(folder, log)) ? fs.readFileSync(path.join(folder, log), 'utf8').trim().split('\n').length : 0);
 type Setup = { w: World; fixture: InProcess; repoPath: string };
@@ -93,7 +97,7 @@ describe('a gate is not run twice on the same files', () => {
     await drain(setup);
     expect(seen[0]!.text).toContain('FAILED (exit 1)');
     expect(seen[1]!.text).toContain('FAILED (exit 1)');
-    expect(seen[2]).toMatchObject({ ok: false, text: expect.stringMatching(/"never" failed twice on exactly these files.*Change something, or call mcp__engine__report_done and say what fails/s) });
+    expect(seen[2]).toMatchObject({ ok: false, text: expect.stringMatching(/"never" has failed twice on exactly these files.*nothing has run since that could change it.*Change something, or call mcp__engine__report_done and say what fails/s) });
     expect(seen[3]!.text).toBe('2');
     // Three more real runs (five failures in all), then no more whatever changes.
     expect(seen.slice(4, 7).every((reply) => reply.text.includes('FAILED (exit 1)'))).toBe(true);
@@ -101,20 +105,75 @@ describe('a gate is not run twice on the same files', () => {
     expect(seen[8]!.text).toBe('5');
   });
 
-  it('does not run a gate again at the commit when the run passed it on exactly the committed files', async () => {
+  it('runs a failed gate a third time on the same files only if a command went through since, and never a fourth', async () => {
+    const seen: { ok: boolean; text: string }[] = [];
+    let folder = '';
+    const setup = oneWorker(async (s) => {
+      folder = s.cwd;
+      seen.push(await s.engine('run_gate', { name: 'never' }));
+      seen.push(await s.engine('run_gate', { name: 'never' }));
+      // Something ran that the files do not show (an install, say): the gate may go differently now.
+      await s.tool('Bash', { command: 'npm install --offline' });
+      seen.push(await s.engine('run_gate', { name: 'never' }));
+      await s.tool('Bash', { command: 'npm install --offline' });
+      seen.push(await s.engine('run_gate', { name: 'never' }));
+      seen.push({ ok: true, text: String(ran(folder, 'never.log')) });
+      await s.engine('report_done', { summary: 'It cannot pass.' });
+    });
+    task(setup);
+    await drain(setup);
+    expect(seen.slice(0, 3).every((reply) => reply.text.includes('FAILED (exit 1)'))).toBe(true);
+    expect(seen[3]).toMatchObject({ ok: false, text: expect.stringMatching(/"never" has failed 3 times on exactly these files.*If it needs something outside your files/s) });
+    expect(seen[4]!.text).toBe('3');
+  });
+
+  it('runs every gate at the commit, whatever the run passed before, unless the gate is marked as depending on the files alone', async () => {
     let folder = '';
     const setup = oneWorker(async (s) => {
       folder = s.cwd;
       s.write('GREETING.md', 'hello\n');
       await s.engine('run_gate', { name: 'greeting' });
-      await s.engine('report_done', { summary: 'Greets.', checks: [{ gate: 'greeting' }] });
+      await s.engine('report_done', { summary: 'Greets.' });
     });
     const made = task(setup, ['greeting']);
+    await drain(setup);
+    const [run] = store.runsOf(setup.w.db, made.id);
+    expect(run!.gateResults).toHaveLength(1);
+    expect(run!.gateResults[0]!.reused).toBeUndefined();
+    expect(readEvents(setup.w.db, 0, 10_000).filter((row) => row.event.kind === 'gate_started').length).toBe(1);
+    expect(folder).not.toBe('');
+  });
+
+  it('runs a marked gate at the commit all the same when its command was changed since the pass', async () => {
+    let setup: Setup;
+    setup = oneWorker(async (s) => {
+      s.write('GREETING.md', 'hello\n');
+      await s.engine('run_gate', { name: 'pure' });
+      const before = store.getRepo(setup.w.db, 'repo1')!;
+      apply(setup.w.db, (tx) => tx.emit({ kind: 'repo_changed', repo: { ...before, gates: before.gates.map((gate) => (gate.name === 'pure' ? { ...gate, command: 'echo ran >> pure.log; test -f GREETING.md && true' } : gate)) } }), setup.w.clock.now());
+      await s.engine('report_done', { summary: 'Greets.' });
+    });
+    const made = task(setup, ['pure']);
+    await drain(setup);
+    const [run] = store.runsOf(setup.w.db, made.id);
+    expect(run!.gateResults).toHaveLength(1);
+    expect(run!.gateResults[0]!.reused).toBeUndefined();
+  });
+
+  it('does not run a gate again at the commit when the run passed it on exactly the committed files', async () => {
+    let folder = '';
+    const setup = oneWorker(async (s) => {
+      folder = s.cwd;
+      s.write('GREETING.md', 'hello\n');
+      await s.engine('run_gate', { name: 'pure' });
+      await s.engine('report_done', { summary: 'Greets.', checks: [{ gate: 'pure' }] });
+    });
+    const made = task(setup, ['pure']);
     await drain(setup);
     expect(store.getTask(setup.w.db, made.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
     const [run] = store.runsOf(setup.w.db, made.id);
     // One real run, the one the employee asked for. The engine's own result is that one, said to be so.
-    expect(run!.gateResults).toMatchObject([{ name: 'greeting', exitCode: 0, reused: true }]);
+    expect(run!.gateResults).toMatchObject([{ name: 'pure', exitCode: 0, reused: true }]);
     expect(run!.gateResults[0]!.tree).toBe(run!.askedGates![0]!.tree);
     expect(readEvents(setup.w.db, 0, 10_000).filter((row) => row.event.kind === 'gate_started').length).toBe(0);
     expect(folder).not.toBe('');
@@ -153,6 +212,38 @@ describe('waiting is a state', () => {
     // Free again: the next one does not wait.
     await queue.run([quick], dir, { onQueued: () => queued.push('third waited') });
     expect(queued).toEqual(['The first task']);
+  });
+
+  it('tells everyone in line who holds the lock now, as it changes hands', async () => {
+    const queue = new GateQueue();
+    const dir = tempDir('vs-gates-');
+    const gate = (name: string): Gate => ({ name, command: 'sleep 0.2', timeoutMinutes: 1, lock: 'sim' });
+    const told: Record<string, (string | null)[]> = { second: [], third: [], again: [] };
+    const first = queue.run([gate('a'), gate('a2')], dir, { label: 'First', onQueued: (g, heldBy) => (g.name === 'a2' ? told.again!.push(heldBy) : undefined) });
+    const second = queue.run([gate('b')], dir, { label: 'Second', onQueued: (_g, heldBy) => told.second!.push(heldBy) });
+    const third = queue.run([gate('c')], dir, { label: 'Third', onQueued: (_g, heldBy) => told.third!.push(heldBy) });
+    await Promise.all([first, second, third]);
+    expect(told.second).toEqual(['First']);
+    // The third waits behind the first, then behind the second: it is told of each.
+    expect(told.third!.slice(0, 2)).toEqual(['First', 'Second']);
+    // The first task's second gate waits behind the others, never behind itself.
+    expect(told.again!.length).toBeGreaterThan(0);
+    expect(told.again).not.toContain('First');
+  });
+
+  it('keeps saying a run waits while one of two gates it asked for at once is still running', async () => {
+    const setup = oneWorker(async (s) => {
+      await Promise.all([s.engine('run_gate', { name: 'slow' }), s.engine('run_gate', { name: 'slower' })]);
+      s.write('GREETING.md', 'hello\n');
+      await s.engine('report_done', { summary: 'Greets.' });
+    });
+    const made = task(setup);
+    await drain(setup);
+    const [run] = store.runsOf(setup.w.db, made.id);
+    const rows = readEvents(setup.w.db, 0, 10_000).filter((row) => (row.event.kind === 'run_waiting' || row.event.kind === 'gate_finished') && row.event.runId === run!.id);
+    const cleared = rows.findIndex((row) => row.event.kind === 'run_waiting' && row.event.waiting === null);
+    const lastGate = rows.findLastIndex((row) => row.event.kind === 'gate_finished');
+    expect(cleared).toBeGreaterThan(lastGate);
   });
 
   it('says what the engine is doing for a task whose run has ended, where it said nobody was on it', async () => {
@@ -275,6 +366,34 @@ describe('a budget of calls without progress', () => {
   });
 });
 
+describe('a folder that is no repository', () => {
+  it('counts files written by commands as progress there too', async () => {
+    const fixture = inProcess(
+      staged(
+        async (s) => {
+          if (s.index > 0) return;
+          for (let i = 0; i < 24; i++) {
+            // As a command would write it: no Write call names the file.
+            if (i % 2 === 0) s.write(`out/${i}.txt`, `step ${i}\n`);
+            if (!(await s.tool('Bash', { command: `echo step ${i} > out/${i}.txt` }))) return;
+            await new Promise((resolve) => setTimeout(resolve, 15));
+          }
+          await s.engine('report_done', { summary: 'Written.' });
+        },
+        { everyTurn: true },
+      ),
+    );
+    const w = (open = world(fixture.spawn, {
+      teams: [team({ selfManaged: true })],
+      employees: [employee({ capabilities: ['read_files', 'run_commands', 'write_code'] })],
+      options: { progress: { askAfter: 6, stopAfter: 9, lookEvery: 3 } },
+    }));
+    const made = w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Write the notes', brief: 'x', doneCondition: 'y' });
+    await drain({ w, fixture, repoPath: '' });
+    expect(store.runsOf(w.db, made.id)[0]).toMatchObject({ outcome: 'done' });
+  });
+});
+
 describe('loop breakers', () => {
   it('refuses a command the fourth time it would fail the same way, and allows it once something was written', () => {
     const watch = newWatch();
@@ -322,6 +441,42 @@ describe('loop breakers', () => {
     // Back to an earlier tree is nothing new.
     read(50);
     expect(looked(watch, 'tree-a', at, budget)).toBe('ask');
+  });
+
+  it('takes a call for the same only when all of it is the same, and does not count a call that was never made', () => {
+    const watch = newWatch();
+    for (const id of ['1', '2', '3']) {
+      called(watch, { id, tool: 'Bash', input: { command: 'make check' } });
+      resulted(watch, id, false);
+    }
+    expect(refusal(watch, { tool: 'Bash', input: { command: 'make check' } })).not.toBeNull();
+    // The same words with more time is another try.
+    expect(refusal(watch, { tool: 'Bash', input: { command: 'make check', timeout: 600_000 } })).toBeNull();
+    // A call the engine refused was not run, so it did not fail.
+    const other = newWatch();
+    for (const id of ['1', '2', '3']) {
+      called(other, { id, tool: 'Bash', input: { command: 'curl example.com' } });
+      refused(other, id);
+      resulted(other, id, false);
+    }
+    expect(refusal(other, { tool: 'Bash', input: { command: 'curl example.com' } })).toBeNull();
+  });
+
+  it('counts a report that was refused, and asks again when its question did not reach the session', () => {
+    const budget = { askAfter: 3, stopAfter: 5, lookEvery: 1 };
+    const watch = newWatch();
+    const at = new Date('2026-11-12T10:00:00Z');
+    looked(watch, 'tree-a', at, budget);
+    for (const id of ['1', '2', '3']) called(watch, { id, tool: 'mcp__engine__report_done', input: { summary: 'Done.' } });
+    expect(watch.calls).toBe(3);
+    expect(looked(watch, 'tree-a', at, budget)).toBe('ask');
+    // The session had closed its ears: the question was not delivered, so it has not been asked.
+    undelivered(watch);
+    called(watch, { id: '4', tool: 'Read', input: {} });
+    expect(looked(watch, 'tree-a', at, budget)).toBe('ask');
+    called(watch, { id: '5', tool: 'Read', input: {} });
+    called(watch, { id: '6', tool: 'Read', input: {} });
+    expect(looked(watch, 'tree-a', at, budget)).toBe('stop');
   });
 
   it('refuses it through the session, as the reason for a refused call', async () => {
