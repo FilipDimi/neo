@@ -85,7 +85,7 @@ type MapTable = 'repos' | 'teams' | 'employees' | 'tasks' | 'runs' | 'requests' 
 const MAPS: Partial<Record<TableName, MapTable>> = { repos: 'repos', teams: 'teams', employees: 'employees', tasks: 'tasks', runs: 'runs', run_requests: 'requests', decisions: 'decisions', messages: 'messages' };
 /** Rows an event of a kind this page does not know may still carry, by the field that carries them. */
 const CARRIED: Record<string, MapTable> = { repo: 'repos', team: 'teams', employee: 'employees', task: 'tasks', run: 'runs', request: 'requests', decision: 'decisions', message: 'messages' };
-const KNOWN = new Set(['record_changed', 'contract_version_issued', 'company_changed', 'repo_changed', 'team_changed', 'employee_changed', 'task_changed', 'run_requested', 'request_dropped', 'run_started', 'run_activity', 'run_event', 'gate_started', 'gate_finished', 'run_ended', 'decision_raised', 'decision_answered', 'message_sent', 'message_delivered', 'grant_changed', 'health_changed', 'plan_usage']);
+const KNOWN = new Set(['record_changed', 'contract_version_issued', 'company_changed', 'repo_changed', 'team_changed', 'employee_changed', 'task_changed', 'run_requested', 'request_dropped', 'run_started', 'run_activity', 'run_event', 'gate_started', 'gate_finished', 'run_waiting', 'run_ended', 'decision_raised', 'decision_answered', 'message_sent', 'message_delivered', 'grant_changed', 'health_changed', 'plan_usage']);
 
 export function reduce(store: Store, row: EventRow): Store {
   if (row.id <= store.lastEventId) return store; // already applied: a replay overlapped the snapshot

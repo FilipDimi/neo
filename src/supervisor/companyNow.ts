@@ -38,8 +38,18 @@ export function companyNow(db: Db, now: Date): string {
     for (const task of mine.slice(0, SHOWN_PER_TEAM)) {
       const run = live.find((r) => r.taskId === task.id);
       const card = cards.find((c) => c.taskId === task.id);
-      const what = run
-        ? `${name(run.employeeId)} is ${run.mode === 'review' ? 'reviewing it' : run.mode === 'brief' ? 'splitting it' : 'working on it'}${run.activity ? ` ("${run.activity}")` : ''}, for ${ago(run.startedAt, now)}`
+      const doing = run ? `${name(run.employeeId)} is ${run.mode === 'review' ? 'reviewing it' : run.mode === 'brief' ? 'splitting it' : 'working on it'}` : '';
+      // What the engine is doing for a task nobody is running: its gates, or waiting its turn to run them.
+      const engine = run ? undefined : store.runsOf(db, task.id).at(-1)?.waiting;
+      const what = run?.waiting
+        ? // Waiting is said apart from working: how long it has waited, and for what.
+          `${doing}, and has been ${run.waiting.on === 'gate' ? `waiting for the gate "${run.waiting.what}"` : `waiting for ${run.waiting.what}`} for ${ago(run.waiting.since, now)}`
+        : run
+          ? `${doing}${run.activity ? ` ("${run.activity}")` : ''}, for ${ago(run.startedAt, now)}`
+        : engine && !card && task.state !== 'done' && task.state !== 'failed'
+          ? engine.on === 'gate'
+            ? `the engine is running its gate "${engine.what}", for ${ago(engine.since, now)}`
+            : `the engine is waiting for ${engine.what}, to run its gates, for ${ago(engine.since, now)}`
         : card?.deciderId
           ? `${name(card.deciderId)} is deciding it for the user, for ${ago(card.askedAt, now)}`
           : card

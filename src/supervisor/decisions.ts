@@ -244,7 +244,9 @@ function applyEffect(tx: Tx, db: Db, now: Date, decision: Decision, option: Deci
       return failTree(tx, db, now, task);
     case 'retry': {
       const leaseMinutes = typeof option.params?.leaseMinutes === 'number' ? option.params.leaseMinutes : null;
-      return requestAgain(tx, db, now, unblock(tx, task, now), last, 'retry', 'Your last run was cut short. The files in your folder are as you left them. Carry on with the task.', { leaseMinutes });
+      // A card may say what the one who carries on is to be told (a run stopped for making no progress is told that).
+      const told = typeof option.params?.text === 'string' ? option.params.text : 'Your last run was cut short. The files in your folder are as you left them. Carry on with the task.';
+      return requestAgain(tx, db, now, unblock(tx, task, now), last, 'retry', told, { leaseMinutes });
     }
     case 'grant_capabilities': {
       // The one answer that changes what an employee can do: the tools are added, and the run it stopped carries on with them.

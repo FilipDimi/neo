@@ -172,11 +172,18 @@ export function runGate(gate: Gate, cwd: string, limits: GateLimits = {}): Promi
   });
 }
 
-export type GateOptions = { onStart?: (gate: Gate) => void; onFinish?: (result: GateResult) => void; limits?: GateLimits };
+/**
+ * `label`: whose gates these are, in words, for whoever waits behind them. `onQueued`: this gate waits its turn behind
+ * a lock, held by the one named (null: someone who gave no name).
+ */
+export type GateOptions = { onStart?: (gate: Gate) => void; onFinish?: (result: GateResult) => void; limits?: GateLimits; label?: string; onQueued?: (gate: Gate, heldBy: string | null) => void };
 
 /** Runs a task's gates in order, stopping at the first failure. Gates that share a lock never run side by side. */
 export class GateQueue {
   private readonly tails = new Map<string, Promise<unknown>>();
+  /** How many gates hold or wait for each lock, and who holds it now. */
+  private readonly taken = new Map<string, number>();
+  private readonly holders = new Map<string, string | null>();
 
   async run(gates: Gate[], cwd: string, options: GateOptions = {}): Promise<GateResult[]> {
     const results: GateResult[] = [];
@@ -187,15 +194,30 @@ export class GateQueue {
         options.onFinish?.(result);
         return result;
       };
-      const result = gate.lock ? await this.locked(gate.lock, once) : await once();
+      // Someone has the lock, or is ahead in line for it: this gate waits, and says for whom.
+      if (gate.lock && (this.taken.get(gate.lock) ?? 0) > 0) options.onQueued?.(gate, this.holders.get(gate.lock) ?? null);
+      const result = gate.lock ? await this.locked(gate.lock, options.label ?? null, once) : await once();
       results.push(result);
       if (result.exitCode !== 0) break;
     }
     return results;
   }
 
-  private locked<T>(lock: string, work: () => Promise<T>): Promise<T> {
-    const next = (this.tails.get(lock) ?? Promise.resolve()).then(work, work);
+  private locked<T>(lock: string, label: string | null, work: () => Promise<T>): Promise<T> {
+    const free = (this.taken.get(lock) ?? 0) === 0;
+    this.taken.set(lock, (this.taken.get(lock) ?? 0) + 1);
+    // Free: it is this one's from now, though its work starts a moment later.
+    if (free) this.holders.set(lock, label);
+    const release = () => {
+      const left = (this.taken.get(lock) ?? 1) - 1;
+      this.taken.set(lock, left);
+      if (left === 0) this.holders.delete(lock);
+    };
+    const held = () => {
+      this.holders.set(lock, label);
+      return work().finally(release);
+    };
+    const next = (this.tails.get(lock) ?? Promise.resolve()).then(held, held);
     this.tails.set(
       lock,
       next.catch(() => {}),

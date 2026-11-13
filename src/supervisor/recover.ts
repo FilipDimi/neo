@@ -11,6 +11,9 @@ import type { Processes } from './link.ts';
 export function recover(db: Db, now: Date, processes: Processes): { expired: string[]; killed: number[] } {
   const expired: string[] = [];
   const killed: number[] = [];
+  // Whatever the engine was running or waiting for when it stopped, it is not any more.
+  const waited = store.allRuns(db).filter((run) => run.waiting);
+  if (waited.length > 0) apply(db, (tx) => void waited.map((run) => tx.emit({ kind: 'run_waiting', runId: run.id, taskId: run.taskId, waiting: null })), now);
   for (const run of store.liveRuns(db)) {
     // A pid alone proves nothing: after a reboot another process may have it. Kill only when its start time matches too.
     if (run.pid !== null && run.pidStartedAt !== null && processes.startedAt(run.pid) === run.pidStartedAt) {

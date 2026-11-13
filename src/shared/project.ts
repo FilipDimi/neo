@@ -69,6 +69,12 @@ export function changesOf(row: EventRow, get: Getter): Change[] {
     }
     case 'gate_started':
       return [];
+    case 'run_waiting': {
+      const run = get('runs', event.runId) as Run | undefined;
+      if (!run) return [];
+      const { waiting: _was, ...rest } = run;
+      return [put('runs', event.waiting ? { ...rest, waiting: event.waiting } : rest)];
+    }
     case 'gate_finished': {
       const run = get('runs', event.runId) as Run | undefined;
       if (!run) return [];

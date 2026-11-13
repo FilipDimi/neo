@@ -22,7 +22,8 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
     'Ask for a kind of tool you do not have and cannot do the task without: "read_files", "run_commands", "write_code" or "web_search". Say in one sentence what you need it for. Your run stops here; if the user agrees you are resumed with the tool.',
   set_status:
     'Say what you are doing right now in one short plain sentence (at most 60 characters) that someone outside your team would understand: the thing you are making or checking, not a file name or a code. "Building the results list of the search page", not "RL-2 tokens". Call it when you start and when your focus changes.',
-  run_gate: 'Run one of this task\'s named gates in your folder and get its real exit code and output. Use it to check your work before you report.',
+  run_gate:
+    'Run one of this task\'s named gates in your folder and get its real exit code and output. Use it to check your work before you report. The engine knows exactly what is in your folder: a gate that passed is not run again until something changes (its result stands, also for your report), one that failed is run once more on the same files and then not again, and one that has failed five times in this run is not run again in it. A gate can take long and wait its turn; that time is not counted against you.',
   create_task: 'Put a task on a team\'s board, with a summary: one or two plain sentences on what it delivers, for someone who will never read the brief. Leave the assignee out for a led team, so its lead briefs the task; a self-managed team needs an assignee. gates: the names of the team\'s gates the finished work must pass before it lands; a task given none is checked by none.',
   decide:
     'Answer the card you were given, on the user\'s behalf: name one of its buttons by id, or "ask_user" to hand it to the user. The notes say why; for a send-back or an answer they are the exact words the employee gets. Call it once.',

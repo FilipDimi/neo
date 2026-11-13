@@ -15,6 +15,7 @@ const samples: EngineEvent[] = [
   { kind: 'run_activity', runId: 'run1', taskId: 'task1', employeeId: 'emp1', text: 'docking the glass row' },
   { kind: 'run_event', runId: 'run1', taskId: 'task1', employeeId: 'emp1', teamId: 'team1', event: { kind: 'assistant_text', text: 'hi' } },
   { kind: 'gate_started', runId: 'run1', taskId: 'task1', name: 'tests' },
+  { kind: 'run_waiting', runId: 'run1', taskId: 'task1', waiting: { on: 'lock', what: 'the xcode lock, held by "Another task"', since: T0.toISOString() } },
   { kind: 'gate_finished', runId: 'run1', taskId: 'task1', result: { name: 'tests', command: 'npm test', exitCode: 0, output: 'ok', durationMs: 12 } },
   { kind: 'run_ended', run: run({ outcome: 'done', endedAt: T0.toISOString() }), teamId: 'team1' },
   { kind: 'decision_raised', decision: decision() },

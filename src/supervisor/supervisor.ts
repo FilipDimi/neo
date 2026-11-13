@@ -19,7 +19,7 @@ import { ADMIN_TOOLS } from '../shared/adminTools.ts';
 import { XCODE_BUILD_FOLDERS } from '../shared/teams.ts';
 import { adminTool } from './admin.ts';
 import { availableCapabilities, CAPABILITIES, commandLimits, envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
-import { countsCost } from '../shared/view.ts';
+import { ago, countsCost } from '../shared/view.ts';
 import { budgetFor, costOf, isUsageLimit } from './budget.ts';
 import * as decisions from './decisions.ts';
 import type { TeamView } from './definition.ts';
@@ -33,6 +33,8 @@ import { builtOnFor, indexFor, onContractVersion, onReadDecisions, onRecordDecis
 import { dirOf } from './recordFiles.ts';
 import { holdMeeting, meetingReply, planMeeting, proposalsOf, type MeetingCall, type Proposals } from './meeting.ts';
 import { verifyClaims, type Claims } from './proof.ts';
+import { account, askText, BUDGET, called, looked, MOVES, newWatch, progressed, refusal, resulted, type Budget, type Watch } from './progress.ts';
+import { treeOf } from '../git/tree.ts';
 import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
 import { forkSpawn, processes, type Processes, type Spawn, type WorkerLink } from './link.ts';
@@ -61,6 +63,8 @@ export type SupervisorOptions = {
   apiPort?: number;
   /** How often a run waiting for a gate renews its lease. */
   gateHeartbeatMs?: number;
+  /** How many tool calls without progress a run may make before it is asked, and before it is stopped. */
+  progress?: Partial<Budget>;
 };
 
 export type NewTaskInput = Pick<Task, 'teamId' | 'title' | 'brief'> &
@@ -100,6 +104,9 @@ export class Supervisor {
   private readonly reports = new Map<string, string>();
   /** What each run's report or review said was checked and held, until the run ends. */
   private readonly claims = new Map<string, Claims>();
+  /** The progress watch of each live run: what it called since it last got somewhere. */
+  private readonly watches = new Map<string, Watch>();
+  private readonly budget: Budget;
   /** What the draft of a meeting's design proposed, by run: kept with the run when it ends. */
   private readonly proposals = new Map<string, Proposals>();
   /** Engine work in flight per task (commits, gates, merges): such a task is not idle. */
@@ -125,6 +132,7 @@ export class Supervisor {
     this.wallClock = options.wallClock ?? Date.now;
     this.apiPort = options.apiPort ?? 4317;
     this.runtimeModule = options.runtimeModule;
+    this.budget = { ...BUDGET, ...options.progress };
     this.processes = options.processes ?? processes;
     this.dataDir = options.dataDir;
     this.skillDirs = options.skillDirs ?? { userSkills: path.join(os.homedir(), '.claude', 'skills'), pluginCache: path.join(os.homedir(), '.claude', 'plugins', 'cache'), companySkills: pathsOf(options.dataDir).skills };
@@ -140,6 +148,10 @@ export class Supervisor {
       engineWork: (taskId, work) => this.engineWork(taskId, work),
       planRunEnd: (runId, outcome, reason, record) => void this.planned.set(runId, { outcome, reason, ...(record && { record }) }),
       verify: (run, checks, prose) => this.verify(run, checks, prose),
+      progressed: (runId) => {
+        const watch = this.watches.get(runId);
+        if (watch) progressed(watch, this.now());
+      },
     });
   }
 
@@ -588,7 +600,12 @@ export class Supervisor {
       case 'tool':
         return void this.onTool(run, message.name, message.input)
           .catch((error): ToolReply => ({ ok: false, text: error instanceof Error ? error.message : String(error) }))
-          .then((reply) => link.send({ t: 'tool_result', askId: message.askId, ...reply }));
+          .then((reply) => {
+            // A call that moves the task, accepted, is progress.
+            const watch = this.watches.get(runId);
+            if (reply.ok && watch && MOVES.has(message.name)) progressed(watch, this.now());
+            link.send({ t: 'tool_result', askId: message.askId, ...reply });
+          });
       case 'message_result': {
         const waiting = store.waitingMessages(this.db, run.employeeId).find((m) => m.id === message.id);
         const now = this.now();
@@ -627,6 +644,7 @@ export class Supervisor {
     }
     if (event.kind === 'usage') this.unpaid.delete(run.id);
     if (event.kind === 'tool_result') this.checkWriteLanded(run, event.id);
+    if (event.kind === 'tool_call' || event.kind === 'tool_result') this.watch(run, event);
     const now = this.now();
     const teamId = store.getEmployee(this.db, run.employeeId)?.teamId ?? '';
     const recorded = event.kind === 'tool_call' ? { ...event, input: trimmed(event.input) } : event;
@@ -639,6 +657,67 @@ export class Supervisor {
       now,
     );
     this.afterRuntimeEvent(run, event);
+  }
+
+  /**
+   * The progress watch: every call is counted, and every so often the folder is looked at. A work or integration run
+   * that goes on calling with nothing new in its folder, no check newly passing and no report is asked where it
+   * stands, and later stopped. Every run has its failing commands counted, whatever it is for.
+   */
+  private watch(run: Run, event: Extract<RuntimeEvent, { kind: 'tool_call' | 'tool_result' }>): void {
+    const watch = this.watches.get(run.id) ?? newWatch();
+    this.watches.set(run.id, watch);
+    if (event.kind === 'tool_result') return resulted(watch, event.id, event.ok);
+    called(watch, event);
+    if (run.mode !== 'work' && run.mode !== 'integrate') return;
+    // The first call is where the run begins: what the folder holds then is not a change.
+    if (watch.trees.size > 0 && watch.calls % this.budget.lookEvery !== 0) return;
+    if (watch.looking) return;
+    watch.looking = true;
+    const task = store.getTask(this.db, run.taskId);
+    void (task ? treeOf(folderOf(this.paths, task)) : Promise.resolve(null))
+      .catch(() => null)
+      .then((tree) => {
+        watch.looking = false;
+        const live = store.getRun(this.db, run.id);
+        if (!live || live.outcome !== 'running' || this.watches.get(run.id) !== watch || this.planned.has(run.id)) return;
+        // A folder git cannot read says nothing: where there is a repository, only a tree counts.
+        if (tree === null && task?.repoId) return;
+        const verdict = looked(watch, tree, this.now(), this.budget);
+        if (verdict === 'ask') this.askWhereItStands(live, watch);
+        if (verdict === 'stop') this.stopForNoProgress(live, watch);
+      });
+  }
+
+  private askWhereItStands(run: Run, watch: Watch): void {
+    this.change((tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, text: `asked where it stands: ${watch.calls} calls with nothing new` }));
+    this.links.get(run.id)?.send({ t: 'message', id: store.newId(), text: askText(watch.calls, Math.max(1, this.budget.stopAfter - watch.calls)) });
+  }
+
+  /** The run is stopped, and a card says what it was doing: the count, its last status, what it called. */
+  private stopForNoProgress(run: Run, watch: Watch): void {
+    const task = store.getTask(this.db, run.taskId);
+    if (!task) return;
+    const name = this.nameOf(run.employeeId);
+    const status = store
+      .eventsOfRun(this.db, run.id)
+      .findLast((row) => row.event.kind === 'run_event' && row.event.event.kind === 'tool_call' && row.event.event.tool === 'mcp__engine__set_status');
+    const said = status?.event.kind === 'run_event' && status.event.event.kind === 'tool_call' ? (status.event.event.input as { text?: unknown } | null)?.text : undefined;
+    const calls = watch.calls;
+    const changed = watch.changedAt ? `Its folder last changed ${ago(watch.changedAt, this.now())} ago.` : 'Its folder has not changed in this run.';
+    const text = `${name} was stopped on "${task.title}": ${calls} tool calls in a row with nothing new in its folder, no check newly passing and no report. It was: ${typeof said === 'string' && said.trim() ? said.trim() : 'it gave no status'}. In those calls it ${account(watch)}. ${changed} Let it carry on, or stop the task?`;
+    const told = `The engine stopped you because it saw no progress: ${calls} tool calls in a row with nothing new in your folder, no check newly passing and no report. You may carry on, and the count starts again from here. Get to a change, a report (mcp__engine__report_done, saying what is done and what is left) or a question soon.`;
+    this.endRunNow(run, 'stopped', 'no_progress');
+    this.change((tx, now) =>
+      decisions.raise(tx, this.db, now, {
+        taskId: task.id,
+        runId: run.id,
+        employeeId: run.employeeId,
+        kind: 'failed',
+        text,
+        options: [{ id: 'retry', label: 'Let it carry on', effect: 'retry', params: { text: told } }, { id: 'stop', label: 'Stop it', effect: 'stop_task' }],
+      }),
+    );
   }
 
   /** A turn's usage with its cost filled in when the SDK reported none. */
@@ -768,6 +847,9 @@ export class Supervisor {
     const team = task && store.getTeam(this.db, task.teamId);
     const company = store.getCompany(this.db);
     if (!task || !employee || !team || !company) return { allow: false, reason: 'Refused: this run has lost its task.', stop: true };
+    // A command that just failed the same way three times is not run a fourth: it would fail again.
+    const looping = this.watches.has(run.id) ? refusal(this.watches.get(run.id)!, call) : null;
+    if (looping) return { allow: false, reason: looping };
     const folder = folderOf(this.paths, task);
     const verdict = judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: store.grantsOf(this.db, task.id), protect: engineFiles(this.paths), engineDirs: this.engineDirs(task) }, call);
     const now = this.now();
@@ -1047,6 +1129,7 @@ export class Supervisor {
     this.signs.delete(runId);
     this.reports.delete(runId);
     this.claims.delete(runId);
+    this.watches.delete(runId);
     this.proposals.delete(runId);
     this.routed.delete(runId);
     this.allowedWrites.delete(runId);

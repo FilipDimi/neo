@@ -211,8 +211,13 @@ export const ContractVersion = z.object({
 });
 export type ContractVersion = z.infer<typeof ContractVersion>;
 
-/** `at`: when it finished, as the engine recorded it. Absent on results recorded before there was one. */
-export const GateResult = z.object({ name: z.string(), command: z.string(), exitCode: z.number(), output: z.string(), durationMs: z.number(), at: iso.optional() });
+/**
+ * `at`: when it finished, as the engine recorded it. Absent on results recorded before there was one.
+ * `tree`: exactly the files it ran on, and `treeAfter` what it left there, each as the hash of what a commit of the
+ * folder would hold. `reused`: the engine did not run it again at the commit, because the run had passed it on
+ * exactly the committed files.
+ */
+export const GateResult = z.object({ name: z.string(), command: z.string(), exitCode: z.number(), output: z.string(), durationMs: z.number(), at: iso.optional(), tree: z.string().optional(), treeAfter: z.string().optional(), reused: z.boolean().optional() });
 export type GateResult = z.infer<typeof GateResult>;
 
 /**
@@ -274,6 +279,8 @@ export const Run = z.object({
   claimedFromProse: z.array(z.string()).optional(),
   /** Gates it asked the engine to run while it worked (run_gate). Kept apart from the engine's own: for an author they came before the commit. */
   askedGates: z.array(GateResult).optional(),
+  /** What it is waiting for, when it waits for the engine: its turn behind a lock, or a gate that is running. On a run that has ended: the engine is running its gates. */
+  waiting: z.object({ on: z.enum(['lock', 'gate']), what: z.string(), since: iso }).optional(),
   /** On the draft of a design meeting's design: the decisions and the tickets it proposes, acted on only once it is agreed. */
   proposals: z.object({ decisions: z.array(z.object({ statement: z.string(), why: z.string() })), followUps: z.array(z.object({ teamId: id, title: z.string(), brief: z.string(), doneCondition: z.string() })) }).optional(),
 });

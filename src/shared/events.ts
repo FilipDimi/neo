@@ -23,6 +23,8 @@ export const EngineEvent = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('run_activity'), runId: z.string(), taskId: z.string(), employeeId: z.string(), text: z.string() }),
   z.object({ kind: z.literal('run_event'), runId: z.string(), taskId: z.string(), employeeId: z.string(), teamId: z.string(), event: runtimeEvent }),
   z.object({ kind: z.literal('gate_started'), runId: z.string(), taskId: z.string(), name: z.string() }),
+  /** What a run waits for from the engine (its turn behind a lock, a gate that is running), or null: it waits for nothing. */
+  z.object({ kind: z.literal('run_waiting'), runId: z.string(), taskId: z.string(), waiting: z.object({ on: z.enum(['lock', 'gate']), what: z.string(), since: z.string() }).nullable() }),
   /** `asked`: a gate the run asked for while it worked (run_gate), kept apart from the engine's own. */
   z.object({ kind: z.literal('gate_finished'), runId: z.string(), taskId: z.string(), result: GateResult, asked: z.boolean().optional() }),
   z.object({ kind: z.literal('run_ended'), run: Run, teamId: z.string() }),
@@ -65,6 +67,7 @@ export function subjectsOf(event: EngineEvent): Subjects {
       return { taskId: event.taskId, runId: event.runId, employeeId: event.employeeId, teamId: event.teamId };
     case 'gate_started':
     case 'gate_finished':
+    case 'run_waiting':
       return { ...NOBODY, taskId: event.taskId, runId: event.runId };
     case 'decision_raised':
     case 'decision_answered':
