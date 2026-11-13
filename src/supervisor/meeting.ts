@@ -189,7 +189,14 @@ export function proposalsOf(db: Db, task: Task | undefined, report: Report): { p
     if (!team) return { refused: `A follow-up's team must be one of the meeting's: ${names(teams)}. "${wanted.team}" is not. Report again.` };
     followUps.push({ teamId: team.id, title: wanted.title.trim(), brief: wanted.brief.trim(), doneCondition: wanted.doneCondition.trim() });
   }
-  return { proposals: { decisions: (report.decisions ?? []).map((one) => ({ statement: one.statement.trim(), why: one.why.trim() })), followUps } };
+  // What a report leaves out stands as it was: a redraft that changes only its decisions keeps its tickets.
+  const standing = proposalsStanding(db, task);
+  return {
+    proposals: {
+      decisions: report.decisions === undefined ? standing.decisions : report.decisions.map((one) => ({ statement: one.statement.trim(), why: one.why.trim() })),
+      followUps: report.followUps === undefined ? standing.followUps : followUps,
+    },
+  };
 }
 
 /** The proposals that stand: those of the author's last report that gave any. */

@@ -61,7 +61,7 @@ export type JobInput = {
   request: RunRequest;
   task: Task;
   team: Team;
-  /** The employee's own team, when it works on another team's task (a lead reviewing a meeting's design): who it is and what it may do come from there. */
+  /** The employee's own team, when it works on another team's task (a lead reviewing a meeting's design): who it is comes from there, what it may do from the task's team. */
   ownTeam?: Team | undefined;
   ownTeammates?: Employee[] | undefined;
   employee: Employee;
@@ -105,7 +105,7 @@ export function buildJob(input: JobInput): WorkerJob {
     runId: run.id,
     mode: run.mode,
     cwd,
-    systemPrompt: buildSystemPrompt({ company, team: input.ownTeam ?? team, employee, teammates: input.ownTeam ? (input.ownTeammates ?? []) : input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode, admin, meetings: engineTools.includes('call_meeting') }),
+    systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode, admin, meetings: engineTools.includes('call_meeting'), ...(input.ownTeam ? { home: { team: input.ownTeam, teammates: input.ownTeammates ?? [] } } : {}) }),
     // The record is shown at the start of a session. One that carries on has it already, and the tool to read what is new.
     firstTurn: [first, request.resumeSessionId ? '' : (input.record ?? ''), messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
     model: employee.model,

@@ -368,8 +368,10 @@ export class Flow {
 
   // ---------- after a run ----------
 
-  async onRunDone(run: Run, task: Task): Promise<void> {
+  async onRunDone(run: Run, given: Task): Promise<void> {
     this.refusedProposals.delete(run.id);
+    // Whatever brought a meeting's author back (a send-back by a lead or from a card, a conflict to resolve), what it leaves is a new design: every lead reviews it again.
+    const task = given.meeting && authored(run) ? this.withoutApprovals(given) : given;
     switch (run.mode) {
       case 'route':
         return this.complete(task.id);
@@ -400,6 +402,14 @@ export class Flow {
         return this.integrated(run, task, true);
       }
     }
+  }
+
+  /** A meeting's design with no lead's approval on it. */
+  private withoutApprovals(task: Task): Task {
+    const current = store.getTask(this.db, task.id) ?? task;
+    if (!current.meeting || current.meeting.approvedBy.length === 0) return current;
+    this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...current, meeting: { ...current.meeting!, approvedBy: [] }, updatedAt: now.toISOString() }, cause: 'edited' }));
+    return store.getTask(this.db, task.id)!;
   }
 
   /** The parts are together: every sub-task's branch is in, nothing was changed that the task does not own, and the gates pass. */
@@ -472,7 +482,7 @@ export class Flow {
       own: task.contractVersion ?? null,
       parent: parent?.contractVersion ?? null,
       // A part's version covers the whole it was put into, once that part is done: not one that failed or is still open.
-      parts: store.listTasks(this.db, { parentId: task.id }).flatMap((child) => (child.state === 'done' && child.contractVersion ? [child.contractVersion] : [])),
+      parts: this.partsOfTask(task.id).flatMap((child) => (child.state === 'done' && child.contractVersion ? [child.contractVersion] : [])),
       changed,
       added: await addedLines(site.folder, this.baseOf(task, site.teamRepo), paths.map((entry) => entry.replace(/\/\*{1,2}$/, ''))),
     });
@@ -662,8 +672,10 @@ export class Flow {
     const site = this.site(task);
     const base = site ? this.baseOf(task, site.teamRepo) : null;
     // What the last review of this work found: this one checks each of those, not only the work as it now is.
-    // Only the review just before this one: findings an older review made were settled by the one after it.
-    const lastVerdict = store.runsOf(this.db, task.id).findLast((earlier) => earlier.mode === 'review' && (earlier.reason === VERDICT.send_back || earlier.reason === VERDICT.approve));
+    // Only the review just before this piece of work: findings an older review made were settled by the one after it.
+    // Reviews of the work as it now is do not count: on a meeting another lead may have approved it already, and that settles nothing of what was found before.
+    const runs = store.runsOf(this.db, task.id);
+    const lastVerdict = runs.slice(0, Math.max(0, runs.findLastIndex(authored))).findLast((earlier) => earlier.mode === 'review' && (earlier.reason === VERDICT.send_back || earlier.reason === VERDICT.approve));
     const before = lastVerdict?.reason === VERDICT.send_back && (lastVerdict.findings?.length ?? 0) > 0 ? lastVerdict : undefined;
     const parts = this.partsOfTask(task.id).filter((child) => child.state === 'done');
     const nameOf = (id: string | null | undefined): string => (id && store.getEmployee(this.db, id)?.name) || 'someone';
@@ -755,7 +767,10 @@ export class Flow {
   /** What the last review of this work found and marked blocking, when that review did not approve: these are still open. */
   openFindings(taskId: string): { by: string; findings: Finding[] } | null {
     // The last review that approved or found something. Work done since does not clear what it found: only a review does.
-    const review = store.runsOf(this.db, taskId).findLast((run) => run.mode === 'review' && (run.reason === VERDICT.approve || (run.findings?.length ?? 0) > 0));
+    const runs = store.runsOf(this.db, taskId);
+    // On a meeting several leads review the same design: what one of them found stays open though another approved after it.
+    const sinceWork = store.getTask(this.db, taskId)?.meeting ? runs.slice(runs.findLastIndex(authored) + 1).findLast((run) => run.mode === 'review' && run.reason !== VERDICT.approve && (run.findings ?? []).some((finding) => finding.severity === 'blocking')) : undefined;
+    const review = sinceWork ?? runs.findLast((run) => run.mode === 'review' && (run.reason === VERDICT.approve || (run.findings?.length ?? 0) > 0));
     const blocking = review && review.reason !== VERDICT.approve ? (review.findings ?? []).filter((finding) => finding.severity === 'blocking') : [];
     return review && blocking.length > 0 ? { by: store.getEmployee(this.db, review.employeeId)?.name ?? 'the reviewer', findings: blocking } : null;
   }

@@ -303,6 +303,8 @@ export function onContractVersion(db: Db, now: Date, run: Run, input: unknown): 
   const lead = Boolean(employee && store.getTeam(db, employee.teamId)?.leadId === employee.id);
   if (!chief && !lead) return { ok: false, text: 'A contract version is given by a team\'s lead or the chief of staff. Ask with mcp__engine__request_decision.' };
   const here = store.getTask(db, run.taskId);
+  const noPosition = 'A position changes nothing, so it gets no contract version: say in your position what the contract should hold. The design\'s author gets the version when it drafts.';
+  if (here?.meetingRole === 'position' && !asked.data.ticket) return { ok: false, text: noPosition };
   const own = here?.kind === 'work' ? here : undefined;
   let ticket: Task | undefined;
   if (asked.data.ticket) {
@@ -313,6 +315,7 @@ export function onContractVersion(db: Db, now: Date, run: Run, input: unknown): 
     if (found.length === 0) return { ok: false, text: `There is no ticket "${wanted}". Name it by its id or by its exact title.` };
     if (found.length > 1) return { ok: false, text: `More than one ticket is called "${wanted}". Name it by its id: ${found.map((task) => task.id).join(', ')}.` };
     ticket = found[0]!;
+    if (ticket.meetingRole === 'position') return { ok: false, text: noPosition };
     if (!chief && !(own && (ticket.id === own.id || ticket.parentId === own.id))) return { ok: false, text: `"${ticket.title}" is not this ticket or one of its sub-tasks. A lead gives a version to its own ticket and to its parts.` };
   } else if (own) ticket = own;
   else {

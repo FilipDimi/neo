@@ -7,7 +7,10 @@ import { requestFor } from '../../src/supervisor/scheduler.ts';
 import { apply } from '../../src/db/apply.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
 import { looked, staged, type Scene } from '../fixtures/staged.ts';
-import { employee, fileAt, gitRepo, repo, team, world, type World } from '../helpers.ts';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Gate } from '../../src/shared/types.ts';
+import { employee, fileAt, gitIn, gitRepo, repo, team, tempDir, world, type World } from '../helpers.ts';
 
 // Real git, several runs.
 vi.setConfig({ testTimeout: 30_000 });
@@ -30,13 +33,13 @@ const people = [
 type Setup = { w: World; fixture: InProcess; repoPath: string };
 
 /** Rust serves an API that iOS and Web use, all in one repository whose contract is docs/contract. */
-function company(play: (scene: Scene) => Promise<void> | void, over: { maxReviewRounds?: number } = {}): Setup {
+function company(play: (scene: Scene) => Promise<void> | void, over: { maxReviewRounds?: number; gates?: Gate[] } = {}): Setup {
   const fixture = inProcess(staged(play));
   const repoPath = gitRepo(['track/rust', 'track/ios', 'track/web']);
   const at = (branch: string) => [{ repoId: 'repo1', baseBranch: branch, mergeTarget: branch }];
   const w = (open = world(fixture.spawn, {
     company: { chiefOfStaffId: 'neo' },
-    repos: [repo({ path: repoPath, contract: { paths: ['docs/contract'] } })],
+    repos: [repo({ path: repoPath, contract: { paths: ['docs/contract'] }, gates: over.gates ?? [] })],
     teams: [
       team({ id: 'office', name: 'Office', leadId: 'neo' }),
       team({ id: 'rust', name: 'Rust', leadId: 'rlead', repos: at('track/rust'), maxReviewRounds: over.maxReviewRounds ?? 3 }),
@@ -63,23 +66,37 @@ async function drain({ w, fixture }: Setup, max = 80): Promise<void> {
 const POSITION: Record<string, string> = { 'Rust lead': 'Rust: we can serve stages from the stages table.', 'iOS lead': 'iOS: we need stages and a short title on every card.', 'Web lead': 'Web: we need stages, and no breaking change to cards.' };
 const call = { topic: 'Stages on cards', question: 'How do cards get their stages and a short title?', teams: ['Rust', 'iOS', 'Web'], author: 'Rust' };
 
+type Seen = { positions: Record<string, string>; draft: string[]; reviews: { who: string; prompt: string; system: string }[]; replies: { ok: boolean; text: string }[] };
+const nothingSeen = (): Seen => ({ positions: {}, draft: [], reviews: [], replies: [] });
+type Play = {
+  /** What the chief of staff answers when the card is its to decide. Accepts the design unless told otherwise. */
+  decide?: { option: string; notes: string };
+  /** Fields of the author's report when it drafts again, over the first draft's: `undefined` leaves one out. */
+  redraft?: Record<string, unknown>;
+  /** The iOS lead asks for a contract version while it writes its position. */
+  positionAsksVersion?: boolean;
+};
+
 /** Positions say their piece; the author drafts; every review plays `review`. */
-const meeting = (seen: { positions: Record<string, string>; draft: string[]; reviews: { who: string; prompt: string }[] }, review: (s: Scene, round: number) => Promise<unknown>) => async (s: Scene) => {
+const meeting = (seen: Seen, review: (s: Scene, round: number) => Promise<unknown>, how: Play = {}) => async (s: Scene) => {
   const prompt = s.input.prompt;
   // The chief of staff, given the card when the leads cannot agree, accepts the design as it is.
-  if (s.mode === 'decide') return void (await s.engine('decide', { option: 'accept', notes: 'The design holds; what is left is for the tickets.' }));
+  if (s.mode === 'decide') return void (await s.engine('decide', how.decide ?? { option: 'accept', notes: 'The design holds; what is left is for the tickets.' }));
   if (s.mode === 'review') {
-    seen.reviews.push({ who: s.who, prompt });
+    seen.reviews.push({ who: s.who, prompt, system: s.input.systemPrompt });
     return void (await review(s, seen.reviews.length));
   }
   if (prompt.startsWith('# Your team\'s position')) {
     seen.positions[s.who] = prompt;
+    if (how.positionAsksVersion && s.who === 'iOS lead') seen.replies.push(await s.engine('contract_version', { change: 'adds', summary: 'What iOS would like.' }));
     return void (await s.engine('report_done', { summary: POSITION[s.who] }));
   }
   if (s.who === 'Rust lead') {
     seen.draft.push(prompt);
-    if (!s.resumed) await s.engine('contract_version', { change: 'adds', summary: 'Stages and short titles.' });
-    s.write('docs/contract/stages.md', `Version 0.1.0\nGET /v1/stages${s.resumed ? '\nshort_title is required' : ''}\n`);
+    // A draft from the start gets its version; one that carries on (a send-back, a conflict to resolve) has it.
+    const again = s.resumed || prompt.includes('CONFLICT');
+    if (!again) await s.engine('contract_version', { change: 'adds', summary: 'Stages and short titles.' });
+    s.write('docs/contract/stages.md', `Version 0.1.0\nGET /v1/stages${again ? '\nshort_title is required' : ''}\n`);
     await s.engine('report_done', {
       summary: 'The design: GET /v1/stages, and short_title on every card.',
       checks: [{ file: 'docs/contract/stages.md' }],
@@ -88,14 +105,17 @@ const meeting = (seen: { positions: Record<string, string>; draft: string[]; rev
         { team: 'iOS', title: 'Show the stages', brief: 'Show each card\'s stages.', doneCondition: 'Stages are shown.' },
         { team: 'Rust', title: 'Serve the stages', brief: 'Serve GET /v1/stages.', doneCondition: 'It answers.' },
       ],
+      ...(again ? how.redraft : {}),
     });
   }
 };
+const sendBack = (s: Scene) =>
+  s.engine('submit_review', { verdict: 'send_back', notes: 'Say that short_title is required.', findings: [{ severity: 'blocking', file: 'docs/contract/stages.md', title: 'short_title is not required', why: 'The phone needs it on every card.', fix: 'Mark it required.' }] });
 const approve = (s: Scene) => s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], ...looked(s) });
 
 describe('a design meeting', () => {
   it('collects positions written alone, has the author draft from all of them, and lands only when every other lead approves', async () => {
-    const seen = { positions: {} as Record<string, string>, draft: [] as string[], reviews: [] as { who: string; prompt: string }[] };
+    const seen = nothingSeen();
     const setup = company(meeting(seen, approve));
     const called = setup.w.sup.callMeeting('ilead', call);
     expect(called.ok).toBe(true);
@@ -117,6 +137,10 @@ describe('a design meeting', () => {
     expect(seen.reviews.map((review) => review.who)).toEqual(['iOS lead', 'Web lead']);
     for (const part of ['Stages on cards', POSITION['iOS lead'], 'Cards carry a short title, and it is required.', 'Show the stages']) expect(seen.reviews[0]!.prompt, part).toContain(part);
     expect(seen.reviews[1]!.prompt).toContain(POSITION['Web lead']);
+    // A lead reviewing another team's design is told who it is, and the limits of the work in front of it.
+    expect(seen.reviews[0]!.system).toContain('You are iOS lead, the lead of the iOS team');
+    expect(seen.reviews[0]!.system).toContain('lands on track/rust');
+    expect(seen.reviews[0]!.system).not.toContain('lands on track/ios');
 
     // Settled: the draft landed, the decision is on record, the tickets are made on it, and the user is told.
     const done = store.getTask(setup.w.db, held!.id)!;
@@ -131,11 +155,10 @@ describe('a design meeting', () => {
   });
 
   it('goes back to the author when a lead sends it back, and every lead reviews again', async () => {
-    const seen = { positions: {} as Record<string, string>, draft: [] as string[], reviews: [] as { who: string; prompt: string }[] };
+    const seen = nothingSeen();
     const setup = company(
-      meeting(seen, (s, round) =>
-        round === 2 ? s.engine('submit_review', { verdict: 'send_back', notes: 'Say that short_title is required.', findings: [{ severity: 'blocking', file: 'docs/contract/stages.md', title: 'short_title is not required', why: 'The phone needs it on every card.', fix: 'Mark it required.' }] }) : approve(s),
-      ),
+      // The author drafts again with its decisions only: the tickets it gave the first time stand.
+      meeting(seen, (s, round) => (round === 2 ? sendBack(s) : approve(s)), { redraft: { followUps: undefined } }),
     );
     setup.w.sup.callMeeting('neo', call);
     await drain(setup);
@@ -144,10 +167,69 @@ describe('a design meeting', () => {
     expect(seen.draft[1]).toContain('Say that short_title is required.');
     const [held] = store.listTasks(setup.w.db).filter((task) => task.meeting);
     expect(held).toMatchObject({ state: 'done', reviewRounds: 1 });
+    expect(store.listTasks(setup.w.db).filter((task) => task.builtOn?.decisions.length === 1).map((task) => task.title)).toEqual(['Show the stages', 'Serve the stages']);
+  });
+
+  it('shows a lead what it found last time, though another lead approved in between and named a gate', async () => {
+    const seen = nothingSeen();
+    // iOS approves, Web sends back, iOS approves the new draft and names a gate (which the engine runs before the approval counts), Web reviews again.
+    const review = (s: Scene, round: number) => (round === 2 ? sendBack(s) : round === 3 ? s.engine('submit_review', { verdict: 'approve', notes: '', findings: [], checks: [{ gate: 'docs' }] }) : approve(s));
+    const setup = company(meeting(seen, review), { gates: [{ name: 'docs', command: 'true', timeoutMinutes: 1, lock: null }] });
+    setup.w.sup.callMeeting('neo', call);
+    await drain(setup);
+    expect(seen.reviews.map((one) => one.who)).toEqual(['iOS lead', 'Web lead', 'iOS lead', 'Web lead']);
+    for (const again of [seen.reviews[2]!, seen.reviews[3]!]) expect(again.prompt).toMatch(/This work was sent back before\. What Web lead found then:[\s\S]*short_title is not required/);
+  });
+
+  it('is reviewed by every lead again when the chief of staff sends it back from a card', async () => {
+    const seen = nothingSeen();
+    const review = (s: Scene, round: number) => (round === 2 ? s.engine('submit_review', { verdict: 'escalate', notes: 'Whether short_title may be required is not mine to say.', findings: [] }) : approve(s));
+    const setup = company(meeting(seen, review, { decide: { option: 'send_back', notes: 'Make short_title required.' } }));
+    setup.w.sup.callMeeting('neo', call);
+    await drain(setup);
+    // iOS had approved the first draft. The one that lands is another, and iOS reviews that one too.
+    expect(seen.reviews.map((one) => one.who)).toEqual(['iOS lead', 'Web lead', 'iOS lead', 'Web lead']);
+    expect(seen.draft[1]).toContain('Make short_title required.');
+    const [held] = store.listTasks(setup.w.db).filter((task) => task.meeting);
+    expect(held).toMatchObject({ state: 'done', meeting: { approvedBy: ['ios', 'web'] } });
+  });
+
+  it('is reviewed by every lead again when landing it meant resolving a conflict', async () => {
+    const seen = nothingSeen();
+    let setup: Setup;
+    // While the last lead reviews, the branch the design lands on gets another version of the same file.
+    const review = (s: Scene, round: number) => {
+      if (round === 2) {
+        const other = tempDir('vs-other-');
+        gitIn(setup.repoPath, 'worktree', 'add', '-q', other, 'track/rust');
+        fs.mkdirSync(path.join(other, 'docs/contract'), { recursive: true });
+        fs.writeFileSync(path.join(other, 'docs/contract/stages.md'), 'Somebody else wrote this meanwhile.\n');
+        gitIn(other, 'add', '-A');
+        gitIn(other, 'commit', '-q', '-m', 'meanwhile');
+        gitIn(setup.repoPath, 'worktree', 'remove', '--force', other);
+      }
+      return approve(s);
+    };
+    setup = company(meeting(seen, review));
+    setup.w.sup.callMeeting('neo', call);
+    await drain(setup);
+    expect(seen.draft[1]).toContain('CONFLICT');
+    expect(seen.reviews.map((one) => one.who)).toEqual(['iOS lead', 'Web lead', 'iOS lead', 'Web lead']);
+    expect(fileAt(setup.repoPath, 'track/rust', 'docs/contract/stages.md')).toContain('short_title is required');
+  });
+
+  it('gives no contract version to a position: only the design changes the contract', async () => {
+    const seen = nothingSeen();
+    const setup = company(meeting(seen, approve, { positionAsksVersion: true }));
+    setup.w.sup.callMeeting('neo', call);
+    await drain(setup);
+    expect(seen.replies).toMatchObject([{ ok: false, text: expect.stringMatching(/position changes nothing/) }]);
+    const [held] = store.listTasks(setup.w.db).filter((task) => task.meeting);
+    expect(held).toMatchObject({ state: 'done', contractVersion: '0.1.0' });
   });
 
   it('gives the card to the chief of staff when the rounds run out, though the user decides the company\'s cards', async () => {
-    const seen = { positions: {} as Record<string, string>, draft: [] as string[], reviews: [] as { who: string; prompt: string }[] };
+    const seen = nothingSeen();
     const setup = company(meeting(seen, (s) => s.engine('submit_review', { verdict: 'send_back', notes: 'Not like this.', findings: [{ severity: 'blocking', file: 'docs/contract/stages.md', title: 'Wrong shape', why: 'It breaks the phone.', fix: 'Change it.' }] })), { maxReviewRounds: 1 });
     setup.w.sup.callMeeting('neo', call);
     await drain(setup);
@@ -220,6 +302,8 @@ describe('a design meeting', () => {
     expect(nextReviewer(setup.w.db, held!)?.lead.id).toBe('wlead');
     expect(nextReviewer(setup.w.db, withApproval(setup.w.db, held!, 'wlead'))).toBeNull();
     expect(requestFor(held!, store.getTeam(setup.w.db, 'rust')!)).toEqual({ mode: 'integrate', employeeId: 'rlead' });
+    // The lead who was to draft it is replaced: the draft is the new lead's.
+    expect(requestFor(held!, { ...store.getTeam(setup.w.db, 'rust')!, leadId: 'reng' })).toEqual({ mode: 'integrate', employeeId: 'reng' });
   });
 
   it('refuses a second meeting on a topic that is still being held, and proposals on work that is not a meeting', () => {

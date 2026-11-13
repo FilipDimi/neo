@@ -22,15 +22,22 @@ export function buildSystemPrompt(input: {
   admin?: boolean;
   /** It can call a design meeting: a lead or the chief of staff, in its own work. */
   meetings?: boolean;
+  /**
+   * The employee's own team and its people, when the work in front of it is another team's (a lead reviewing a
+   * meeting's design). Who it is comes from here; the limits and the tools stay those of the team whose work it is,
+   * because those are what the engine enforces on the run.
+   */
+  home?: { team: Team; teammates: Employee[] } | undefined;
 }): string {
   const { company, team, employee } = input;
-  const leads = team.leadId === employee.id;
+  const own = input.home?.team ?? team;
+  const leads = own.leadId === employee.id;
   const mergeTargets = [...new Set(team.repos.map((r) => r.mergeTarget).filter((t): t is string => t !== null))];
   const may = (flag: boolean, verb: string) => (flag ? `- Your team is allowed to ${verb}, but there is no tool for it yet: ask with mcp__engine__request_decision.` : `- You may not ${verb}.`);
-  const others = input.teammates.filter((mate) => mate.id !== employee.id && !mate.fired);
+  const others = (input.home?.teammates ?? input.teammates).filter((mate) => mate.id !== employee.id && !mate.fired);
 
   return [
-    `You are ${employee.name}, ${leads ? 'the lead of' : 'a member of'} the ${team.name} team at ${company.name}.\nYour role: ${employee.role}`,
+    `You are ${employee.name}, ${leads ? 'the lead of' : 'a member of'} the ${own.name} team at ${company.name}.\nYour role: ${employee.role}`,
 
     `## How work reaches you
 A supervisor program runs this company. It starts you for one piece of work at a time, in a folder of your own, and records what you do. You have no inbox and you never wait for anyone. Do the work in front of you, tell the engine the outcome with one of its tools, and stop.
@@ -39,13 +46,13 @@ Say what you are doing with mcp__engine__set_status when you start and when your
 
     input.admin ? ADMIN_RULES : `## Company rules\n${company.rules.trim() || 'None written yet.'}`,
 
-    `## Your team\n${team.purpose.trim()}${others.length > 0 ? `\nYou work with:\n${others.map((mate) => `- ${mate.name}${mate.id === team.leadId ? ' (the lead)' : ''}: ${mate.role}`).join('\n')}` : ''}`,
+    `## Your team\n${own.purpose.trim()}${others.length > 0 ? `\nYou work with:\n${others.map((mate) => `- ${mate.name}${mate.id === own.leadId ? ' (the lead)' : ''}: ${mate.role}`).join('\n')}` : ''}`,
 
     `## Limits
-The engine enforces these; they do not depend on your goodwill. A refused action stays refused for the whole run, so do not look for another route to the same effect.
+${input.home ? `This run is on work of the ${team.name} team, so these are that team's limits. ` : ''}The engine enforces these; they do not depend on your goodwill. A refused action stays refused for the whole run, so do not look for another route to the same effect.
 - You work inside your task folder. Writing anywhere else is refused.
 - The engine commits your work, merges it and pushes it. You never run git commit, git merge, git rebase, git push, or anything else that writes history. Reading with git status, git diff and git log is fine.
-${mergeTargets.length > 0 ? `- Finished work of your team lands on ${mergeTargets.join(', ')}. The engine does the merge.` : '- You may not merge into a shared branch: finished work waits for the user\'s decision.'}
+${mergeTargets.length > 0 ? `- Finished work of ${input.home ? `the ${team.name} team` : 'your team'} lands on ${mergeTargets.join(', ')}. The engine does the merge.` : '- You may not merge into a shared branch: finished work waits for the user\'s decision.'}
 ${team.mayPush ? '- The engine may push your team\'s finished branches. You do not push.' : '- You may not push.'}
 ${may(team.mayOpenPr, 'open pull requests')}
 ${may(team.mayPublish, 'publish anything outside this machine')}
