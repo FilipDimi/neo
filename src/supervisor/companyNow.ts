@@ -6,6 +6,7 @@
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { ago, checkedLine, countsCost, WHY } from '../shared/view.ts';
+import { waitingOn } from './planning.ts';
 
 const SHOWN_PER_TEAM = 12;
 
@@ -54,10 +55,14 @@ export function companyNow(db: Db, now: Date): string {
           ? `${name(card.deciderId)} is deciding it for the user, for ${ago(card.askedAt, now)}`
           : card
             ? `waiting on the user (${WHY[card.kind]}) for ${ago(card.askedAt, now)}`
+            : task.dropped
+              ? `dropped by ${name(task.dropped.by)}: ${task.dropped.why}`
             : task.state === 'done'
               ? `finished today by ${name(authorOf(task.id) ?? task.assigneeId ?? team.leadId)}${checkedOf(task.id)}${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}`
               : task.state === 'failed'
                 ? 'stopped today'
+                : task.state === 'queued' && waitingOn(db, task).open.length > 0
+                  ? `waiting for ${waitingOn(db, task).open.map((dep) => `"${dep.title}"`).join(' and ')} to be done`
                 : task.state === 'queued'
                   ? `waiting to start, for ${name(task.assigneeId ?? team.leadId)}`
                   : `nobody is on it right now (${name(task.assigneeId ?? team.leadId)} has it)`;

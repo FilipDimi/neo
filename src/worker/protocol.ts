@@ -89,6 +89,8 @@ export const TOOL_INPUT = {
           capUsd: z.number().positive(),
           retryAllowed: z.boolean(),
           decisions: z.array(z.string().min(1)).optional(),
+          /** The titles of the other sub-tasks of this proposal that must be done before this one starts. */
+          after: z.array(z.string().min(1)).max(8).optional(),
           /** This part changes the contract: it is given the next version when the proposal is accepted. */
           contract: z.object({ change: z.enum(['breaking', 'adds', 'wording']), summary: z.string().trim().min(1) }).optional(),
         }),
@@ -102,7 +104,14 @@ export const TOOL_INPUT = {
     decisions: z.array(z.object({ statement: z.string().trim().min(1).max(300), why: z.string() })).max(20).optional(),
     followUps: z.array(z.object({ team: z.string().min(1), title: z.string().trim().min(1), brief: z.string().trim().min(1), doneCondition: z.string().trim().min(1) })).max(12).optional(),
   }),
-  submit_review: z.object({ verdict: z.enum(['approve', 'send_back', 'escalate']), notes: z.string(), findings: z.array(Finding).max(40).optional(), checks: z.array(Check).max(MAX_CHECKS).optional() }),
+  submit_review: z.object({
+    verdict: z.enum(['approve', 'send_back', 'escalate']),
+    notes: z.string(),
+    findings: z.array(Finding).max(40).optional(),
+    checks: z.array(Check).max(MAX_CHECKS).optional(),
+    /** With the answer to a member's question about its ticket: hand the ticket to a teammate, or close it as not needed. */
+    ticket: z.object({ reassignTo: z.string().min(1).optional(), drop: z.boolean().optional() }).optional(),
+  }),
   request_decision: z.object({ question: z.string().min(1), options: z.array(z.string()).max(4) }),
   set_status: z.object({ text: z.string().min(1).max(60) }),
   run_gate: z.object({ name: z.string().min(1) }),
@@ -117,6 +126,8 @@ export const TOOL_INPUT = {
     capUsd: z.number().positive(),
     gates: z.array(z.string().min(1)).optional(),
     decisions: z.array(z.string().min(1)).optional(),
+    /** The tasks that must be done before this one starts: each by its id or its exact title. */
+    after: z.array(z.string().min(1)).max(12).optional(),
   }),
   decide: z.object({ option: z.string().min(1), notes: z.string() }),
   read_decisions: z.object({ ids: z.array(z.string().min(1)).max(20).optional(), search: z.string().optional() }),

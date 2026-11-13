@@ -32,6 +32,7 @@ import { remember } from './memory.ts';
 import { builtOnFor, indexFor, onContractVersion, onReadDecisions, onRecordDecision, recordSection } from './record.ts';
 import { dirOf } from './recordFiles.ts';
 import { holdMeeting, meetingReply, planMeeting, proposalsOf, type MeetingCall, type Proposals } from './meeting.ts';
+import { planLines, resolveAfter, waitingOn } from './planning.ts';
 import { verifyClaims, type Claims } from './proof.ts';
 import { account, askText, BUDGET, called, looked, MOVES, newWatch, progressed, refusal, refused, resulted, undelivered, type Budget, type Watch } from './progress.ts';
 import { printOf, treeOf } from '../git/tree.ts';
@@ -71,6 +72,8 @@ export type NewTaskInput = Pick<Task, 'teamId' | 'title' | 'brief'> &
   Partial<Pick<Task, 'summary' | 'createdBy' | 'assigneeId' | 'reviewerId' | 'parentId' | 'kind' | 'priority' | 'doneCondition' | 'repoId' | 'gates' | 'ownership' | 'capUsd' | 'retryAllowed' | 'leaseMinutes'>> & {
     /** The numbers of the decisions on record this ticket is built on. */
     decisions?: string[] | undefined;
+    /** The tasks that must be done before this one starts: ids, or exact titles. */
+    after?: string[] | undefined;
   };
 
 type ToolReply = { ok: boolean; text: string };
@@ -221,6 +224,7 @@ export class Supervisor {
       this.liftPauseIfDue();
       this.closeCapCardsOfEarlierDays();
       this.expireLeases();
+      this.flow.startWaiting();
       this.checkInvariant();
       this.reclaimCards();
       await this.startRuns();
@@ -248,16 +252,20 @@ export class Supervisor {
     const vague = unusable(input.ownership ?? []);
     if (vague.length > 0) throw new Error(`${vague.map((entry) => `"${entry}"`).join(', ')} names no file or folder a task can own. Name files or folders by their path from the top of the repository, such as src/api or README.md`);
 
-    const { decisions: cited, ...fields } = input;
+    const { decisions: cited, after: waitsFor, ...fields } = input;
     const builtOn = builtOnFor(this.db, { decisions: cited, repoId });
+    const after = resolveAfter(this.db, waitsFor);
     const now = this.now();
-    const task = store.newTask({ createdBy: 'user', ...fields, repoId, ...(builtOn ? { builtOn } : {}) }, now);
+    const task = store.newTask({ createdBy: 'user', ...fields, repoId, ...(builtOn ? { builtOn } : {}), ...(after.length > 0 ? { after } : {}) }, now);
     const who = requestFor(task, team);
     if ('problem' in who && who.problem === 'no_assignee') throw new Error(`a task on the self-managed team ${team.name} needs an assignee`);
+    // A task that waits for others is not started here: the engine starts it when they are done.
+    const waits = waitingOn(this.db, task);
     apply(
       this.db,
       (tx) => {
         tx.emit({ kind: 'task_changed', task, cause: 'created' });
+        if (waits.open.length > 0 || waits.stopped.length > 0) return;
         if ('problem' in who) decisions.raise(tx, this.db, now, { taskId: task.id, kind: 'staffing', text: decisions.staffingText(task, who.problem), options: decisions.optionsFor('staffing') });
         else tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, ...who, reason: 'new' }, now) });
       },
@@ -541,6 +549,9 @@ export class Supervisor {
         ...(employee.teamId !== team.id ? { ownTeam: store.getTeam(this.db, employee.teamId), ownTeammates: everyone.filter((e) => e.teamId === employee.teamId) } : {}),
         teams,
         board: request.mode === 'route' ? companyNow(this.db, now) : undefined,
+        // What it waited for and where that is now, at its start; and for a lead that plans, its team's board.
+        ...(!request.resumeSessionId && prepared.after?.length ? { waited: this.flow.waitedLines(prepared) } : {}),
+        ...(request.mode === 'brief' && !request.resumeSessionId ? { plan: planLines(this.db, team, prepared, now) } : {}),
         record: recordSection(this.db, indexFor(this.db, prepared)),
         remainingUsd: countsCost(company) ? Math.max(0, task.capUsd - store.spentOn(this.db, task.id)) : Infinity,
         envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)),
@@ -1083,7 +1094,8 @@ export class Supervisor {
         this.routed.set(run.id, count);
         apply(this.db, (tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, text: `writing ${count} task${count === 1 ? '' : 's'} from your chat` }), now);
         const team = store.getTeam(this.db, created.teamId);
-        return { ok: true, text: `Created "${created.title}" on ${team?.name ?? created.teamId}${created.assigneeId ? ` for ${this.nameOf(created.assigneeId)}` : '; its lead will brief it'}.` };
+        const waits = waitingOn(this.db, created).open;
+        return { ok: true, text: `Created "${created.title}" on ${team?.name ?? created.teamId}${created.assigneeId ? ` for ${this.nameOf(created.assigneeId)}` : '; its lead will brief it'}${waits.length > 0 ? `. It starts when ${waits.map((dep) => `"${dep.title}"`).join(' and ')} ${waits.length === 1 ? 'is' : 'are'} done` : ''}.` };
       }
       case 'decide':
         return this.onDecide(run, input);

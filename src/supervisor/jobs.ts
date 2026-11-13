@@ -70,6 +70,10 @@ export type JobInput = {
   teammates: Employee[];
   /** Every team, for the chief of staff, who routes work to them. */
   teams: TeamView[];
+  /** What this task waited for, and where each of those is now: said at its start. */
+  waited?: string | undefined;
+  /** For a lead that plans: its team's board and who has worked where. */
+  plan?: string | undefined;
   /** The state of every board, for the chief of staff, who is asked about it. */
   board?: string | undefined;
   remainingUsd: number;
@@ -107,7 +111,7 @@ export function buildJob(input: JobInput): WorkerJob {
     cwd,
     systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode, admin, meetings: engineTools.includes('call_meeting'), ...(input.ownTeam ? { home: { team: input.ownTeam, teammates: input.ownTeammates ?? [] } } : {}) }),
     // The record is shown at the start of a session. One that carries on has it already, and the tool to read what is new.
-    firstTurn: [first, request.resumeSessionId ? '' : (input.record ?? ''), messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
+    firstTurn: [first, input.waited ?? '', input.plan ?? '', request.resumeSessionId ? '' : (input.record ?? ''), messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
     model: employee.model,
     // A conversation is answered at the model's own effort, so that it stays quick. Work runs at the effort the employee was hired with.
     // Deciding a card for the user is judgement, not small talk: it gets the effort too.

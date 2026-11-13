@@ -162,6 +162,10 @@ export const Task = z.object({
   builtOn: z.object({ decisions: z.array(z.string()), contract: z.string().nullable() }).optional(),
   /** The contract version the engine handed this ticket: it may change the contract, and must state this version there. */
   contractVersion: z.string().optional(),
+  /** The tasks this one waits for: it is not started until they are done. */
+  after: z.array(id).optional(),
+  /** A ticket its lead closed as not needed, and why: nothing was done on it, and the whole goes on without it. */
+  dropped: z.object({ by: id, why: z.string() }).optional(),
   /**
    * On a design meeting: what it is about, who called it, the teams in it (the author's first), and the teams whose
    * lead has approved its design since it was last sent back.

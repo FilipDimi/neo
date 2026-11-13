@@ -234,6 +234,7 @@ export const TOOLS: Tool[] = [
       assignee: z.string().optional().describe('An employee\'s name.'),
       gates: z.array(z.string().min(1)).optional().describe('The names of the gates of the team\'s repository that the finished work must pass before it lands (company_setup lists them). A task given none is checked by none.'),
       decisions: z.array(z.string().min(1)).optional().describe('The numbers of the decisions on record this task is built on, such as D-12 (the decisions tool finds them).'),
+      after: z.array(z.string().min(1)).optional().describe('The tasks that must be done before this one starts, each by its id or its exact title. The engine keeps it waiting until they are.'),
     },
     run: async (args, ctx) => {
       const { teams, employees } = await ctx.call<Snapshot>('GET', '/api/snapshot');
@@ -242,8 +243,8 @@ export const TOOLS: Tool[] = [
       const staff = employees.filter((employee) => !employee.fired && employee.teamId === team.id);
       const assignee = text(args.assignee) ? byName(staff, text(args.assignee)) : undefined;
       if (text(args.assignee) && !assignee) throw new Refused(`Nobody on ${team.name} is called "${text(args.assignee)}". On that team: ${staff.map((entry) => entry.name).join(', ') || 'nobody yet'}.`);
-      const { task } = await ctx.call<{ task: Task }>('POST', '/api/tasks', { teamId: team.id, title: text(args.title), brief: text(args.brief), ...(text(args.doneCondition) ? { doneCondition: text(args.doneCondition) } : {}), ...(assignee ? { assigneeId: assignee.id } : {}), ...(Array.isArray(args.gates) && args.gates.length > 0 ? { gates: args.gates } : {}), ...(Array.isArray(args.decisions) && args.decisions.length > 0 ? { decisions: args.decisions } : {}) });
-      return `Created task ${task.id} "${task.title}" on ${team.name}${assignee ? ` for ${assignee.name}` : team.selfManaged ? '' : '; its lead will brief it'}.`;
+      const { task } = await ctx.call<{ task: Task }>('POST', '/api/tasks', { teamId: team.id, title: text(args.title), brief: text(args.brief), ...(text(args.doneCondition) ? { doneCondition: text(args.doneCondition) } : {}), ...(assignee ? { assigneeId: assignee.id } : {}), ...(Array.isArray(args.gates) && args.gates.length > 0 ? { gates: args.gates } : {}), ...(Array.isArray(args.decisions) && args.decisions.length > 0 ? { decisions: args.decisions } : {}), ...(Array.isArray(args.after) && args.after.length > 0 ? { after: args.after } : {}) });
+      return `Created task ${task.id} "${task.title}" on ${team.name}${assignee ? ` for ${assignee.name}` : team.selfManaged ? '' : '; its lead will brief it'}${task.after?.length ? '. It starts when what it waits for is done' : ''}.`;
     },
   },
 ];

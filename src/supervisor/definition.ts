@@ -231,7 +231,7 @@ ${input.board?.trim() || '(nothing on any board)'}`;
 
 ${task.brief}
 
-Turn this into work. When the request needs two or more teams to agree on something between them first (an interface, a field, a change to the contract), it is a design meeting, not a task for each: call mcp__engine__call_meeting with the teams, the question to settle, and as author the team that builds what the others use; the tickets come out of the meeting once it is agreed. For each other separate piece, call mcp__engine__create_task on the team it belongs to, with a summary (one or two plain sentences on what it delivers, for someone who will never read the brief), a brief that stands on its own and a done-condition someone can check. Where a team has gates, give the task its gates: the names of the gates the finished work must pass before it lands, chosen from that team's own (a task given none is checked by none). Do not do the work yourself and do not invent work the message does not ask for. If the message is a question, answer it instead. If it asks what the company or a team is doing, answer it from "The company right now" below: that is the engine's own record and it is current, so do not look in files or in your notes for it.
+Turn this into work. When the request needs two or more teams to agree on something between them first (an interface, a field, a change to the contract), it is a design meeting, not a task for each: call mcp__engine__call_meeting with the teams, the question to settle, and as author the team that builds what the others use; the tickets come out of the meeting once it is agreed. For each other separate piece, call mcp__engine__create_task on the team it belongs to, with a summary (one or two plain sentences on what it delivers, for someone who will never read the brief), a brief that stands on its own and a done-condition someone can check. Where a team has gates, give the task its gates: the names of the gates the finished work must pass before it lands, chosen from that team's own (a task given none is checked by none). Where one task must be done before another can start, say so with after on the later one (the earlier one's id or exact title), never in a title or a brief: the engine keeps it waiting and starts it when the earlier one is done. Do not do the work yourself and do not invent work the message does not ask for. If the message is a question, answer it instead. If it asks what the company or a team is doing, answer it from "The company right now" below: that is the engine's own record and it is current, so do not look in files or in your notes for it.
 
 The teams:
 ${teams.join('\n') || '- (no teams yet)'}
@@ -268,7 +268,11 @@ ${assignable.map((mate) => `- ${mate.name} (assigneeId: ${mate.id}): ${mate.role
     }
     case 'work':
       return `${header}
-
+${
+  task.parentId && !team.selfManaged && !material.notes
+    ? '\nBefore you change anything: if this is already done (say where: the file and line, or the commit), if it cannot start until something else is done, or if someone else on the team should have it, say so now with mcp__engine__request_decision. Your lead answers at once, and can hand the ticket on or close it. Otherwise carry on.\n'
+    : ''
+}
 Do this task in your folder. When the work is finished, call mcp__engine__report_done with a short summary of what you did, and in checks what you checked: a gate by its name (the engine runs it itself), a command you ran after your last change, or a file and line; only what holds counts, and what does not is refused. The engine then commits your files and runs the gates itself; you can run one first with mcp__engine__run_gate.${material.notes ? `\n\nNotes for this run:\n${material.notes}` : ''}`;
     case 'review':
       // Not a review of finished work: a member stopped with a question, and on a led team the lead is asked first.
@@ -281,7 +285,14 @@ The question:
 ${material.question.text.trim()}
 ${material.question.choices.length > 0 ? `\nThe answers ${material.question.from} offers:\n${material.question.choices.map((choice) => `- ${choice}`).join('\n')}\n` : ''}
 Settle it if you can. What a brief means, what is in scope, which of two things should win when they disagree: those are yours to decide, so decide them the way that serves the task and do not pass them on. ${task.parentId ? 'You wrote this brief when you split the task, so what it means is yours to say.' : 'This brief is the user\'s, not yours: settle whatever it leaves open, but if your answer would go against something it says outright, that is the user\'s to decide.'} Call mcp__engine__submit_review with "send_back" and your answer in the notes. ${material.question.from} carries on with exactly those words, so say plainly what to do.
-Only if the answer needs something only the user has (a decision about the product or the business, money, access, anything outside this team's limits), call it with "escalate" and say in the notes what the user must decide and why you cannot. "approve" does not apply: nothing is finished yet.`;
+${
+  input.teammates.filter((mate) => !mate.fired && mate.id !== team.leadId).length > 0
+    ? `With your answer you can also do one of two things, in the ticket field. Hand the ticket to a teammate who fits it better (ticket: { reassignTo: its assigneeId }): it starts afresh there with your notes. ${task.parentId ? 'Or close it as not needed (ticket: { drop: true }), when it is already done or the plan no longer needs it: your notes are the reason, and the rest goes on without it. ' : ''}Your team: ${input.teammates
+        .filter((mate) => !mate.fired && mate.id !== team.leadId)
+        .map((mate) => `${mate.name} (assigneeId: ${mate.id})`)
+        .join(', ')}.\n`
+    : ''
+}Only if the answer needs something only the user has (a decision about the product or the business, money, access, anything outside this team's limits), call it with "escalate" and say in the notes what the user must decide and why you cannot. "approve" does not apply: nothing is finished yet.`;
       return `${header}
 
 You are reviewing this work, not doing it. The changed files are in your folder; read them.

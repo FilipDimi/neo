@@ -22,6 +22,7 @@ import type { Decision, Employee, Finding, Gate, GateResult, Repo, Run, RunOutco
 import { checkedLine, countsCost } from '../shared/view.ts';
 import { TOOL_INPUT, type Check } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
+import { waitingOn } from './planning.ts';
 import { hasFiles, type Claims } from './proof.ts';
 import { builtOnFor, contractProblem, issueContractVersion } from './record.ts';
 import { dirOf, entriesFor, padded, underRecord, writeRecordFiles } from './recordFiles.ts';
@@ -30,7 +31,7 @@ import { writtenFiles } from '../api/files.ts';
 import { buildDecidingTurn, buildFirstTurn, findingLines, type Part } from './definition.ts';
 import { draftTurn, nextReviewer, positionTurn, reviewMaterial, settleMeeting, withApproval } from './meeting.ts';
 import { folderOf } from './jobs.ts';
-import { reviewerFor } from './scheduler.ts';
+import { requestFor, reviewerFor } from './scheduler.ts';
 import { canTransition } from './taskState.ts';
 
 const ENGINE: Identity = { name: 'Virtual Startup', email: 'engine@virtual-startup.invalid' };
@@ -97,17 +98,19 @@ export class Flow {
 
   /**
    * The parts of a task, oldest first. A team's position in a design meeting is not one: it is words for the author,
-   * never committed or merged.
+   * never committed or merged. Nor is a ticket its lead dropped: nothing was done on it.
    */
   private partsOfTask(taskId: string): Task[] {
     return store
       .listTasks(this.db, { parentId: taskId })
-      .filter((child) => child.meetingRole !== 'position')
+      .filter((child) => child.meetingRole !== 'position' && !child.dropped)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
   /** What a task's branch is measured against: its parent's branch, or the team's base. */
   private baseOf(task: Task, teamRepo: TeamRepo): string {
+    // A sub-task that waited for others began with their work merged in: what it changed is measured from there, or their files would count as its own.
+    if (task.parentId && task.after?.length && task.startedFrom) return task.startedFrom;
     const parent = task.parentId ? store.getTask(this.db, task.parentId) : undefined;
     return `origin/${parent?.branch ?? teamRepo.baseBranch}`;
   }
@@ -145,6 +148,7 @@ export class Flow {
         await createFolder({ repoPath: site.repo.path, dir, branch, startPoint: parent?.branch ?? site.teamRepo.baseBranch });
       });
       Object.assign(changes, { folder: dir, branch });
+      if (!task.branch) await this.takeIn(task, dir);
       // Where the branch began, for a branch made here and now: what the task changed is measured from it once the branch has been taken in elsewhere.
       if (!task.branch) changes.startedFrom = await must(dir, ['rev-parse', 'HEAD']);
     }
@@ -154,6 +158,89 @@ export class Flow {
     if (task.meeting) return { task: changes, firstTurn: draftTurn(this.db, ready, site.repo) };
     const mergeState = await this.mergeChildren(ready);
     return { task: changes, firstTurn: buildFirstTurn({ task: ready, mode: 'integrate', team: site.team, repo: site.repo, teammates: [], remainingUsd: 0, material: { mergeState } }) };
+  }
+
+  /** Sub-tasks of the same split that this one waited for, done, with a branch: their work is what it builds on. */
+  private builtOn(task: Task): Task[] {
+    return task.parentId ? waitingOn(this.db, task).done.filter((dep) => dep.parentId === task.parentId && dep.branch && !dep.dropped) : [];
+  }
+
+  /** Sub-tasks whose work could not be merged into a folder that waited for them, by the task that waited. */
+  private readonly notTakenIn = new Map<string, string[]>();
+
+  /** Merges into a new folder the finished sub-tasks its task waited for. One that conflicts is left out, and said so. */
+  private async takeIn(task: Task, dir: string): Promise<void> {
+    const left: string[] = [];
+    for (const dep of this.builtOn(task)) {
+      const merged = await mergeInto(dir, dep.branch!, ENGINE).catch(() => ({ ok: false as const, conflicts: [] }));
+      if (merged.ok) continue;
+      await must(dir, ['merge', '--abort']).catch(() => undefined);
+      left.push(dep.id);
+    }
+    if (left.length > 0) this.notTakenIn.set(task.id, left);
+  }
+
+  /** What a task waited for and where each of those is now, for its first turn. */
+  waitedLines(task: Task): string {
+    const here = new Set(this.builtOn(task).map((dep) => dep.id));
+    const left = new Set(this.notTakenIn.get(task.id) ?? []);
+    const lines = (task.after ?? []).map((id) => {
+      const dep = store.getTask(this.db, id);
+      if (!dep) return '- a task that is gone';
+      const where =
+        dep.state !== 'done'
+          ? dep.state === 'failed'
+            ? 'stopped; nothing of it is to be relied on'
+            : `not done (${dep.state})`
+          : dep.dropped
+            ? `dropped as not needed: ${dep.dropped.why}`
+            : left.has(id)
+              ? `done, on the branch ${dep.branch}; it could not be merged into your folder cleanly, so read it there`
+              : here.has(id)
+                ? 'done; its work is in your folder'
+                : dep.mergedInto
+                  ? `done, merged into ${dep.mergedInto}`
+                  : dep.branch
+                    ? `done, kept on the branch ${dep.branch} (not merged)`
+                    : 'done';
+      return `- "${dep.title}": ${where}`;
+    });
+    return `This task waited for:\n${lines.join('\n')}`;
+  }
+
+  /**
+   * Starts every task that waited and need wait no longer: all it waited for is done. One whose dependency was stopped
+   * is not started: a card asks whether to start it anyway. Called on every tick, so nothing is missed across a restart.
+   */
+  startWaiting(): void {
+    const live = new Set(store.liveRuns(this.db).map((run) => run.taskId));
+    for (const task of store.listTasks(this.db, { state: 'queued' })) {
+      if (task.kind !== 'work' || !task.after?.length || live.has(task.id) || store.requestsOf(this.db, task.id).length > 0) continue;
+      // It ran before, or was asked about: it is past its wait.
+      if (store.runsOf(this.db, task.id).length > 0 || store.allDecisions(this.db).some((card) => card.taskId === task.id && card.subject?.waited === true)) continue;
+      const waits = waitingOn(this.db, task);
+      const team = store.getTeam(this.db, task.teamId);
+      if (!team) continue;
+      if (waits.stopped.length > 0) {
+        const names = waits.stopped.map((dep) => `"${dep.title}"`).join(' and ');
+        this.change((tx, now) =>
+          decisions.raise(tx, this.db, now, {
+            taskId: task.id,
+            kind: 'question',
+            text: `"${task.title}" was waiting for ${names}, which ${waits.stopped.length === 1 ? 'was' : 'were'} stopped. Start "${task.title}" anyway, or stop it too?`,
+            options: [{ id: 'start', label: 'Start it anyway', effect: 'recheck' }, { id: 'stop', label: 'Stop it', effect: 'stop_task' }],
+            subject: { waited: true },
+          }),
+        );
+        continue;
+      }
+      if (waits.open.length > 0) continue;
+      const who = requestFor(task, team);
+      this.change((tx, now) => {
+        if ('problem' in who) decisions.raise(tx, this.db, now, { taskId: task.id, kind: 'staffing', text: decisions.staffingText(task, who.problem), options: decisions.optionsFor('staffing') });
+        else tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, ...who, reason: 'new' }, now) });
+      });
+    }
   }
 
   /** What the chief of staff is shown to decide a card for the user: the card, the task it is about, and what stands behind the work. */
@@ -243,13 +330,18 @@ export class Flow {
     }
     if (subtasks.some((sub) => sub.contract) && !repo?.contract) return { ok: false, text: 'A sub-task is marked as changing the contract, but this task\'s repository has no contract named. Leave "contract" out and propose again.' };
     this.change((tx, now) => {
-      for (const [index, { decisions: _cited, contract: changes, ...sub }] of subtasks.entries()) {
+      // Each part has its id before any is written, so that one can name another it waits for.
+      const ids = subtasks.map(() => store.newId());
+      const idOf = (title: string) => ids[subtasks.findIndex((other) => other.title.trim().toLowerCase() === title.trim().toLowerCase())]!;
+      for (const [index, { decisions: _cited, contract: changes, after: waitsFor, ...sub }] of subtasks.entries()) {
+        const after = (waitsFor ?? []).map(idOf);
         // Created a millisecond apart, so that creation order is the order they were proposed in.
-        const child = store.newTask({ ...sub, teamId: parent.teamId, parentId: parent.id, repoId: parent.repoId, createdBy: run.employeeId, ...(built[index] ? { builtOn: built[index] } : {}) }, new Date(now.getTime() + index));
+        const child = { ...store.newTask({ ...sub, teamId: parent.teamId, parentId: parent.id, repoId: parent.repoId, createdBy: run.employeeId, ...(built[index] ? { builtOn: built[index] } : {}), ...(after.length > 0 ? { after } : {}) }, new Date(now.getTime() + index)), id: ids[index]! };
         tx.emit({ kind: 'task_changed', task: child, cause: 'created' });
         // A part that changes the contract gets its version now, so its author is told it at the start.
         if (changes && parent.repoId) issueContractVersion(tx, this.db, now, { repoId: parent.repoId, ...changes, taskId: child.id, by: run.employeeId });
-        tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: child.id, mode: 'work', employeeId: sub.assigneeId, reason: 'new' }, new Date(now.getTime() + index)) });
+        // A part that waits for another is started by the engine when that one is done.
+        if (after.length === 0) tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: child.id, mode: 'work', employeeId: sub.assigneeId, reason: 'new' }, new Date(now.getTime() + index)) });
       }
       decisions.move(tx, store.getTask(this.db, parent.id)!, 'subtasks_created', now);
     });
@@ -264,7 +356,8 @@ export class Flow {
     const team = store.getTeam(this.db, task.teamId)!;
     const from = store.getEmployee(this.db, run.employeeId)?.name ?? 'An employee';
     this.questions.set(task.id, { question, choices });
-    const firstTurn = buildFirstTurn({ task, mode: 'review', team, repo: this.site(task)?.repo ?? null, teammates: [], remainingUsd: 0, material: { question: { from, text: question, choices } } });
+    const teammates = store.allEmployees(this.db).filter((employee) => employee.teamId === team.id);
+    const firstTurn = buildFirstTurn({ task, mode: 'review', team, repo: this.site(task)?.repo ?? null, teammates, remainingUsd: 0, material: { question: { from, text: question, choices } } });
     this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'review', employeeId: lead.id, reason: 'review', firstTurn }, now) }));
   }
 
@@ -275,11 +368,15 @@ export class Flow {
   }
 
   /** The lead's word on a member's question: an answer, which goes to the member, or that the user must decide. */
-  private onAnswer(run: Run, task: Task, asker: Run, verdict: 'approve' | 'send_back' | 'escalate', notes: string): ToolReply {
+  private onAnswer(run: Run, task: Task, asker: Run, verdict: 'approve' | 'send_back' | 'escalate', notes: string, ticket?: { reassignTo?: string | undefined; drop?: boolean | undefined }): ToolReply {
     if (verdict === 'approve') return { ok: false, text: 'Nothing is finished yet: this run is about a question. Answer it with "send_back" and your answer in the notes, or use "escalate" if only the user can decide.' };
     if (!notes.trim()) return { ok: false, text: verdict === 'send_back' ? 'The notes are your answer, and they are empty. Write the answer there.' : 'The notes are empty. Say there what the user must decide.' };
     const lead = store.getEmployee(this.db, run.employeeId)?.name ?? 'The lead';
     const from = store.getEmployee(this.db, asker.employeeId)?.name ?? 'An employee';
+    if (ticket?.drop || ticket?.reassignTo) {
+      const handled = this.onTicket(run, task, asker, verdict, notes.trim(), ticket, lead, from);
+      if (handled) return handled;
+    }
     const kept = this.questions.get(task.id);
     this.questions.delete(task.id);
     this.host.planRunEnd(run.id, 'done', verdict === 'send_back' ? 'answered' : VERDICT.escalate);
@@ -303,11 +400,45 @@ export class Flow {
     return { ok: true, text: verdict === 'send_back' ? `Recorded: ${from} carries on with your answer. End your turn now.` : 'Recorded: the user has been asked. End your turn now.' };
   }
 
+  /**
+   * The lead does more than answer a member's first word on its ticket: it hands the ticket to a teammate, who starts
+   * afresh with what was said, or closes it as not needed, and the split goes on without it.
+   */
+  private onTicket(run: Run, task: Task, asker: Run, verdict: 'send_back' | 'escalate', why: string, ticket: { reassignTo?: string | undefined; drop?: boolean | undefined }, lead: string, from: string): ToolReply | null {
+    if (verdict !== 'send_back') return { ok: false, text: 'To hand a ticket on or drop it, answer with "send_back": the notes say why. With "escalate" the user decides, and ticket does not apply.' };
+    if (ticket.drop && ticket.reassignTo) return { ok: false, text: 'Either hand the ticket on or drop it, not both.' };
+    const team = store.getTeam(this.db, task.teamId)!;
+    const asked = this.questions.get(task.id)?.question;
+    if (ticket.drop) {
+      // What the user asked for is the user's to give up; a lead closes only the tickets it cut itself.
+      if (!task.parentId) return { ok: false, text: 'This task is not a ticket of your own split, so it is not yours to drop. Answer the question, or use "escalate" and say why it is not needed.' };
+      this.questions.delete(task.id);
+      this.host.planRunEnd(run.id, 'done', 'answered');
+      this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(this.db, task.id)!, dropped: { by: run.employeeId, why }, updatedAt: now.toISOString() }, cause: 'edited' }));
+      this.host.engineWork(task.id, () => this.complete(task.id));
+      return { ok: true, text: `Recorded: "${task.title}" is closed as not needed, and the rest goes on without it. End your turn now.` };
+    }
+    const to = store.getEmployee(this.db, ticket.reassignTo!);
+    if (!to || to.fired || to.teamId !== team.id) return { ok: false, text: `There is nobody on your team with the id ${ticket.reassignTo}. Name a teammate by its assigneeId.` };
+    if (to.id === asker.employeeId) return { ok: false, text: `${to.name} has this ticket already. To have it carry on, answer without ticket.` };
+    this.questions.delete(task.id);
+    this.host.planRunEnd(run.id, 'done', 'answered');
+    const notes = `This ticket was ${from}'s. ${from} stopped before changing anything${asked ? ` and asked: ${asked}` : ''}\nYour lead, ${lead}, answered: ${why}\nIt is yours now. Anything ${from} left is in your folder.`;
+    this.change((tx, now) => {
+      const handed: Task = { ...store.getTask(this.db, task.id)!, assigneeId: to.id, updatedAt: now.toISOString() };
+      tx.emit({ kind: 'task_changed', task: handed, cause: 'edited' });
+      const firstTurn = buildFirstTurn({ task: handed, mode: 'work', team, repo: this.site(task)?.repo ?? null, teammates: [], remainingUsd: 0, material: { notes } });
+      tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'work', employeeId: to.id, reason: 'new', firstTurn }, now) });
+    });
+    return { ok: true, text: `Recorded: "${task.title}" is ${to.name}'s now, with your words. End your turn now.` };
+  }
+
   onReview(run: Run, input: unknown): ToolReply {
-    const { verdict, notes, findings = [], checks = [] } = TOOL_INPUT.submit_review.parse(input);
+    const { verdict, notes, findings = [], checks = [], ticket } = TOOL_INPUT.submit_review.parse(input);
     const task = store.getTask(this.db, run.taskId)!;
     const asker = this.asked(task.id);
-    if (asker) return this.onAnswer(run, task, asker, verdict, notes);
+    if (asker) return this.onAnswer(run, task, asker, verdict, notes, ticket);
+    if (ticket) return { ok: false, text: 'ticket is for answering a teammate\'s question about its ticket, and this run is a review of finished work. Give your verdict without it.' };
     const reviewer = store.getEmployee(this.db, run.employeeId)?.name ?? 'The reviewer';
     // One review, one verdict: a second call in the same run would send the work back twice, or land it twice.
     if (this.verdicts.has(run.id)) return { ok: false, text: 'You have already given your verdict on this work, and it stands. End your turn now.' };
