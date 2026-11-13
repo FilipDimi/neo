@@ -52,6 +52,7 @@ export const allRecord = (db: Db) => rows<RecordEntry>(db, 'record', 'ORDER BY n
 export const getEntry = (db: Db, id: string) => getRow<RecordEntry>(db, 'record', id);
 /** The versions handed out for one repository's contract, in the order they were. */
 export const contractVersions = (db: Db, repoId: string) => rows<ContractVersion>(db, 'contract_versions', 'WHERE repo_id = ? ORDER BY rowid', repoId);
+export const allContractVersions = (db: Db) => rows<ContractVersion>(db, 'contract_versions', 'ORDER BY rowid');
 
 /** Tasks by priority, then age. */
 export function listTasks(db: Db, where: { state?: TaskState; parentId?: string; teamId?: string } = {}): Task[] {

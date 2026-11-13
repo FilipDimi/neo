@@ -66,6 +66,7 @@ export const ADMIN_INPUT = {
     file: z.string().min(1).describe('a markdown table of decisions kept by hand, such as docs/decisions.md, whose rows begin | D-12 | date | decision | why |'),
     branches: z.array(z.string().min(1)).min(1).optional().describe('the branches to read it on, in order: the first to use a number keeps it. Left out: the branch checked out'),
     renumber: z.boolean().optional().describe('true: import even though a number of the log already holds a decision recorded since; the log\'s decision then gets a new number'),
+    makeRoom: z.boolean().optional().describe('true: where a number of the log already holds a decision recorded since, that decision moves to a number after the log, with every reference to it, and the log keeps its numbers'),
   }),
 } satisfies Record<AdminTool, z.ZodType>;
 

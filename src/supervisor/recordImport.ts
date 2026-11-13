@@ -3,12 +3,13 @@
  * per decision. Each row becomes an entry of the record under the number it had, marked as archived:
  * it lives in that file, and the engine writes no file of its own for it.
  */
-import { apply } from '../db/apply.ts';
+import { apply, type Tx } from '../db/apply.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { git } from '../git/git.ts';
 import type { RecordEntry, Repo } from '../shared/types.ts';
 import { entryId } from './record.ts';
+import { dirOf } from './recordFiles.ts';
 
 export type LogRow = { n: number; date: string; statement: string; why: string };
 
@@ -63,7 +64,8 @@ export function unreadRows(text: string): string[] {
 const same = (a: string, b: string): boolean => a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim();
 
 /** `because`: another branch had the number first, or something recorded since the log was kept already holds it. */
-export type Imported = { imported: number; already: number; renumbered: { from: string; branch: string; to: string; because: 'branch' | 'record' }[]; skipped: string[] };
+/** `moved`: decisions recorded before the log was taken over, moved to numbers after it (`makeRoom`). */
+export type Imported = { imported: number; already: number; renumbered: { from: string; branch: string; to: string; because: 'branch' | 'record' }[]; skipped: string[]; moved: { from: string; to: string }[] };
 
 /**
  * Reads `file` on each branch, in the order given, and files what is not on record yet. A number keeps the text
@@ -71,10 +73,11 @@ export type Imported = { imported: number; already: number; renumbered: { from: 
  * and nothing is guessed: that text gets the next free number, and says where it came from and as what.
  *
  * A number of the log that the engine has since given to a decision of its own is another matter: the log's row
- * would lose the number every document cites it by. That is refused, with nothing written, unless `renumber` says
- * to go ahead.
+ * would lose the number every document cites it by. That is refused, with nothing written, unless told how to settle
+ * it: `makeRoom` moves what was recorded since to numbers after the log, carrying every reference to it along, so the
+ * log keeps its numbers; `renumber` gives the log's rows new numbers instead.
  */
-export async function importDecisions(ctx: { db: Db; now: Date }, repo: Repo, file: string, branches: string[], options: { renumber?: boolean } = {}): Promise<Imported> {
+export async function importDecisions(ctx: { db: Db; now: Date }, repo: Repo, file: string, branches: string[], options: { renumber?: boolean; makeRoom?: boolean } = {}): Promise<Imported> {
   const { db, now } = ctx;
   const claimed = new Map<number, { row: LogRow; branch: string }>();
   const second: { row: LogRow; branch: string; because: 'branch' | 'record' }[] = [];
@@ -95,9 +98,12 @@ export async function importDecisions(ctx: { db: Db; now: Date }, repo: Repo, fi
     const there = store.getEntry(db, entryId(n));
     return there && !there.archived && !same(there.statement, row.statement) ? [there] : [];
   });
-  if (taken.length > 0 && !options.renumber) {
+  if (taken.length > 0 && options.makeRoom && dirOf(repo)) {
+    throw new Error(`${taken.map((entry) => entry.id).join(', ')} may already be written as files in ${dirOf(repo)}, under the numbers they have now, so they are not moved. Take the decisions folder off the repository with set_record first if none was written, or import with renumber: true.`);
+  }
+  if (taken.length > 0 && !options.renumber && !options.makeRoom) {
     throw new Error(
-      `${taken.map((entry) => `${entry.id} is already on record ("${entry.statement.split('\n')[0]!.slice(0, 80)}")`).join('; ')}, and the log has another decision under ${taken.length === 1 ? 'that number' : 'each of those numbers'}. Importing now would give the log's a new number, though everything written so far cites it by the old one. A log is imported before anything is recorded. To import anyway and take new numbers for those, say renumber: true.`,
+      `${taken.map((entry) => `${entry.id} is already on record ("${entry.statement.split('\n')[0]!.slice(0, 80)}")`).join('; ')}, and the log has another decision under ${taken.length === 1 ? 'that number' : 'each of those numbers'}. A log is imported before anything is recorded. To keep the log's numbers and move ${taken.length === 1 ? 'that decision' : 'those decisions'} to numbers after it, say makeRoom: true. To give the log's ${taken.length === 1 ? 'decision' : 'decisions'} new numbers instead, say renumber: true.`,
     );
   }
   const chief = store.getCompany(db)?.chiefOfStaffId ?? null;
@@ -116,7 +122,7 @@ export async function importDecisions(ctx: { db: Db; now: Date }, repo: Repo, fi
     archived: true,
     ...(from ? { importedFrom: from } : {}),
   });
-  const result: Imported = { imported: 0, already: 0, renumbered: [], skipped };
+  const result: Imported = { imported: 0, already: 0, renumbered: [], skipped, moved: [] };
   /** Already taken over from this repository's log, under whatever number: a second run, or the branches named in another order. */
   const onRecord = (row: LogRow): boolean => store.allRecord(db).some((other) => other.archived && other.repoId === repo.id && same(other.statement, row.statement));
   apply(
@@ -126,10 +132,13 @@ export async function importDecisions(ctx: { db: Db; now: Date }, repo: Repo, fi
         tx.emit({ kind: 'record_changed', entry: made });
         result.imported++;
       };
+      // Making room: what was recorded since on a number the log uses moves after everything, with every reference to it.
+      const movedIds = options.makeRoom ? makeRoom(tx, db, taken, Math.max(...claimed.keys())) : new Map<string, string>();
+      for (const [from, to] of movedIds) result.moved.push({ from, to });
       const displaced: typeof second = [];
       for (const [n, { row, branch }] of [...claimed].sort((a, b) => a[0] - b[0])) {
         const there = store.getEntry(db, entryId(n));
-        if (!there) add(entry(n, row));
+        if (!there || movedIds.has(there.id)) add(entry(n, row));
         else if (same(there.statement, row.statement)) result.already++;
         // The number holds something else: another branch's text from an earlier import, or a decision recorded since.
         else displaced.push({ row, branch, because: there.archived ? 'branch' : 'record' });
@@ -147,4 +156,34 @@ export async function importDecisions(ctx: { db: Db; now: Date }, repo: Repo, fi
     now,
   );
   return result;
+}
+
+/**
+ * Moves decisions to numbers after both the log and the record, in their order, and points everything that named
+ * them at the new numbers: the decisions that replace or are replaced by them, the tickets built on them, the
+ * contract versions that cite them. The old numbers are then free for the log. Returns old number to new.
+ */
+function makeRoom(tx: Tx, db: Db, moving: RecordEntry[], logHighest: number): Map<string, string> {
+  const moves = new Map<string, string>();
+  if (moving.length === 0) return moves;
+  let next = Math.max(logHighest, store.allRecord(db).at(-1)?.n ?? 0);
+  for (const entry of [...moving].sort((a, b) => a.n - b.n)) moves.set(entry.id, entryId(++next));
+  const to = (id: string | null): string | null => (id && moves.get(id)) ?? id;
+  for (const entry of moving) {
+    const id = moves.get(entry.id)!;
+    tx.emit({ kind: 'record_changed', entry: { ...entry, id, n: Number(id.slice(2)), movedFrom: entry.id, replaces: to(entry.replaces), replacedBy: to(entry.replacedBy) } });
+  }
+  for (const entry of store.allRecord(db)) {
+    if (moves.has(entry.id) || (!moves.has(entry.replaces ?? '') && !moves.has(entry.replacedBy ?? ''))) continue;
+    tx.emit({ kind: 'record_changed', entry: { ...entry, replaces: to(entry.replaces), replacedBy: to(entry.replacedBy) } });
+  }
+  for (const task of store.listTasks(db)) {
+    if (!task.builtOn?.decisions.some((id) => moves.has(id))) continue;
+    tx.emit({ kind: 'task_changed', task: { ...task, builtOn: { ...task.builtOn, decisions: task.builtOn.decisions.map((id) => to(id)!) } }, cause: 'edited' });
+  }
+  for (const issued of store.allContractVersions(db)) {
+    if (!issued.decisions.some((id) => moves.has(id))) continue;
+    tx.emit({ kind: 'contract_version_issued', issued: { ...issued, decisions: issued.decisions.map((id) => to(id)!) } });
+  }
+  return moves;
 }

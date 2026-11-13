@@ -185,6 +185,8 @@ export const RecordEntry = z.object({
   archived: z.boolean().optional(),
   /** Where an import found it, when it had to be given a new number. */
   importedFrom: z.string().optional(),
+  /** The number it had before an import of a log kept by hand made room for the log's own numbers. */
+  movedFrom: z.string().optional(),
 });
 export type RecordEntry = z.infer<typeof RecordEntry>;
 
