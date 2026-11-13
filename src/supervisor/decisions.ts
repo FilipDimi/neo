@@ -77,9 +77,9 @@ const firstLine = (text: string): string => {
  * small task of the chief's own: read it, press a button, say why. The card is not on the user's
  * desk while that lasts. A card about the chief's own conversations is never one of these.
  */
-function delegate(tx: Tx, db: Db, now: Date, decision: Decision, task: Task | undefined): Decision {
+function delegate(tx: Tx, db: Db, now: Date, decision: Decision, task: Task | undefined, toChief = false): Decision {
   const company = store.getCompany(db);
-  const chief = company?.decider === 'chief' && company.chiefOfStaffId ? store.getEmployee(db, company.chiefOfStaffId) : undefined;
+  const chief = (company?.decider === 'chief' || toChief) && company?.chiefOfStaffId ? store.getEmployee(db, company.chiefOfStaffId) : undefined;
   const office = chief ? store.getTeam(db, chief.teamId) : undefined;
   if (!chief || chief.fired || !office || office.removed || !task || task.kind !== 'work' || !DELEGATED.has(decision.kind)) return decision;
   const already = store.allDecisions(db).filter((other) => other.taskId === task.id && other.kind === decision.kind && other.answer?.by === chief.id).length;
@@ -97,8 +97,11 @@ export function handToUser(tx: Tx, decision: Decision, note: string): Decision {
   return handed;
 }
 
-/** `usersOwn`: a card about something the user did themself (a run they stopped). It is theirs whoever decides the company's cards. */
-export type RaiseInput = Pick<Decision, 'taskId' | 'kind' | 'text' | 'options'> & Partial<Pick<Decision, 'runId' | 'employeeId' | 'freeText' | 'subject'>> & { usersOwn?: boolean };
+/**
+ * `usersOwn`: a card about something the user did themself (a run they stopped). It is theirs whoever decides the company's cards.
+ * `toChief`: a card the chief of staff decides whoever decides the company's cards (leads who could not agree a design).
+ */
+export type RaiseInput = Pick<Decision, 'taskId' | 'kind' | 'text' | 'options'> & Partial<Pick<Decision, 'runId' | 'employeeId' | 'freeText' | 'subject'>> & { usersOwn?: boolean; toChief?: boolean };
 
 /** Moves a task along its state table and records it. Returns the task as it now is. */
 export function move(tx: Tx, task: Task, event: TaskEvent, now: Date, patch: Partial<Task> = {}): Task {
@@ -118,7 +121,7 @@ export function raise(tx: Tx, db: Db, now: Date, input: RaiseInput): Decision {
   if (open) return open;
   const task = input.taskId ? store.getTask(db, input.taskId) : undefined;
   if (task && canTransition(task, 'block')) move(tx, task, 'block', now);
-  const { usersOwn, ...card } = input;
+  const { usersOwn, toChief, ...card } = input;
   const asked: Decision = {
     id: store.newId(),
     runId: null,
@@ -129,7 +132,7 @@ export function raise(tx: Tx, db: Db, now: Date, input: RaiseInput): Decision {
     askedAt: now.toISOString(),
     answeredAt: null,
   };
-  const decision = usersOwn ? asked : delegate(tx, db, now, asked, task);
+  const decision = usersOwn ? asked : delegate(tx, db, now, asked, task, toChief);
   tx.emit({ kind: 'decision_raised', decision });
   return decision;
 }

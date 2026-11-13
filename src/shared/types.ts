@@ -151,6 +151,13 @@ export const Task = z.object({
   builtOn: z.object({ decisions: z.array(z.string()), contract: z.string().nullable() }).optional(),
   /** The contract version the engine handed this ticket: it may change the contract, and must state this version there. */
   contractVersion: z.string().optional(),
+  /**
+   * On a design meeting: what it is about, who called it, the teams in it (the author's first), and the teams whose
+   * lead has approved its design since it was last sent back.
+   */
+  meeting: z.object({ topic: z.string(), question: z.string(), calledBy: z.string(), teams: z.array(id), approvedBy: z.array(id) }).optional(),
+  /** On one team's position in a design meeting: written alone, and never committed, gated, reviewed or merged. */
+  meetingRole: z.literal('position').optional(),
   createdAt: iso,
   updatedAt: iso,
   blockedAt: iso.nullable(),
@@ -267,6 +274,8 @@ export const Run = z.object({
   claimedFromProse: z.array(z.string()).optional(),
   /** Gates it asked the engine to run while it worked (run_gate). Kept apart from the engine's own: for an author they came before the commit. */
   askedGates: z.array(GateResult).optional(),
+  /** On the draft of a design meeting's design: the decisions and the tickets it proposes, acted on only once it is agreed. */
+  proposals: z.object({ decisions: z.array(z.object({ statement: z.string(), why: z.string() })), followUps: z.array(z.object({ teamId: id, title: z.string(), brief: z.string(), doneCondition: z.string() })) }).optional(),
 });
 export type Run = z.infer<typeof Run>;
 

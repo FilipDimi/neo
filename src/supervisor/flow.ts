@@ -27,6 +27,7 @@ import { dirOf, entriesFor, padded, underRecord, writeRecordFiles } from './reco
 import * as decisions from './decisions.ts';
 import { writtenFiles } from '../api/files.ts';
 import { buildDecidingTurn, buildFirstTurn, findingLines, type Part } from './definition.ts';
+import { draftTurn, nextReviewer, positionTurn, reviewMaterial, settleMeeting, withApproval } from './meeting.ts';
 import { folderOf } from './jobs.ts';
 import { reviewerFor } from './scheduler.ts';
 import { canTransition } from './taskState.ts';
@@ -84,6 +85,17 @@ export class Flow {
     return { repo, teamRepo, team, folder: task.folder ?? path.join(this.host.paths.folders, task.id) };
   }
 
+  /**
+   * The parts of a task, oldest first. A team's position in a design meeting is not one: it is words for the author,
+   * never committed or merged.
+   */
+  private partsOfTask(taskId: string): Task[] {
+    return store
+      .listTasks(this.db, { parentId: taskId })
+      .filter((child) => child.meetingRole !== 'position')
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+
   /** What a task's branch is measured against: its parent's branch, or the team's base. */
   private baseOf(task: Task, teamRepo: TeamRepo): string {
     const parent = task.parentId ? store.getTask(this.db, task.parentId) : undefined;
@@ -92,8 +104,14 @@ export class Flow {
 
   // ---------- before a run ----------
 
-  /** Makes sure the task has its folder, and for an integration merges the children first. */
+  /** Makes sure the task has its folder, and for an integration merges the children first. A position is told what a position is. */
   async prepare(task: Task, request: RunRequest): Promise<{ task: Partial<Task>; firstTurn?: string }> {
+    const ready = await this.readied(task, request);
+    if (task.meetingRole === 'position' && !request.firstTurn && !ready.firstTurn) return { ...ready, firstTurn: positionTurn(this.db, task) };
+    return ready;
+  }
+
+  private async readied(task: Task, request: RunRequest): Promise<{ task: Partial<Task>; firstTurn?: string }> {
     if (task.decisionId && !request.firstTurn) return { task: {}, firstTurn: await this.decidingTurn(task) };
     const site = this.site(task);
     if (!site) {
@@ -122,6 +140,8 @@ export class Flow {
     }
     if (request.mode !== 'integrate' || request.firstTurn) return { task: changes };
     const ready = { ...task, ...changes };
+    // A meeting has nothing to merge: its author drafts the design from the positions.
+    if (task.meeting) return { task: changes, firstTurn: draftTurn(this.db, ready, site.repo) };
     const mergeState = await this.mergeChildren(ready);
     return { task: changes, firstTurn: buildFirstTurn({ task: ready, mode: 'integrate', team: site.team, repo: site.repo, teammates: [], remainingUsd: 0, material: { mergeState } }) };
   }
@@ -153,7 +173,7 @@ export class Flow {
 
   /** The finished sub-tasks of a task that has no repository: whose they are, where their files are, what was reported. */
   private partsOf(parent: Task): Part[] {
-    const children = store.listTasks(this.db, { parentId: parent.id }).filter((child) => child.state === 'done').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const children = this.partsOfTask(parent.id).filter((child) => child.state === 'done');
     return children.map((child) => {
       const folder = child.folder ?? path.join(this.host.paths.folders, child.id);
       const last = store.runsOf(this.db, child.id).filter(authored).at(-1);
@@ -164,7 +184,7 @@ export class Flow {
 
   /** Merges each finished child's branch into the parent's, in creation order, stopping at the first conflict. */
   private async mergeChildren(parent: Task): Promise<string> {
-    const children = store.listTasks(this.db, { parentId: parent.id }).filter((c) => c.state === 'done' && c.branch).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const children = this.partsOfTask(parent.id).filter((c) => c.state === 'done' && c.branch);
     const lines: string[] = [];
     for (const [index, child] of children.entries()) {
       if (await isMerged(parent.folder!, child.branch!)) {
@@ -307,7 +327,17 @@ export class Flow {
       );
     else
       this.change((tx, now) =>
-        decisions.raise(tx, this.db, now, { taskId: task.id, runId: run.id, employeeId: run.employeeId, kind: 'review', text: `${reviewer} could not decide on "${task.title}": ${notes.trim() || '(no notes)'}${findings.length > 0 ? `\n\nWhat ${reviewer} found:\n${findingLines(findings)}` : ''}`, freeText: true, options: decisions.optionsFor('review') }),
+        decisions.raise(tx, this.db, now, {
+          taskId: task.id,
+          runId: run.id,
+          employeeId: run.employeeId,
+          kind: 'review',
+          text: `${reviewer} could not decide on "${task.title}": ${notes.trim() || '(no notes)'}${findings.length > 0 ? `\n\nWhat ${reviewer} found:\n${findingLines(findings)}` : ''}`,
+          freeText: true,
+          options: decisions.optionsFor('review'),
+          // Leads who cannot agree a design are the chief of staff's to settle, not the user's.
+          ...(task.meeting ? { toChief: true } : {}),
+        }),
       );
     return { ok: true, text: 'Recorded. End your turn now.' };
   }
@@ -351,6 +381,8 @@ export class Flow {
       // Otherwise the lead did the task itself: it is work like any other.
       // falls through
       case 'work': {
+        // A position is words: nothing is committed, gated or reviewed, and the meeting waits for the rest.
+        if (task.meetingRole === 'position') return this.complete(task.id);
         if (this.site(task)) {
           if (!(await this.committed(run, task))) return;
           const changed = await this.changed(task);
@@ -374,7 +406,7 @@ export class Flow {
   private async integrated(run: Run, task: Task, checkOwnership: boolean): Promise<void> {
     const site = this.site(task)!;
     // A conflict stopped the merging part-way: merge the rest in another integration run.
-    for (const child of store.listTasks(this.db, { parentId: task.id }).filter((c) => c.state === 'done' && c.branch)) {
+    for (const child of this.partsOfTask(task.id).filter((c) => c.state === 'done' && c.branch)) {
       if (!(await isMerged(site.folder, child.branch!))) return this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: 'integrate', employeeId: run.employeeId, reason: 'integrate' }, now) }));
     }
     // A split is not a way around what the task owns: what the parts changed between them, and what the lead changed putting them together, is held to it.
@@ -592,7 +624,10 @@ export class Flow {
     const team = store.getTeam(this.db, task.teamId)!;
     const author = store.runsOf(this.db, task.id).filter(authored).at(-1);
     const rounds = task.reviewRounds + 1;
+    // A design sent back is a new design: every lead reviews it again.
+    const reset = (current: Task): Task => (current.meeting ? { ...current, meeting: { ...current.meeting, approvedBy: [] } } : current);
     this.change((tx, now) => {
+      if (task.meeting && task.meeting.approvedBy.length > 0) tx.emit({ kind: 'task_changed', task: { ...reset(store.getTask(this.db, task.id)!), updatedAt: now.toISOString() }, cause: 'edited' });
       if (!author || rounds > team.maxReviewRounds) {
         return void decisions.raise(tx, this.db, now, {
           taskId: task.id,
@@ -605,9 +640,11 @@ export class Flow {
           options: decisions.optionsFor(acceptable ? 'review' : 'briefing'),
           // What the author was to be told. "Send back" on this card sends it, whatever words go with the button.
           subject: { firstTurn },
+          // Leads who cannot agree a design are the chief of staff's to settle, not the user's.
+          ...(task.meeting ? { toChief: true } : {}),
         });
       }
-      const counted: Task = { ...task, reviewRounds: rounds };
+      const counted: Task = reset({ ...store.getTask(this.db, task.id)!, reviewRounds: rounds });
       if (canTransition(counted, 'sent_back')) decisions.move(tx, counted, 'sent_back', now);
       else tx.emit({ kind: 'task_changed', task: { ...counted, updatedAt: now.toISOString() }, cause: 'edited' });
       tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: author.mode === 'integrate' ? 'integrate' : 'work', employeeId: author.employeeId, reason: 'send_back', resumeSessionId: author.sessionId, firstTurn }, now) });
@@ -617,7 +654,9 @@ export class Flow {
   /** The work is committed, owned and green. Someone other than its author reviews it; if there is nobody, the gates have decided. */
   private async workAccepted(run: Run, task: Task): Promise<void> {
     const team = store.getTeam(this.db, task.teamId)!;
-    const reviewerId = reviewerFor(task, team, run.employeeId, store.allEmployees(this.db));
+    // A meeting's design is reviewed by every other lead in the meeting, one after another; anyone else's work by its reviewer.
+    const next = task.meeting ? nextReviewer(this.db, task) : null;
+    const reviewerId = task.meeting ? (next?.lead.id ?? null) : reviewerFor(task, team, run.employeeId, store.allEmployees(this.db));
     const reviewer = reviewerId ? store.getEmployee(this.db, reviewerId) : undefined;
     if (!reviewer || reviewer.fired) return this.finish(task.id);
     const site = this.site(task);
@@ -626,9 +665,10 @@ export class Flow {
     // Only the review just before this one: findings an older review made were settled by the one after it.
     const lastVerdict = store.runsOf(this.db, task.id).findLast((earlier) => earlier.mode === 'review' && (earlier.reason === VERDICT.send_back || earlier.reason === VERDICT.approve));
     const before = lastVerdict?.reason === VERDICT.send_back && (lastVerdict.findings?.length ?? 0) > 0 ? lastVerdict : undefined;
-    const parts = store.listTasks(this.db, { parentId: task.id }).filter((child) => child.state === 'done');
+    const parts = this.partsOfTask(task.id).filter((child) => child.state === 'done');
     const nameOf = (id: string | null | undefined): string => (id && store.getEmployee(this.db, id)?.name) || 'someone';
     const material = {
+      ...(next ? { meeting: reviewMaterial(this.db, task, next.team) } : {}),
       summary: run.summary,
       gateResults: run.gateResults,
       checks: run.checks,
@@ -680,6 +720,18 @@ export class Flow {
         return this.sendBackForGate(current, failed, claims.fromProse.includes(failed.name) ? `The review said the gate "${failed.name}" passes, so the engine ran it. ` : '');
       }
     }
+    const current = store.getTask(this.db, task.id);
+    if (current?.meeting) return this.meetingApproved(review, current);
+    return this.finish(task.id);
+  }
+
+  /** One lead approved the design for its team. The next lead reviews it; when none is left, it lands. */
+  private async meetingApproved(review: Run, task: Task): Promise<void> {
+    if (task.state === 'done' || task.state === 'failed') return;
+    const approved = withApproval(this.db, task, review.employeeId);
+    this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...approved, updatedAt: now.toISOString() }, cause: 'edited' }));
+    const author = store.runsOf(this.db, task.id).findLast(authored);
+    if (author && nextReviewer(this.db, approved)) return this.workAccepted(author, store.getTask(this.db, task.id)!);
     return this.finish(task.id);
   }
 
@@ -710,7 +762,11 @@ export class Flow {
 
   /** In words for a merge card: who approved this work, or that nobody did. Only an approval counts as one. */
   private standing(task: Task, green: string, gateCount: number): string {
-    const parts = store.listTasks(this.db, { parentId: task.id }).filter((child) => child.state === 'done');
+    if (task.meeting) {
+      const by = task.meeting.approvedBy.map((id) => store.getEmployee(this.db, store.getTeam(this.db, id)?.leadId ?? '')?.name).filter(Boolean);
+      return nextReviewer(this.db, task) === null && by.length > 0 ? `agreed by ${by.join(' and ')}, ${green}` : `the leads did not all agree and it was accepted as it is, ${green}`;
+    }
+    const parts = this.partsOfTask(task.id).filter((child) => child.state === 'done');
     if (parts.length > 0) {
       const approved = parts.filter((child) => this.lastReview(child.id)?.verdict === VERDICT.approve).length;
       const each = approved < parts.length ? `${approved} of its ${parts.length} sub-tasks were approved by a reviewer` : parts.length === 1 ? 'its one sub-task was approved by a reviewer' : `its ${parts.length} sub-tasks were each approved by a reviewer`;
@@ -804,7 +860,11 @@ export class Flow {
     const site = this.site(task);
     // A repository task's work lives on in its published branch. A task without one keeps its folder: that is its result.
     if (site && task.folder) await removeFolder(task.folder);
-    this.change((tx, now) => void decisions.move(tx, store.getTask(this.db, taskId)!, event, now, site ? { folder: null } : {}));
+    this.change((tx, now) => {
+      const done = decisions.move(tx, store.getTask(this.db, taskId)!, event, now, site ? { folder: null } : {});
+      // A meeting's design is settled: its decisions go on record, its tickets are made, and the user is told.
+      if (done.meeting) settleMeeting(tx, this.db, now, done);
+    });
     if (task.parentId) this.checkParent(task.parentId);
   }
 

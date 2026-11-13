@@ -5,6 +5,7 @@
  */
 import { skillSets } from '../shared/skills.ts';
 import { availableCapabilities, CAPABILITIES } from './blastRadius.ts';
+import type { ReviewMeeting } from './meeting.ts';
 import type { Capability, Company, Decision, DecisionOption, Employee, Finding, GateResult, Repo, RunMode, Task, Team, VerifiedCheck } from '../shared/types.ts';
 
 const usd = (amount: number): string => `$${amount.toFixed(2)}`;
@@ -19,6 +20,8 @@ export function buildSystemPrompt(input: {
   mode?: RunMode;
   /** The admin: its rules are the app's own, not the product's. */
   admin?: boolean;
+  /** It can call a design meeting: a lead or the chief of staff, in its own work. */
+  meetings?: boolean;
 }): string {
   const { company, team, employee } = input;
   const leads = team.leadId === employee.id;
@@ -53,6 +56,11 @@ ${may(team.mayDelete, 'delete anything outside your task folder')}
 
     `## Your tools
 ${toolLines(employee, team, input.mode ?? 'work')}`,
+
+    input.meetings
+      ? `## Design meetings
+When your work needs something from another team (a field, an endpoint, a change to the contract), do not guess what they will do and do not copy their files across: call mcp__engine__call_meeting with the topic, the question to settle, the teams it touches and the author, the team that builds what the others use. Each lead writes its team's position alone, the author drafts the design, the others review it, and when they agree its decisions go on record with a ticket for each team. Carry on with what does not depend on it.`
+      : '',
 
     // Skills are for doing work. A conversation is answered from what the employee is told and remembers: loading them first would only make it slow.
     employee.skills.length > 0 && input.mode !== 'route' ? skillLines(employee.skills) : '',
@@ -114,7 +122,26 @@ export type Question = { from: string; text: string; choices: string[] };
 export type Previous = { by: string; findings: Finding[] };
 /** A task its lead split, put together again: who did that, and the parts, each reviewed on its own already. */
 export type Whole = { by: string; parts: { title: string; by: string }[] };
-export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; checks?: VerifiedCheck[] | undefined; notes?: string; mergeState?: string; parts?: Part[]; question?: Question; previous?: Previous; whole?: Whole };
+export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; checks?: VerifiedCheck[] | undefined; notes?: string; mergeState?: string; parts?: Part[]; question?: Question; previous?: Previous; whole?: Whole; meeting?: ReviewMeeting };
+
+/** A lead reviewing a meeting's design for its team: what the meeting is about, its own position, and what the design proposes. */
+function meetingLines(meeting: ReviewMeeting): string {
+  return `
+This is the design from the design meeting on "${meeting.topic}". You review it for ${meeting.team}${meeting.approvedBy.length > 0 ? `; ${meeting.approvedBy.join(' and ')} approved it already` : ''}.
+The question was: ${meeting.question}
+
+${meeting.team}'s position, as it was written:
+${meeting.position ?? '(none: it did not finish)'}
+
+What the design decides (each goes on record if it is agreed):
+${meeting.decisions.map((one, index) => `${index + 1}. ${one.statement} Why: ${one.why || '(not given)'}`).join('\n') || '(nothing)'}
+
+The tickets it gives each team (made if it is agreed):
+${meeting.followUps.map((one) => `- ${one.team}: "${one.title}". Done when: ${one.doneCondition}`).join('\n') || '(none)'}
+
+Judge it as the lead who has to build on it. It is blocking when ${meeting.team} cannot build what it needs on this design as written, when it goes against ${meeting.team}'s position without saying why, when a decision is missing that ${meeting.team} would have to guess, or when ${meeting.team} is given a ticket it cannot do or is missing one it needs. A design that serves another team better than yours is not wrong for that alone.
+`;
+}
 
 /** Findings as numbered lines: severity, where, what, why, and what would fix it. The number is how its author answers it. */
 export function findingLines(findings: Finding[]): string {
@@ -197,7 +224,7 @@ ${input.board?.trim() || '(nothing on any board)'}`;
 
 ${task.brief}
 
-Turn this into work. For each separate piece, call mcp__engine__create_task on the team it belongs to, with a summary (one or two plain sentences on what it delivers, for someone who will never read the brief), a brief that stands on its own and a done-condition someone can check. Where a team has gates, give the task its gates: the names of the gates the finished work must pass before it lands, chosen from that team's own (a task given none is checked by none). Do not do the work yourself and do not invent work the message does not ask for. If the message is a question, answer it instead. If it asks what the company or a team is doing, answer it from "The company right now" below: that is the engine's own record and it is current, so do not look in files or in your notes for it.
+Turn this into work. When the request needs two or more teams to agree on something between them first (an interface, a field, a change to the contract), it is a design meeting, not a task for each: call mcp__engine__call_meeting with the teams, the question to settle, and as author the team that builds what the others use; the tickets come out of the meeting once it is agreed. For each other separate piece, call mcp__engine__create_task on the team it belongs to, with a summary (one or two plain sentences on what it delivers, for someone who will never read the brief), a brief that stands on its own and a done-condition someone can check. Where a team has gates, give the task its gates: the names of the gates the finished work must pass before it lands, chosen from that team's own (a task given none is checked by none). Do not do the work yourself and do not invent work the message does not ask for. If the message is a question, answer it instead. If it asks what the company or a team is doing, answer it from "The company right now" below: that is the engine's own record and it is current, so do not look in files or in your notes for it.
 
 The teams:
 ${teams.join('\n') || '- (no teams yet)'}
@@ -251,7 +278,7 @@ Only if the answer needs something only the user has (a decision about the produ
       return `${header}
 
 You are reviewing this work, not doing it. The changed files are in your folder; read them.
-${
+${material.meeting ? meetingLines(material.meeting) : ''}${
   material.whole
     ? `\nThis is the whole task, put together by ${material.whole.by} from these sub-tasks, each of which was reviewed and approved on its own:\n${material.whole.parts.map((part) => `- "${part.title}", by ${part.by}`).join('\n')}\nDo not review the parts again. Review how they fit: what one part assumes of another, what fell between them, what was changed in putting them together, and whether the whole meets the done-condition.\n`
     : ''

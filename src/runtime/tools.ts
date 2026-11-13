@@ -13,7 +13,7 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
   propose_subtasks:
     'Split the task you are briefing into sub-tasks, one per teammate. Each needs an assignee from your team, a brief that stands on its own, the files or folders it owns (no overlap between sub-tasks), a done-condition and the gates that must pass. The engine checks the proposal and tells you what to fix if it refuses it. Calling this successfully ends your part: stop afterwards.',
   report_done:
-    'Report that your work on this task is finished, with a short summary of what you did. The engine then commits your files and runs the gates itself. Call it exactly once, when the work is really done, then stop.',
+    'Report that your work on this task is finished, with a short summary of what you did. The engine then commits your files and runs the gates itself. Call it exactly once, when the work is really done, then stop. decisions and followUps are for the draft of a design meeting\'s design only: what it settles, one sentence each with why, and one ticket for each team with work from it.',
   submit_review:
     'Give your verdict on the work you were asked to review, with what you found: each finding names its file, the line if there is one, what is wrong, why it matters and what would fix it, and is "blocking" (must be fixed before this lands) or "minor" (worth knowing, holds nothing up). "approve" when nothing is blocking; "send_back" when something is; "escalate" when someone above you has to decide. Then stop.',
   request_decision:
@@ -32,6 +32,8 @@ export const TOOL_DESCRIPTION: Record<EngineTool, string> = {
     'Write a decision into the company\'s record, where it gets a number everyone can cite: one sentence saying what is now so, and why. For a choice others will build on or need to know (an interface, a default, a rule), not for a detail of your own task. replaces: the number of an earlier decision this one reverses.',
   contract_version:
     'Get the next version of the contract for a ticket that will change it: say whether the change is breaking, adds something, or is wording only, and what it is in one sentence. It goes to your own ticket; ticket names another, by id or exact title (for a lead one of its sub-tasks; for the chief of staff any ticket, which is how a team without a lead gets one). The contract\'s files may be changed only by a ticket that holds a version, and they must state it.',
+  call_meeting:
+    'Call a design meeting, when work needs two or more teams to agree on something between them first: an interface, a field, a change to the contract. Name the topic, the question to settle, the teams it touches (by name), and the author: the team that builds what the others use. Each team\'s lead writes its position alone; the author\'s lead drafts the design from all of them; every other lead reviews it; when they agree, its decisions go on record and each team gets a ticket built on them. You do not wait for it: carry on with what does not depend on it.',
   ...ADMIN_DESCRIPTION,
 };
 

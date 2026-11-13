@@ -143,8 +143,8 @@ describe('writing and reading decisions with the tools', () => {
   it('gives every run the tool that reads decisions, and the ones that write only to a lead or the chief of staff', () => {
     const base = { deciding: false, admin: false, chief: false, lead: false };
     expect(engineToolsFor({ ...base, mode: 'work' })).toEqual(['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'read_decisions']);
-    expect(engineToolsFor({ ...base, mode: 'review', lead: true })).toEqual(['submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'read_decisions', 'record_decision', 'contract_version']);
-    expect(engineToolsFor({ ...base, mode: 'route', chief: true })).toEqual(['create_task', 'set_status', 'read_decisions', 'record_decision', 'contract_version']);
+    expect(engineToolsFor({ ...base, mode: 'review', lead: true })).toEqual(['submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting']);
+    expect(engineToolsFor({ ...base, mode: 'route', chief: true })).toEqual(['create_task', 'set_status', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting']);
     expect(engineToolsFor({ ...base, mode: 'route', chief: true, deciding: true })).toEqual(['decide', 'set_status', 'read_decisions', 'record_decision', 'contract_version']);
     expect(engineToolsFor({ ...base, mode: 'route', admin: true })).toEqual(expect.arrayContaining(['create_task', 'company_setup', 'set_gates', 'read_decisions']));
     expect(engineToolsFor({ ...base, mode: 'route', admin: true })).not.toContain('record_decision');

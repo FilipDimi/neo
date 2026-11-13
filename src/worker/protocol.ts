@@ -16,7 +16,7 @@ export type Check = z.infer<typeof Check>;
 /** How many things one report or review may say were checked. */
 export const MAX_CHECKS = 20;
 
-export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', 'decide', 'read_decisions', 'record_decision', 'contract_version', ...ADMIN_TOOLS] as const;
+export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', 'decide', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting', ...ADMIN_TOOLS] as const;
 export const EngineTool = z.enum(ENGINE_TOOLS);
 export type EngineTool = z.infer<typeof EngineTool>;
 
@@ -95,7 +95,13 @@ export const TOOL_INPUT = {
       )
       .min(1),
   }),
-  report_done: z.object({ summary: z.string().min(1), checks: z.array(Check).max(MAX_CHECKS).optional() }),
+  report_done: z.object({
+    summary: z.string().min(1),
+    checks: z.array(Check).max(MAX_CHECKS).optional(),
+    /** The draft of a design meeting's design: what it settles, and the ticket each team gets from it. */
+    decisions: z.array(z.object({ statement: z.string().trim().min(1).max(300), why: z.string() })).max(20).optional(),
+    followUps: z.array(z.object({ team: z.string().min(1), title: z.string().trim().min(1), brief: z.string().trim().min(1), doneCondition: z.string().trim().min(1) })).max(12).optional(),
+  }),
   submit_review: z.object({ verdict: z.enum(['approve', 'send_back', 'escalate']), notes: z.string(), findings: z.array(Finding).max(40).optional(), checks: z.array(Check).max(MAX_CHECKS).optional() }),
   request_decision: z.object({ question: z.string().min(1), options: z.array(z.string()).max(4) }),
   set_status: z.object({ text: z.string().min(1).max(60) }),
@@ -115,6 +121,7 @@ export const TOOL_INPUT = {
   decide: z.object({ option: z.string().min(1), notes: z.string() }),
   read_decisions: z.object({ ids: z.array(z.string().min(1)).max(20).optional(), search: z.string().optional() }),
   record_decision: z.object({ statement: z.string().trim().min(1).max(300), why: z.string(), replaces: z.string().min(1).optional(), onBehalfOfUser: z.boolean().optional() }),
+  call_meeting: z.object({ topic: z.string().trim().min(1).max(120), question: z.string().trim().min(1), teams: z.array(z.string().min(1)).min(1).max(8), author: z.string().min(1) }),
   contract_version: z.object({ change: z.enum(['breaking', 'adds', 'wording']), summary: z.string().trim().min(1), decisions: z.array(z.string().min(1)).optional(), ticket: z.string().min(1).optional() }),
   ...ADMIN_INPUT,
 } satisfies Record<EngineTool, z.ZodType>;

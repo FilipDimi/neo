@@ -23,14 +23,16 @@ export const ENGINE_TOOLS_FOR: Record<RunMode, EngineTool[]> = {
 };
 
 /**
- * The engine's tools for one run. Everyone can read the company's record of decisions. Writing to it, and
- * asking for a contract version, is for those who decide for others: a team's lead and the chief of staff.
+ * The engine's tools for one run. Everyone can read the company's record of decisions. Writing to it, asking for a
+ * contract version and calling a design meeting are for those who decide for others: a team's lead and the chief of staff.
  */
 export function engineToolsFor(input: { mode: RunMode; deciding: boolean; admin: boolean; chief: boolean; lead: boolean }): EngineTool[] {
   // The admin's conversations change the setup: they get the setup tools, and no one else's do.
   // A conversation about a card has one thing to do: answer it.
   const own = input.deciding ? DECIDING_TOOLS : input.admin && input.mode === 'route' ? [...ENGINE_TOOLS_FOR.route, ...ADMIN_TOOLS] : ENGINE_TOOLS_FOR[input.mode];
-  return [...own, 'read_decisions', ...(input.chief || input.lead ? (['record_decision', 'contract_version'] as const) : [])];
+  const decides = input.chief || input.lead;
+  // A design meeting is called by those who speak for a team, from their own work: not while deciding a card for the user.
+  return [...own, 'read_decisions', ...(decides ? (['record_decision', 'contract_version'] as const) : []), ...(decides && !input.deciding && !input.admin ? (['call_meeting'] as const) : [])];
 }
 
 /** The chief of staff deciding a card for the user: it reads, then answers the card. */
@@ -59,6 +61,9 @@ export type JobInput = {
   request: RunRequest;
   task: Task;
   team: Team;
+  /** The employee's own team, when it works on another team's task (a lead reviewing a meeting's design): who it is and what it may do come from there. */
+  ownTeam?: Team | undefined;
+  ownTeammates?: Employee[] | undefined;
   employee: Employee;
   company: Company;
   repo: Repo | null;
@@ -92,6 +97,7 @@ export function buildJob(input: JobInput): WorkerJob {
   const admin = Boolean(company.adminId) && company.adminId === employee.id;
   fs.mkdirSync(cwd, { recursive: true });
   const shape = sessionShape({ task, team, employee, mode: run.mode, folder: cwd, company, envFiles: input.envFiles, protect: engineFiles(input.paths) });
+  const engineTools = engineToolsFor({ mode: run.mode, deciding: Boolean(task.decisionId), admin, chief: company.chiefOfStaffId === employee.id, lead: team.leadId === employee.id });
   const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams, board: input.board, chief: company.chiefOfStaffId === employee.id, admin, self: employee });
   // A command may run long, but never longer than the lease: the Bash timeout sits two minutes under it.
   const bashTimeout = String(Math.max(1, run.leaseMinutes - 2) * 60_000);
@@ -99,7 +105,7 @@ export function buildJob(input: JobInput): WorkerJob {
     runId: run.id,
     mode: run.mode,
     cwd,
-    systemPrompt: buildSystemPrompt({ company, team, employee, teammates: input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode, admin }),
+    systemPrompt: buildSystemPrompt({ company, team: input.ownTeam ?? team, employee, teammates: input.ownTeam ? (input.ownTeammates ?? []) : input.teammates, memoryIndex: readIndex(employee.memoryDir), mode: run.mode, admin, meetings: engineTools.includes('call_meeting') }),
     // The record is shown at the start of a session. One that carries on has it already, and the tool to read what is new.
     firstTurn: [first, request.resumeSessionId ? '' : (input.record ?? ''), messagesTurn(input.messages, input.nameOf)].filter(Boolean).join('\n\n'),
     model: employee.model,
@@ -108,7 +114,7 @@ export function buildJob(input: JobInput): WorkerJob {
     ...(employee.effort && (run.mode !== 'route' || task.decisionId) ? { effort: employee.effort } : {}),
     env: { ...withToolchains(sessionEnv(company)), BASH_DEFAULT_TIMEOUT_MS: bashTimeout, BASH_MAX_TIMEOUT_MS: bashTimeout },
     tools: shape.tools,
-    engineTools: engineToolsFor({ mode: run.mode, deciding: Boolean(task.decisionId), admin, chief: company.chiefOfStaffId === employee.id, lead: team.leadId === employee.id }),
+    engineTools,
     skills: input.mounted.skills,
     plugins: input.mounted.plugins,
     additionalDirectories: shape.additionalDirectories,

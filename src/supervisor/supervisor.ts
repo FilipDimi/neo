@@ -31,6 +31,7 @@ import { canTransition } from './taskState.ts';
 import { remember } from './memory.ts';
 import { builtOnFor, indexFor, onContractVersion, onReadDecisions, onRecordDecision, recordSection } from './record.ts';
 import { dirOf } from './recordFiles.ts';
+import { holdMeeting, meetingReply, planMeeting, proposalsOf, type MeetingCall, type Proposals } from './meeting.ts';
 import { verifyClaims, type Claims } from './proof.ts';
 import { recover } from './recover.ts';
 import { isExpired, leaseMinutesFor, onFailure } from './lease.ts';
@@ -99,6 +100,8 @@ export class Supervisor {
   private readonly reports = new Map<string, string>();
   /** What each run's report or review said was checked and held, until the run ends. */
   private readonly claims = new Map<string, Claims>();
+  /** What the draft of a meeting's design proposed, by run: kept with the run when it ends. */
+  private readonly proposals = new Map<string, Proposals>();
   /** Engine work in flight per task (commits, gates, merges): such a task is not idle. */
   private readonly busy = new Map<string, number>();
   private readonly work = new Set<Promise<void>>();
@@ -523,6 +526,7 @@ export class Supervisor {
         company,
         repo: (prepared.repoId && store.getRepo(this.db, prepared.repoId)) || null,
         teammates: everyone.filter((e) => e.teamId === team.id),
+        ...(employee.teamId !== team.id ? { ownTeam: store.getTeam(this.db, employee.teamId), ownTeammates: everyone.filter((e) => e.teamId === employee.teamId) } : {}),
         teams,
         board: request.mode === 'route' ? companyNow(this.db, now) : undefined,
         record: recordSection(this.db, indexFor(this.db, prepared)),
@@ -846,7 +850,20 @@ export class Supervisor {
   /** What a run's report or review said was checked, as it held: written on the run when it ends. */
   private claimed(runId: string): Partial<Run> {
     const claims = this.claims.get(runId);
-    return claims ? { checks: claims.checks, claimedGates: claims.gates, claimedFromProse: claims.fromProse } : {};
+    const proposals = this.proposals.get(runId);
+    return { ...(claims ? { checks: claims.checks, claimedGates: claims.gates, claimedFromProse: claims.fromProse } : {}), ...(proposals ? { proposals } : {}) };
+  }
+
+  /**
+   * A lead or the chief of staff calls a design meeting: one task for the design on the author's team, and one position
+   * for each team, asked of its lead at once. Refused, in words that say what would work, when it cannot be a meeting.
+   */
+  callMeeting(callerId: string, call: MeetingCall): ToolReply {
+    const plan = planMeeting(this.db, callerId, call);
+    if ('refused' in plan) return { ok: false, text: plan.refused };
+    let meeting: Task | undefined;
+    this.change((tx, now) => void (meeting = holdMeeting(tx, this.db, now, plan)));
+    return meetingReply(plan, meeting!);
   }
 
   /** The model called one of the engine's tools. */
@@ -863,8 +880,12 @@ export class Supervisor {
         // What the report says was checked counts only if it holds against the engine's own record.
         const claims = this.verify(run, report.checks ?? [], report.summary);
         if ('refused' in claims) return { ok: false, text: claims.refused };
+        // The draft of a meeting's design proposes decisions and tickets; nothing else does.
+        const proposed = proposalsOf(this.db, store.getTask(this.db, run.taskId), report);
+        if ('refused' in proposed) return { ok: false, text: proposed.refused };
         this.reports.set(run.id, report.summary);
         this.claims.set(run.id, claims);
+        if (proposed.proposals) this.proposals.set(run.id, proposed.proposals);
         return { ok: true, text: 'Recorded. End your turn now: the engine takes it from here.' };
       }
       case 'request_tools': {
@@ -982,6 +1003,8 @@ export class Supervisor {
         return onRecordDecision(this.db, now, run, input);
       case 'contract_version':
         return onContractVersion(this.db, now, run, input);
+      case 'call_meeting':
+        return this.callMeeting(run.employeeId, TOOL_INPUT.call_meeting.parse(input));
       default:
         if ((ADMIN_TOOLS as readonly string[]).includes(name)) return this.adminCall(run, name, input);
         return { ok: false, text: `The tool ${name} is not available in this run.` };
@@ -1024,6 +1047,7 @@ export class Supervisor {
     this.signs.delete(runId);
     this.reports.delete(runId);
     this.claims.delete(runId);
+    this.proposals.delete(runId);
     this.routed.delete(runId);
     this.allowedWrites.delete(runId);
     this.engineWork(ended.taskId, () => this.afterRun(ended));
@@ -1111,7 +1135,9 @@ export class Supervisor {
     if (!chosen) return { ok: false, text: `This card has no "${option}" for you to press. What you can answer: ${[...buttons.map((button) => button.id), decisions.ASK_USER].join(', ')}.` };
     if (!why) return { ok: false, text: 'The notes are empty. They are the record of why, and for a send-back or an answer they are the words the employee gets. Write them.' };
     // Nobody waves work through for the user with something blocking still in it: that is the user's own to do, if anyone's.
-    const open = card.taskId && (chosen.effect === 'accept' || chosen.effect === 'merge') && card.kind !== 'ownership' ? this.flow.openFindings(card.taskId) : null;
+    // A design meeting is the exception: the leads could not agree, and settling that is the chief of staff's to do as its chair.
+    const meeting = card.taskId ? store.getTask(this.db, card.taskId)?.meeting : undefined;
+    const open = card.taskId && (chosen.effect === 'accept' || chosen.effect === 'merge') && card.kind !== 'ownership' && !meeting ? this.flow.openFindings(card.taskId) : null;
     if (open) return { ok: false, text: `Not that: the last review, by ${open.by}, left ${open.findings.length === 1 ? 'a blocking finding' : `${open.findings.length} blocking findings`} in this work, and nothing lands with one in it. Send it back with what to fix, or use ${decisions.ASK_USER} and say why it cannot be fixed.` };
     // The notes are the answer itself only where the card takes words; a button that carries its own answer keeps it.
     const worded = chosen.effect === 'send_back' || (chosen.effect === 'resume_with_answer' && typeof chosen.params?.text !== 'string');

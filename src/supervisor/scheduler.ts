@@ -30,6 +30,8 @@ export type Pick = { request: RunRequest } | { problem: 'fired' | 'stale'; reque
  */
 export function requestFor(task: Task, team: Team): { mode: RunMode; employeeId: string } | { problem: 'no_lead' | 'no_assignee' } {
   if (task.assigneeId && task.kind === 'chat') return { mode: 'route', employeeId: task.assigneeId };
+  // A design meeting's own run is its draft: it is never briefed or split.
+  if (task.meeting && (task.assigneeId ?? team.leadId)) return { mode: 'integrate', employeeId: (task.assigneeId ?? team.leadId)! };
   if (task.assigneeId && !team.selfManaged && task.assigneeId === team.leadId && !task.parentId) return { mode: 'brief', employeeId: task.assigneeId };
   if (task.assigneeId) return { mode: 'work', employeeId: task.assigneeId };
   if (team.selfManaged) return { problem: 'no_assignee' };
