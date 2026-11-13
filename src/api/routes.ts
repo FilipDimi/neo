@@ -6,7 +6,7 @@
 import { screenId } from './webBuild.ts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { apply, lastEventId, readEvents } from '../db/apply.ts';
+import { apply, lastEventId, readEvents, readStory } from '../db/apply.ts';
 import { paths as pathsOf } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
@@ -277,7 +277,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     const events = readEvents(db, 0, 100_000, task.id).slice(-200);
     // What it is built on, with the decisions themselves: the record is not in the snapshot, so the drawer gets what it shows from here.
     const builtOn = { entries: indexFor(db, task).cited, contract: task.builtOn?.contract ?? null, changesContractTo: task.contractVersion ?? null, moved: task.state === 'done' || task.state === 'failed' ? null : staleLine(movedFor(db, task)) };
-    return { task, children: store.listTasks(db, { parentId: task.id }), runs: store.runsOf(db, task.id), events, decisions: store.openDecisions(db, task.id), builtOn };
+    return { task, children: store.listTasks(db, { parentId: task.id }), runs: store.runsOf(db, task.id), events, story: readStory(db, task.id), decisions: store.openDecisions(db, task.id), builtOn };
   });
 
   /** The company's record of decisions, newest first: all of it, or what holds some words, was decided by someone, or is recent. */

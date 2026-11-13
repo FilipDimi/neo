@@ -66,7 +66,19 @@ export function readEvents(db: Db, sinceId: number, limit = 5000, taskId?: strin
       ? db.prepare('SELECT * FROM events WHERE id > ? ORDER BY id LIMIT ?').all(sinceId, limit)
       : db.prepare('SELECT * FROM events WHERE id > ? AND task_id = ? ORDER BY id LIMIT ?').all(sinceId, taskId, limit)
   ) as StoredEvent[];
-  return rows.map((r) => ({ id: r.id, at: r.at, taskId: r.task_id, runId: r.run_id, employeeId: r.employee_id, teamId: r.team_id, event: JSON.parse(r.payload) as EventRow['event'] }));
+  return rows.map(rowOf);
+}
+
+const rowOf = (r: StoredEvent): EventRow => ({ id: r.id, at: r.at, taskId: r.task_id, runId: r.run_id, employeeId: r.employee_id, teamId: r.team_id, event: JSON.parse(r.payload) as EventRow['event'] });
+
+/**
+ * A task's story: what the engine recorded about it (asked for, started, checked, reviewed, decided, landed), without
+ * what its sessions typed. The last `limit` of it, oldest first. A long run types thousands of lines; none of them
+ * pushes the task's start out of this.
+ */
+export function readStory(db: Db, taskId: string, limit = 300): EventRow[] {
+  const rows = db.prepare("SELECT * FROM events WHERE task_id = ? AND kind != 'run_event' ORDER BY id DESC LIMIT ?").all(taskId, limit) as StoredEvent[];
+  return rows.reverse().map(rowOf);
 }
 
 export function lastEventId(db: Db): number {

@@ -51,17 +51,17 @@ export function glance(store: Store, taskId: string, _now: Date): Glance | null 
   const children = [...store.tasks.values()].filter((child) => child.parentId === taskId);
   const lines: string[] = [];
 
-  if (live) lines.push(live.mode === 'review' ? `${who(live.employeeId)} is reviewing it now.` : live.mode === 'brief' ? `${who(live.employeeId)} is splitting it into sub-tasks.` : `${who(live.employeeId)} is working on it now${live.activity ? `: ${live.activity.replace(/[.!?]+$/, '')}` : ''}.`);
-  else if (task.state === 'done') lines.push(`Done${task.mergedInto ? `, merged into ${task.mergedInto}` : task.branch ? `, kept on the branch ${task.branch}` : ''}.`);
+  if (live) lines.push(live.mode === 'review' ? `${who(live.employeeId)} is reviewing it now.` : live.mode === 'brief' ? `${who(live.employeeId)} is planning it.` : `${who(live.employeeId)} is working on it now${live.activity ? `: ${live.activity.replace(/[.!?]+$/, '')}` : ''}.`);
+  else if (task.state === 'done') lines.push(task.mergedInto ? `Done. It landed on ${task.mergedInto}.` : task.branch ? `Done. Its work is kept on the branch ${task.branch}.` : 'Done.');
   else if (task.state === 'failed') lines.push('Stopped.');
   else if (card) lines.push(`Waiting on you: ${WHY[card.kind]}.`);
   else if (held) lines.push(`${who(held.deciderId)} is deciding what happens next.`);
   else if (task.state === 'queued') lines.push(`Waiting to start, for ${who(task.assigneeId ?? team?.leadId)}.`);
   else if (task.state === 'review') lines.push('Waiting for its review to start.');
-  else if (children.some((child) => child.state !== 'done' && child.state !== 'failed')) lines.push('Waiting on its sub-tasks.');
+  else if (children.some((child) => child.state !== 'done' && child.state !== 'failed')) lines.push('Waiting on its parts.');
   else lines.push('Nobody is on it right now.');
 
-  if (children.length > 0) lines.push(`${children.filter((child) => child.state === 'done').length} of ${count(children.length, 'sub-task')} done.`);
+  if (children.length > 0) lines.push(`${children.filter((child) => child.state === 'done').length} of ${count(children.length, 'part')} done.`);
 
   // What the last review of the work as it stands left to fix.
   const review = runs.slice(runs.findLastIndex(authored) + 1).findLast((run) => run.mode === 'review' && run.reason === 'sent_back');
@@ -70,7 +70,7 @@ export function glance(store: Store, taskId: string, _now: Date): Glance | null 
   if (task.reviewRounds > 0) lines.push(review && mustFix > 0 ? `Sent back ${times}: ${who(review.employeeId)} found ${count(mustFix, 'thing')} that must be fixed.` : `Sent back ${times}.`);
 
   const gates = runs.findLast((run) => run.gateResults.length > 0)?.gateResults ?? [];
-  if (gates.length > 0) lines.push(`Gates last time: ${gates.map((gate) => `${gate.name} ${gate.exitCode === 0 ? 'passed' : 'failed'}`).join(', ')}.`);
+  if (gates.length > 0) lines.push(`Checks last time: ${gates.map((gate) => `${gate.name} ${gate.exitCode === 0 ? 'passed' : 'failed'}`).join(', ')}.`);
 
   if (runs.length > 0) lines.push(countsCost(store.company) ? `${money(runs.reduce((sum, run) => sum + run.costUsd, 0))} of ${money(task.capUsd)} spent over ${count(runs.length, 'run')}.` : `${count(runs.length, 'run')} so far.`);
 

@@ -92,6 +92,27 @@ describe('tasks and the snapshot', () => {
     expect(later.runs).toMatchObject([{ taskId: json.task.id }]);
   });
 
+  it("gives a task's story apart from what its sessions typed, so a long run does not push its start out of view", async () => {
+    const fake = scripted((worker) => worker.say(exit('done')));
+    const { call, w } = await fresh(fake.spawn);
+    const { json } = await call('POST', '/api/tasks', { teamId: 'team1', assigneeId: 'emp1', title: 'Write the note', brief: 'Write it.' });
+    await w.sup.tick();
+    await w.sup.settle();
+    const runId = store.runsOf(w.db, json.task.id)[0]!.id;
+    apply(w.db, (tx) => {
+      for (let n = 0; n < 250; n++) tx.emit({ kind: 'run_event', runId, taskId: json.task.id, employeeId: 'emp1', teamId: 'team1', event: { kind: 'assistant_text', text: `Line ${n}` } });
+    });
+    const detail = (await call('GET', `/api/tasks/${json.task.id}`)).json;
+    // The feed is the last of everything, and here that is all typing.
+    expect(detail.events).toHaveLength(200);
+    expect(detail.events.every((e: any) => e.event.kind === 'run_event')).toBe(true);
+    // The story is what the engine recorded about the task, oldest first, from the day it was asked for.
+    expect(detail.story.some((e: any) => e.event.kind === 'run_event')).toBe(false);
+    expect(detail.story[0].event).toMatchObject({ kind: 'task_changed', cause: 'created' });
+    expect(detail.story.map((e: any) => e.event.kind)).toEqual(expect.arrayContaining(['run_started', 'run_ended']));
+    expect(detail.story.map((e: any) => e.id)).toEqual([...detail.story.map((e: any) => e.id)].sort((a: number, b: number) => a - b));
+  });
+
   it('cancel fails the task and stops its run', async () => {
     const fake = scripted();
     const { call, w } = await fresh(fake.spawn);

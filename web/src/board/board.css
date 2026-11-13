@@ -40,12 +40,51 @@
 .drawer .brief { line-height: 19px; }
 /* The top of a task: what it is, and where it stands. */
 .glance { padding: 14px 16px; border-radius: var(--card); background: var(--surface); border: 1px solid var(--line); gap: 10px !important; }
-.glance-summary { font-size: 15px; font-weight: 600; line-height: 21px; }
-.standing { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; color: var(--soft); line-height: 18px; }
-.standing li { padding-left: 14px; position: relative; overflow-wrap: anywhere; }
-.standing li::before { content: ''; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--dim); }
-.standing li:first-child { color: var(--text); font-weight: 600; } .standing li:first-child::before { background: var(--working); }
-.glance-report { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--soft); max-height: 180px; overflow-y: auto; }
+.glance-summary { line-height: 20px; color: var(--soft); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+/* The one sentence that says where a task stands, in the colour of its state. */
+.glance { --step: var(--text); }
+.glance[data-attention='working'] { --step: var(--working); }
+.glance[data-attention='review'] { --step: var(--review); }
+.glance[data-attention='waiting'] { --step: var(--waiting); }
+.glance[data-attention='stopped'] { --step: var(--silent); }
+.glance[data-attention='done'] { --step: var(--done); }
+.now-line { position: relative; padding-left: 18px; font-size: 15px; font-weight: 600; line-height: 21px; }
+.now-line::before { content: ''; position: absolute; left: 1px; top: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--step); }
+/* The path a task takes, from asked to landed. What is behind it is filled in, where it is now is the bright one. */
+.path { list-style: none; margin: 8px 0 2px; padding: 0; display: grid; grid-template-columns: 1fr 1fr 1fr auto; }
+.path li { position: relative; padding-top: 24px; font-size: 12px; line-height: 16px; color: var(--dim); }
+.path li::before { content: ''; position: absolute; z-index: 1; top: 3px; left: 0; width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%; border: 2px solid #3A3A40; background: var(--surface); }
+.path li:not(:last-child)::after { content: ''; position: absolute; top: 8px; left: 12px; right: 0; height: 2px; background: #2E2E33; }
+.path li[data-state='done'] { color: var(--soft); }
+.path li[data-state='done']::before { border-color: var(--soft); background: var(--soft); }
+.path li[data-state='done']:not(:last-child)::after { background: var(--soft); }
+.path li[aria-current] { color: var(--text); font-weight: 600; }
+.path li[aria-current]::before { top: 1px; left: -2px; width: 16px; height: 16px; border-color: var(--step); background: var(--step); box-shadow: 0 0 0 4px color-mix(in srgb, var(--step) 24%, transparent); }
+.path li[data-state='held']::before { background: var(--surface); }
+.glance[data-attention='done'] .path li { color: var(--text); }
+.glance[data-attention='done'] .path li::before { border-color: var(--done); background: var(--done); }
+.glance[data-attention='done'] .path li::after { background: var(--done); }
+@media (prefers-reduced-motion: no-preference) {
+  .glance[data-attention='working'] .path li[data-state='now']::before, .glance[data-attention='review'] .path li[data-state='now']::before { animation: path-here 2.4s ease-in-out infinite; }
+}
+@keyframes path-here { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--step) 10%, transparent); } }
+.standing { margin: 0; padding: 10px 0 0; border-top: 1px solid var(--line); list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: 12px; line-height: 17px; color: var(--muted); }
+.standing li { overflow-wrap: anywhere; }
+.glance-report { display: flex; flex-direction: column; gap: 4px; color: var(--soft); line-height: 19px; }
+.drawer.task header .where { font-size: 13px; color: var(--soft); }
+.drawer.task h2 { font-size: 20px; letter-spacing: -0.2px; }
+/* Something it was built on has moved: said where it cannot be missed. */
+.moved { padding: 10px 14px; border-radius: var(--card); border: 1px solid var(--waiting-edge); background: var(--waiting-ground); line-height: 19px; }
+/* What happened, as lines to read: when, and a sentence. */
+.happened { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 7px; line-height: 18px; }
+.happened li { display: contents; color: var(--soft); }
+.happened li:first-child span { color: var(--text); }
+.happened time { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.details-body { display: flex; flex-direction: column; gap: 10px; }
+/* Inside the details the feed has a height of its own: the drawer scrolls, not a box of three lines. */
+.details-body .feed { flex: none; height: min(52vh, 460px); }
+.brief-full { color: var(--soft); }
+.drawer.task footer { padding-top: 12px; border-top: 1px solid var(--line); }
 /* What is there for whoever wants all of it, and out of the way of everyone else. */
 .fold > summary { cursor: pointer; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 2px 0; }
 .fold > summary:hover { color: var(--text); }

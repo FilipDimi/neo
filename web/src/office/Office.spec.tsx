@@ -41,7 +41,7 @@ describe('Office', () => {
     expect(ui.asked).toContainEqual(['openDeck', card.id]);
     await userEvent.click(screen.getByRole('button', { name: /^The chief of staff's tray, \d+ waiting for you$/ }));
     expect(ui.asked).toContainEqual(['openDeck', undefined]);
-    expect(screen.getByRole('button', { name: /^NH, stuck, needs you: silent 10 min · twice$/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^NH, stuck, needs you: Quiet for 10 min, twice$/ })).toBeTruthy();
   });
 
   it('has no tray button and no Decide when nothing waits', () => {

@@ -1,13 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { Capability, Employee, Message, Run } from '../../../src/shared/types.ts';
-import { useApi } from '../app/context.ts';
+import { useApi, useUi } from '../app/context.ts';
 import { countsCost } from '../../../src/shared/view.ts';
 import { money } from '../format.ts';
+import { Figure } from '../frame/Figure.tsx';
 import { MessageBox } from '../frame/MessageBox.tsx';
 import { Prose } from '../frame/Prose.tsx';
 import { skillSets, skillsInBrief } from '../../../src/shared/skills.ts';
+import { memoryNotes, modelName, personView } from '../model/human.ts';
 import { personStatus } from '../model/select.ts';
-import { useStore } from '../store/store.ts';
+import { useNow, useStore } from '../store/store.ts';
 import type { HireOptions } from './HireForm.tsx';
 
 type Detail = { employee: Employee; memoryIndex: string; runs: Run[]; spentToday: number };
@@ -15,9 +17,18 @@ type Draft = { role: string; model: string; effort: string; capabilities: Capabi
 const CAPABILITY_LABEL: Record<string, string> = { read_files: 'read files', run_commands: 'run commands', write_code: 'write code', web_search: 'web search', git_push: 'git push', send_messages: 'send messages' };
 const toggle = <T,>(list: T[], item: T, on: boolean): T[] => (on ? [...list.filter((other) => other !== item), item] : list.filter((other) => other !== item));
 
-/** One employee: who they are, what they remember, what they have done, and a line to them. */
+/** How many pieces of recent work are shown before "Show all". */
+const RECENT_SHOWN = 5;
+
+/**
+ * One employee, as a person: who they are and what they are doing, how the week went, what they last worked on, and
+ * a line to them. What they remember and how they are set up (model, tools, skills) are one step away, folded.
+ */
 export function PersonPage({ employeeId, onClose }: { employeeId: string; onClose(): void }) {
   const api = useApi();
+  const ui = useUi();
+  // A minute is the smallest thing this page says about time.
+  const now = useNow(30_000);
   const employee = useStore((store) => store.employees.get(employeeId), [employeeId]);
   const team = useStore((store) => (employee ? store.teams.get(employee.teamId) : undefined), [employee?.teamId]);
   const status = useStore((store) => personStatus(store, employeeId), [employeeId]);
@@ -36,9 +47,14 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
   const [text, setText] = useState('');
   const [note, setNote] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  // How they are set up stays shut until asked for, and open while it is being changed.
+  const [setupOpen, setSetupOpen] = useState(false);
   const [options, setOptions] = useState<HireOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [allWork, setAllWork] = useState(false);
   const fail = (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure));
+  // What the page says above the fold, from the store and this person's runs.
+  const view = useStore((store) => personView(store, employeeId, detail?.runs ?? [], now), [employeeId, detail, now.getTime()]);
 
   useEffect(() => {
     let current = true;
@@ -107,34 +123,124 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
   const inWholeSet = new Set(wholeSets.flatMap((set) => set.ids));
   const noTools = draft !== null && draft.capabilities.filter((capability) => !options || allowed.includes(capability)).length === 0;
 
+  const notes = memoryNotes(detail?.memoryIndex ?? '');
+  const recent = view?.recent ?? [];
+  const can = employee.capabilities.map((capability) => CAPABILITY_LABEL[capability] ?? capability);
+
   return (
-    <aside className="drawer" role="dialog" aria-label={employee.name}>
-      <header>
-        <div>
-          <div className="label">
-            {team?.name}
-            {team?.leadId === employee.id ? ' · lead' : ''} · {status}
-          </div>
+    <aside className="drawer person" role="dialog" aria-label={employee.name}>
+      <header className="who">
+        {view && <Figure shirt={view.portrait.shirt} skin={view.portrait.skin} />}
+        <div className="who-words">
           <h2>{employee.name}</h2>
+          <p className="who-line" data-status={status}>
+            {view?.who}
+          </p>
         </div>
         <button type="button" className="quiet" aria-label="Close" onClick={onClose}>
           ✕
         </button>
       </header>
-      {draft === null ? (
+      <p className="role">{employee.role}</p>
+
+      {/* What is in front of them right now. It opens the task. */}
+      {view?.doing &&
+        (view.doing.taskId ? (
+          <button type="button" className="doing" data-status={status} onClick={() => ui.openTask(view.doing!.taskId!)}>
+            {view.doing.text}
+          </button>
+        ) : (
+          <p className="doing" data-status={status}>
+            {view.doing.text}
+          </p>
+        ))}
+
+      <section>
+        <p className="week">{detail ? view?.week : 'Loading…'}</p>
+        {recent.length > 0 && (
+          <>
+            <h3>Recent work</h3>
+            <ul className="work">
+              {recent.slice(0, allWork ? recent.length : RECENT_SHOWN).map((work) => (
+                <li key={work.taskId}>
+                  <button type="button" onClick={() => ui.openTask(work.taskId)}>
+                    <span className="work-title">{work.title}</span>
+                    <span className="work-line">
+                      {work.did}, {work.state.toLowerCase()}, {work.when}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {recent.length > RECENT_SHOWN && !allWork && (
+              <button type="button" className="quiet more-work" onClick={() => setAllWork(true)}>
+                Show all {recent.length}
+              </button>
+            )}
+          </>
+        )}
+      </section>
+
+      {error && !draft && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {talk.length > 0 && (
         <section>
+          <h3>Conversation</h3>
+          {talk.map((message) => (
+            <div key={message.id} className={message.fromId === 'user' ? 'said mine' : 'said'}>
+              <div className="said-who">{message.fromId === 'user' ? 'You' : employee.name}</div>
+              <Prose text={message.text} />
+            </div>
+          ))}
+        </section>
+      )}
+      <form className="drawer-message" onSubmit={(event) => void send(event)}>
+        <label htmlFor="person-message" className="sr-only">
+          Message to {employee.name}
+        </label>
+        <MessageBox id="person-message" className="field" placeholder={`Message to ${employee.name}…`} value={text} onChange={setText} />
+        <button type="submit" className="pill small on">
+          Send
+        </button>
+      </form>
+      {note && <p className="muted">{note}</p>}
+
+      {/* One step away: what they have noted down, in their own words. */}
+      <details className="fold plain">
+        <summary>{detail ? (notes.length === 0 ? `${employee.name} has noted nothing down yet` : `What ${employee.name} remembers (${notes.length} ${notes.length === 1 ? 'note' : 'notes'})`) : 'Loading…'}</summary>
+        <ul className="notes">
+          {notes.map((one, index) => (
+            <li key={index}>
+              {one.date && <span className="note-date">{one.date}</span>}
+              <span>{one.text}</span>
+            </li>
+          ))}
+        </ul>
+      </details>
+
+      {/* One step away: the machinery. Which model, which tools and skills, and the two things that change them. */}
+      <details className="fold plain" open={setupOpen || draft !== null} onToggle={(event) => setSetupOpen(event.currentTarget.open)}>
+        <summary>How {employee.name} is set up</summary>
+      {draft === null ? (
+        <section className="setup-lines">
           <p>
-            {employee.role}{' '}
-            <button type="button" className="quiet" onClick={edit}>
+            Runs on <span title={employee.model}>{modelName(employee.model)}</span>
+            {employee.effort ? `, at ${employee.effort} effort` : ''}.
+          </p>
+          <p>{can.length > 0 ? `Can ${can.join(', ')}.` : 'Has no tools: it can only ask you questions.'}</p>
+          <p>{employee.skills.length > 0 ? `Skills: ${skillsInBrief(employee.skills)}.` : 'No skills.'}</p>
+          {priced && <p>{money(detail?.spentToday ?? 0)} spent today.</p>}
+          <div className="chips">
+            <button type="button" className="pill small" onClick={edit}>
               Edit
             </button>
-          </p>
-          <p className="muted">
-            {employee.model} · {employee.effort ? `${employee.effort} effort` : "the model's own effort"}
-            {priced ? ` · ${money(detail?.spentToday ?? 0)} today` : ''}
-          </p>
-          <p className="muted">Tools: {employee.capabilities.map((capability) => CAPABILITY_LABEL[capability] ?? capability).join(', ') || 'none'}</p>
-          <p className="muted">Skills: {skillsInBrief(employee.skills) || 'none'}</p>
+            <button type="button" className="pill small" onClick={() => void fire()}>
+              Fire {employee.name}
+            </button>
+          </div>
         </section>
       ) : (
         <form className="person-edit" onSubmit={(event) => void save(event)}>
@@ -242,51 +348,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
           </div>
         </form>
       )}
-      <section>
-        <div className="label">What they remember</div>
-        <pre className="memory">{detail ? detail.memoryIndex || 'Nothing yet.' : 'Loading…'}</pre>
-      </section>
-      <section>
-        <div className="label">Runs</div>
-        {(detail?.runs ?? []).length === 0 && <p className="muted">No runs yet.</p>}
-        {[...(detail?.runs ?? [])].reverse().map((run) => (
-          <div key={run.id} className="run">
-            <span>{`${run.mode} · ${run.outcome}${priced ? ` · ${money(run.costUsd)}` : ''}`}</span>
-            <span className="muted">{tasks.get(run.taskId)?.title ?? ''}</span>
-          </div>
-        ))}
-      </section>
-      {error && !draft && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      {talk.length > 0 && (
-        <section>
-          <div className="label">Conversation</div>
-          {talk.map((message) => (
-            <div key={message.id} className={message.fromId === 'user' ? 'said mine' : 'said'}>
-              <div className="said-who">{message.fromId === 'user' ? 'You' : employee.name}</div>
-              <Prose text={message.text} />
-            </div>
-          ))}
-        </section>
-      )}
-      <form className="drawer-message" onSubmit={(event) => void send(event)}>
-        <label htmlFor="person-message" className="sr-only">
-          Message to {employee.name}
-        </label>
-        <MessageBox id="person-message" className="field" placeholder={`Message to ${employee.name}…`} value={text} onChange={setText} />
-        <button type="submit" className="pill small on">
-          Send
-        </button>
-      </form>
-      {note && <p className="muted">{note}</p>}
-      <footer>
-        <button type="button" className="pill small" onClick={() => void fire()}>
-          Fire {employee.name}
-        </button>
-      </footer>
+      </details>
     </aside>
   );
 }

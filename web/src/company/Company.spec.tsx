@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { company, employee, repo, run, T0, team } from '../../../test/rows.ts';
+import { company, employee, repo, run, T0, task, team } from '../../../test/rows.ts';
 import { storyAt } from '../fixtures/story.ts';
 import { fromSnapshot } from '../store/reduce.ts';
 import { fakeApi, mount } from '../testing.tsx';
@@ -232,14 +232,47 @@ describe('TeamForm', () => {
 describe('PersonPage', () => {
   const detail = { employee: store.employees.get('lead')!, memoryIndex: '- 2026-11-08: Learned the roster shape.', runs: [run({ employeeId: 'lead', outcome: 'done', mode: 'review', costUsd: 0.2 })], spentToday: 1.5 };
 
-  it("shows a person's role, tools, memory, runs and today's spend", async () => {
+  it('opens on who the person is, how their week went and what they last worked on', async () => {
+    const reviewed = run({ id: 'r1', employeeId: 'lead', taskId: 'task1', outcome: 'done', mode: 'review', reason: 'approved', costUsd: 0.2, startedAt: T0.toISOString(), endedAt: T0.toISOString() });
+    const withWork = { ...store, tasks: new Map([['task1', task({ title: 'Serve the stages', teamId: 'ios', state: 'done', mergedInto: 'team' })]]) };
+    const api = fakeApi(() => ({ ...detail, runs: [reviewed] }));
+    const { ui } = mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: withWork, now: T0, api });
+    expect(screen.getByRole('dialog', { name: 'Priya' })).toBeTruthy();
+    expect(screen.getByText('Leads Engineering iOS. Free right now.')).toBeTruthy();
+    expect(screen.getByText('Writes code.')).toBeTruthy();
+    expect(await screen.findByText('This week Priya reviewed 1 task.')).toBeTruthy();
+    // Recent work is by task, in words, and opens the task.
+    const work = screen.getByRole('button', { name: /Serve the stages/ });
+    expect(work.textContent).toContain('reviewed it, landed, 0 s ago');
+    await userEvent.click(work);
+    expect(ui.asked).toContainEqual(['openTask', 'task1', undefined]);
+    // Nothing of the machinery is said in the open: no run record, no model id.
+    expect(screen.queryByText(/review · done/)).toBeNull();
+    expect(screen.queryByText(/claude-/)).toBeNull();
+  });
+
+  it('keeps what they remember and how they are set up one step away, in plain words', async () => {
     const api = fakeApi(() => detail);
     mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store, now: T0, api });
-    expect(screen.getByRole('dialog', { name: 'Priya' })).toBeTruthy();
-    expect(await screen.findByText('- 2026-11-08: Learned the roster shape.')).toBeTruthy();
-    expect(screen.getByText(/\$1\.50 today/)).toBeTruthy();
-    expect(screen.getByText(/review · done · \$0\.20/)).toBeTruthy();
-    expect(screen.getByText('Writes code.')).toBeTruthy();
+    const memory = (await screen.findByText('What Priya remembers (1 note)')).closest('details')!;
+    expect(memory.open).toBe(false);
+    expect(within(memory).getByText('Learned the roster shape.')).toBeTruthy();
+    expect(within(memory).getByText('8 Nov')).toBeTruthy();
+    const setup = screen.getByText('How Priya is set up').closest('details')!;
+    expect(setup.open).toBe(false);
+    // The model is said as people say it; its id is there for whoever hovers.
+    expect(within(setup).getByText('Haiku 5.5').getAttribute('title')).toBe('claude-haiku-5-5');
+    expect(within(setup).getByText('Can read files, write code.')).toBeTruthy();
+    expect(within(setup).getByText('$1.50 spent today.')).toBeTruthy();
+  });
+
+  it('says what is in front of someone who is working, and opens it', async () => {
+    const working = run({ id: 'live', employeeId: 'lead', taskId: 'task1', startedAt: new Date(T0.getTime() - 5 * 60_000).toISOString() });
+    const busy = { ...store, tasks: new Map([['task1', task({ title: 'Serve the stages', teamId: 'ios', state: 'running', assigneeId: 'lead' })]]), runs: new Map([['live', working]]) };
+    const { ui } = mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: busy, now: T0, api: fakeApi(() => ({ ...detail, runs: [working] })) });
+    expect(screen.getByText('Leads Engineering iOS. Working now.')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Working on "Serve the stages", for 5 min' }));
+    expect(ui.asked).toContainEqual(['openTask', 'task1', undefined]);
   });
 
   it("changes a person's role, model, tools and skills from their page", async () => {
@@ -282,7 +315,7 @@ describe('PersonPage', () => {
     const api = fakeApi((method, path) => (path === '/api/hire-options' ? { ...OPTIONS, skills: [...OPTIONS.skills, ...gsd.map((id) => skill(id, id))] } : method === 'GET' ? detail : { employee: lead }));
     mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: { ...store, employees: new Map([['lead', { ...lead, effort: 'high' as const, capabilities: ['read_files' as const], skills: ['dataviz', ...gsd] }]]) }, now: T0, api });
     expect(await screen.findByText(/high effort/)).toBeTruthy();
-    expect(screen.getByText('Skills: gsd (4), dataviz')).toBeTruthy();
+    expect(screen.getByText('Skills: gsd (4), dataviz.')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
     await userEvent.selectOptions(await screen.findByLabelText('Effort'), 'max');
     // The family is one tick here too: taking it away takes all four.
@@ -311,7 +344,7 @@ describe('PersonPage', () => {
     const talking = { ...store, messages: new Map([['m1', { id: 'm1', fromId: 'lead', toId: 'user', taskId: null, text: answer, state: 'delivered' as const, at: T0.toISOString(), deliveredAt: null }]]) };
     mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store: talking, now: T0, api: fakeApi(() => detail) });
     expect(screen.getByText('Where it stands:').tagName).toBe('STRONG');
-    expect(screen.getAllByRole('listitem').map((item) => item.textContent)).toEqual(['the header is in review', 'the footer is queued']);
+    expect(within(document.querySelector<HTMLElement>('.said')!).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['the header is in review', 'the footer is queued']);
     expect(document.querySelector('.said')!.textContent).not.toContain('**');
   });
 

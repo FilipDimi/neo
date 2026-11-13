@@ -13,21 +13,84 @@ const base = { version: 1, company: company(), repos: [], teams: [team()], emplo
 const store = (tasks = [theTask, task({ id: 'kid', parentId: 'task1', title: 'A sub-task', state: 'done' })]) => fromSnapshot({ ...base, tasks, runs: [live] });
 const row = (id: number, event: EngineEvent): EventRow => ({ id, at: T0.toISOString(), ...subjectsOf(event), event });
 const said = (id: number, text: string, taskId = 'task1') => row(id, { kind: 'run_event', runId: 'run1', taskId, employeeId: 'emp1', teamId: 'team1', event: { kind: 'assistant_text', text } });
-const detail = (events: EventRow[]) => ({ task: theTask, children: [], runs: [live], events, decisions: [] });
+// What the engine gives the drawer: the last of everything for the feed, and the task's story without what was typed.
+const detail = (events: EventRow[]) => ({ task: theTask, children: [], runs: [live], events, story: events.filter((one) => one.event.kind !== 'run_event'), decisions: [] });
+const details = () => screen.getByText('The details').closest('details')!;
+const happened = async () => within(await screen.findByRole('list', { name: 'What happened' })).getAllByRole('listitem').map((item) => item.querySelector('span')!.textContent);
 
 describe('TaskDrawer', () => {
-  it('loads the task and shows its brief, its children, its runs and its feed', async () => {
-    const api = fakeApi(() => detail([said(3, 'Reading the brief.'), row(4, { kind: 'run_event', runId: 'run1', taskId: 'task1', employeeId: 'emp1', teamId: 'team1', event: { kind: 'tool_call', id: 't', tool: 'Write', input: { file_path: 'NOTE.md' } } })]));
+  it('opens on where the task is, the path it is on, its parts and what happened, in sentences', async () => {
+    const api = fakeApi(() => detail([row(1, { kind: 'task_changed', task: theTask, cause: 'created' }), row(2, { kind: 'run_started', run: live, requestId: null, teamId: 'team1' }), said(3, 'Reading the brief.'), row(4, { kind: 'run_event', runId: 'run1', taskId: 'task1', employeeId: 'emp1', teamId: 'team1', event: { kind: 'tool_call', id: 't', tool: 'Write', input: { file_path: 'NOTE.md' } } })]));
     mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
     expect(api.calls[0]).toEqual(['GET', '/api/tasks/task1']);
-    expect(screen.getByRole('dialog', { name: 'Do the thing' })).toBeTruthy();
+    const drawer = screen.getByRole('dialog', { name: 'Do the thing' });
+    expect(drawer.querySelector('.where')!.textContent).toBe('Engineering. Being worked on.');
+    expect(drawer.querySelector('.now-line')!.textContent).toBe('Ada is working on it now.');
     expect(screen.getByText('Write the note well.')).toBeTruthy();
+    const path = within(screen.getByRole('list', { name: 'Where it is on its way' })).getAllByRole('listitem');
+    expect(path.map((step) => [step.textContent, step.getAttribute('data-state')])).toEqual([['Asked', 'done'], ['Built', 'now'], ['Checked', 'next'], ['Done', 'next']]);
+    expect(path.map((step) => step.getAttribute('aria-current'))).toEqual([null, 'step', null, null]);
+    expect(screen.getByRole('button', { name: /A sub-task/ }).textContent).toBe('A sub-taskdone');
+    // What happened is told from what the engine recorded, newest first. Nothing a session typed is in it.
+    expect(await happened()).toEqual(['Ada started working on it.', 'You asked for it.']);
+    expect(details().open).toBe(false);
+    expect(within(details()).getByText('Reading the brief.')).toBeTruthy();
+    expect(within(details()).getByText(/Write NOTE\.md/)).toBeTruthy();
+  });
+
+  it('keeps the brief, every run and what was typed one step away, under the details', async () => {
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api: fakeApi(() => detail([said(3, 'Reading the brief.')])) });
+    expect(within(details()).getAllByRole('button').map((button) => button.textContent)).toEqual(['Brief', 'Runs (1)', 'Live feed', 'Changes']);
+    expect(screen.queryByText('NOTE.md exists.')).toBeNull();
+    expect(screen.queryByText(/work · Ada · running/)).toBeNull();
+    await userEvent.click(screen.getByText('The details'));
+    await userEvent.click(screen.getByRole('button', { name: 'Brief' }));
     expect(screen.getByText('NOTE.md exists.')).toBeTruthy();
-    expect(screen.getByText('A sub-task')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Runs (1)' }));
     expect(screen.getByText(/work · Ada · running · \$0\.40/)).toBeTruthy();
     expect(screen.getByText(/tests passed/, { selector: '.gate' })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Live feed' }));
     expect(await screen.findByText('Reading the brief.')).toBeTruthy();
-    expect(screen.getByText(/Write NOTE\.md/)).toBeTruthy();
+  });
+
+  it('shows six things that happened, and the rest when asked', async () => {
+    const started = (id: number) => row(id, { kind: 'run_started', run: { ...live, id: `r${id}` }, requestId: null, teamId: 'team1' });
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api: fakeApi(() => detail([row(1, { kind: 'task_changed', task: theTask, cause: 'created' }), ...[2, 3, 4, 5, 6, 7, 8].map(started)])) });
+    expect(await happened()).toHaveLength(6);
+    await userEvent.click(screen.getByRole('button', { name: 'Earlier (2)' }));
+    expect(await happened()).toHaveLength(8);
+    expect((await happened()).at(-1)).toBe('You asked for it.');
+    expect(screen.queryByRole('button', { name: /Earlier/ })).toBeNull();
+  });
+
+  it('says where a task that waits on you is held, and one that has landed', async () => {
+    const held = task({ state: 'blocked', blockedFrom: 'review', assigneeId: 'emp1' });
+    const card = decision({ id: 'd1', kind: 'review', taskId: 'task1', text: 'Priya could not decide.', options: [{ id: 'accept', label: 'Accept as it is', effect: 'accept' }] });
+    const { unmount } = mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: fromSnapshot({ ...base, tasks: [held], runs: [], decisions: [card] }), now: T0, api: fakeApi(() => ({ ...detail([]), task: held, runs: [] })) });
+    expect(document.querySelector('.where')!.textContent).toBe('Engineering. Waiting on you.');
+    expect(within(screen.getByRole('list', { name: 'Where it is on its way' })).getAllByRole('listitem').map((step) => [step.textContent, step.getAttribute('data-state')])).toEqual([['Asked', 'done'], ['Built', 'done'], ['Checked', 'held'], ['Done', 'next']]);
+    unmount();
+    const landed = task({ state: 'done', mergedInto: 'main', assigneeId: 'emp1' });
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: fromSnapshot({ ...base, tasks: [landed], runs: [] }), now: T0, api: fakeApi(() => ({ ...detail([]), task: landed, runs: [] })) });
+    expect(document.querySelector('.where')!.textContent).toBe('Engineering. Landed.');
+    expect(document.querySelector('.now-line')!.textContent).toBe('Done. It landed on main.');
+    expect(within(screen.getByRole('list', { name: 'Where it is on its way' })).getAllByRole('listitem').map((step) => [step.textContent, step.getAttribute('data-state')])).toEqual([['Asked', 'done'], ['Built', 'done'], ['Checked', 'done'], ['Landed', 'done']]);
+  });
+
+  it('keeps a warning in view when something the task is built on has moved', async () => {
+    const api = fakeApi(() => ({ ...detail([]), builtOn: { entries: [], contract: '0.10.0', changesContractTo: null, moved: 'built on contract 0.10.0, now 0.11.0 (adds: stages on cards)' } }));
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
+    expect((await screen.findByRole('note')).textContent).toBe('Something this was built on has changed since: built on contract 0.10.0, now 0.11.0 (adds: stages on cards).');
+    expect(details().contains(screen.getByRole('note'))).toBe(false);
+  });
+
+  it('names priorities in words, and changes one', async () => {
+    const api = fakeApi(() => detail([]));
+    mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api });
+    const priority = screen.getByLabelText('Priority') as HTMLSelectElement;
+    expect([...priority.options].map((option) => option.textContent)).toEqual(['High', 'Normal', 'Low']);
+    await userEvent.selectOptions(priority, 'High');
+    expect(api.calls).toContainEqual(['PATCH', '/api/tasks/task1', { priority: 1 }]);
   });
 
   it("appends live events for the open task and ignores other tasks'", async () => {
@@ -59,17 +122,21 @@ describe('TaskDrawer', () => {
     mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: fromSnapshot({ ...base, tasks: [big], runs: [working] }), now: T0, api: fakeApi(() => ({ ...detail([]), task: big })) });
     const glance = screen.getByRole('region', { name: 'At a glance' });
     expect(within(glance).getByText('The settings screen, from board S-3.')).toBeTruthy();
-    expect(within(glance).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['Ada is working on it now: Laying out the toggles.', '$0.40 of $2.00 spent over 1 run.']);
-    // The brief is all there, one click away, and not in the way.
-    const fold = screen.getByText('The full brief').closest('details')!;
-    expect(fold.open).toBe(false);
-    expect(within(fold).getByText(/Every detail of the layout/)).toBeTruthy();
-    expect(within(fold).getByText('It matches the board.')).toBeTruthy();
+    expect(glance.querySelector('.now-line')!.textContent).toBe('Ada is working on it now: Laying out the toggles.');
+    expect([...glance.querySelectorAll('.standing li')].map((item) => item.textContent)).toEqual(['$0.40 of $2.00 spent over 1 run.']);
+    // The brief is all there, one step away, and not in the way.
     expect(within(glance).queryByText(/Every detail of the layout/)).toBeNull();
+    expect(details().open).toBe(false);
+    await userEvent.click(screen.getByText('The details'));
+    await userEvent.click(screen.getByRole('button', { name: 'Brief' }));
+    expect(within(details()).getByText(/Every detail of the layout/)).toBeTruthy();
+    expect(within(details()).getByText('It matches the board.')).toBeTruthy();
   });
 
   it('does not say a short brief twice', async () => {
     mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store(), now: T0, api: fakeApi(() => detail([])) });
+    await userEvent.click(screen.getByText('The details'));
+    await userEvent.click(screen.getByRole('button', { name: 'Brief' }));
     expect(screen.getAllByText('Write the note well.')).toHaveLength(1);
     expect(screen.getByText('NOTE.md exists.')).toBeTruthy();
   });
@@ -93,6 +160,8 @@ describe('TaskDrawer', () => {
   it("lists what a review found under its run, the blocking ones marked", async () => {
     const review = run({ id: 'run2', mode: 'review', outcome: 'done', reason: 'sent_back', endedAt: T0.toISOString(), findings: [{ severity: 'blocking', file: 'NOTE.md', line: 3, title: 'The note contradicts the brief', why: 'It says the opposite.', fix: 'Rewrite line 3.' }, { severity: 'minor', file: 'NOTE.md', title: 'A typo', why: '', fix: 'Fix it.' }] });
     mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: fromSnapshot({ ...base, tasks: [theTask], runs: [live, review] }), now: T0, api: fakeApi(() => detail([])) });
+    await userEvent.click(screen.getByText('The details'));
+    await userEvent.click(screen.getByRole('button', { name: 'Runs (2)' }));
     const found = within(await screen.findByRole('list', { name: 'What the review found' })).getAllByRole('listitem');
     expect(found.map((item) => [item.getAttribute('data-severity'), item.textContent])).toEqual([
       ['blocking', 'blocking NOTE.md:3: The note contradicts the brief. It says the opposite. Fix: Rewrite line 3.'],
@@ -105,6 +174,8 @@ describe('TaskDrawer', () => {
     mount(<TaskDrawer taskId="task1" tab="diff" onClose={() => {}} />, { store: store(), now: T0, api });
     expect(await screen.findByText(/\+a note/)).toBeTruthy();
     expect(api.calls.map((c) => c[1])).toContain('/api/tasks/task1/diff');
+    // Opened from a card's "Open diff", the drawer lands on the changes: the details are open on them.
+    expect(details().open).toBe(true);
   });
 
   it('shows the files a task without a repository wrote, in place of a diff', async () => {
@@ -112,7 +183,7 @@ describe('TaskDrawer', () => {
     const written = { folder: '/data/folders/task1', more: 2, files: [{ path: 'market-brief.md', bytes: 16238, text: '# Market brief\n\nThree competitors.' }, { path: 'chart.png', bytes: 2048, text: null }] };
     const api = fakeApi((_method, route) => (route.endsWith('/files') ? written : { task: research, children: [], runs: [], events: [], decisions: [] }));
     mount(<TaskDrawer taskId="task1" onClose={() => {}} />, { store: store([research]), now: T0, api });
-    expect(screen.queryByRole('button', { name: 'Diff' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Changes' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Files' }));
     expect(api.calls).toContainEqual(['GET', '/api/tasks/task1/files']);
     expect(await screen.findByText(/market-brief\.md · 16 KB/)).toBeTruthy();

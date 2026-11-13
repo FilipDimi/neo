@@ -226,7 +226,7 @@ describe('a task at a glance', () => {
     const live = run({ id: 'run1', activity: 'Building the results list of the search page', costUsd: 0.25 });
     const kids = [task({ id: 'k1', parentId: 'task1', state: 'done' }), task({ id: 'k2', parentId: 'task1', state: 'running' })];
     const seen = at({ tasks: [task({ state: 'running', assigneeId: 'emp1', capUsd: 3, reviewRounds: 1 }), ...kids], runs: [earlier, live] });
-    expect(seen.lines).toEqual(['Ada is working on it now: Building the results list of the search page.', '1 of 2 sub-tasks done.', 'Sent back once.', 'Gates last time: tests passed, lint failed.', '$0.75 of $3.00 spent over 2 runs.']);
+    expect(seen.lines).toEqual(['Ada is working on it now: Building the results list of the search page.', '1 of 2 parts done.', 'Sent back once.', 'Checks last time: tests passed, lint failed.', '$0.75 of $3.00 spent over 2 runs.']);
     expect(seen.report).toEqual({ by: 'Ada', text: 'Laid out the header. The list is next.' });
   });
 
@@ -237,7 +237,7 @@ describe('a task at a glance', () => {
     expect(at({ tasks: [task({ state: 'queued', assigneeId: 'emp1' })] }).lines[0]).toBe('Waiting to start, for Ada.');
     expect(at({ tasks: [task({ state: 'blocked' })], decisions: [decision({ kind: 'question' })] }).lines[0]).toBe('Waiting on you: has a question.');
     expect(at({ tasks: [task({ state: 'blocked' })], decisions: [decision({ kind: 'review', deciderId: 'neo' })] }).lines[0]).toBe('Neo is deciding what happens next.');
-    expect(at({ tasks: [task({ state: 'done', mergedInto: 'team' })] }).lines[0]).toBe('Done, merged into team.');
+    expect(at({ tasks: [task({ state: 'done', mergedInto: 'team' })] }).lines[0]).toBe('Done. It landed on team.');
     expect(at({ tasks: [task({ state: 'failed' })] }).lines[0]).toBe('Stopped.');
   });
 

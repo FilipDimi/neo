@@ -43,7 +43,8 @@ export function rug(node: SceneNode): Container {
     g.roundRect(6, 6, node.w - 12, node.h - 12, 10).fill(str(node.props.fill, '#1A1A1C'));
   }
   const label = words(str(node.props.label).toUpperCase(), { size: 10, weight: '700', spacing: 1.2, color: str(node.props.labelColor, '#6F6F78') });
-  label.position.set(20, 10);
+  // Two pixels above where the artboard has it: the first desk's words, on a rug of six, end just under it.
+  label.position.set(20, 8);
   return at(g, label);
 }
 

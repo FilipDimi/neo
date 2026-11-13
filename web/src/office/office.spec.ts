@@ -24,17 +24,23 @@ describe('placement', () => {
     expect(placement('emp1', store, T0)).toMatchObject({ where: 'desk', screen: 'lit', bubble: 'docking the glass row', tone: 'plain', taskId: 'task1' });
   });
 
-  it("falls back to the task's title when the run has set no activity, and says when it is a briefing", () => {
+  it('says in a sentence what someone is on when the run has set no activity: working on it, or planning it', () => {
     const working = fromSnapshot(snapshot({ tasks: [task({ state: 'running', assigneeId: 'emp1', title: 'Roster 503' })], runs: [liveRun()] }));
-    expect(placement('emp1', working, T0).bubble).toBe('Roster 503');
+    expect(placement('emp1', working, T0).bubble).toBe('Working on Roster 503');
     const briefing = fromSnapshot(snapshot({ tasks: [task({ state: 'briefing', title: 'Life as a pass stack' })], runs: [liveRun({ mode: 'brief' })] }));
-    expect(placement('emp1', briefing, T0).bubble).toBe('briefing Life as a pass stack');
+    expect(placement('emp1', briefing, T0).bubble).toBe('Planning Life as a pass stack');
+  });
+
+  it('says quietly that someone waits for the engine: a check that is running, or their turn, in their own words', () => {
+    const at = (waiting: { on: 'gate' | 'lock'; what: string }) => placement('emp1', fromSnapshot(snapshot({ tasks: [task({ state: 'running', assigneeId: 'emp1' })], runs: [liveRun({ activity: 'running the gate "tests"', waiting: { ...waiting, since: T0.toISOString() } })] })), T0);
+    expect(at({ on: 'gate', what: 'tests' })).toMatchObject({ where: 'desk', screen: 'lit', tone: 'waiting', bubble: 'Waiting for the check "tests"', taskId: 'task1' });
+    expect(at({ on: 'lock', what: 'the xcode lock, held by "Another task"' })).toMatchObject({ tone: 'waiting', bubble: 'Waiting for my turn' });
   });
 
   it('puts the author of a task in review in the meeting room before the review run starts', () => {
     const { store, now } = storyAt('c2_in_review');
     expect(placement('c2', store, now)).toMatchObject({ where: 'meeting', tone: 'review', taskId: taskTitled(store, 'C2 Person page from the roster')!.id });
-    expect(placement('c2', store, now).bubble).toMatch(/^review · C2 Person page.* · \d+ lines$/);
+    expect(placement('c2', store, now).bubble).toMatch(/^Reviewing C2 Person page/);
     expect(placement('ios-lead', store, now).where).toBe('desk');
   });
 
@@ -47,7 +53,7 @@ describe('placement', () => {
   it("puts an employee whose lease card is open on the couch, with the decision's id", () => {
     const { store, now } = storyAt('lease_card');
     const card = [...store.decisions.values()].find((d) => d.kind === 'lease')!;
-    expect(placement('nh', store, now)).toEqual({ where: 'stuck', screen: 'dark', bubble: 'silent 10 min · twice', tone: 'stuck', decisionId: card.id, taskId: card.taskId });
+    expect(placement('nh', store, now)).toEqual({ where: 'stuck', screen: 'dark', bubble: 'Quiet for 10 min, twice', tone: 'stuck', decisionId: card.id, taskId: card.taskId });
   });
 
   it('stuck wins over review, and review over working', () => {
@@ -132,6 +138,109 @@ describe('officeScene', () => {
     expect(ofKind(scene, 'bubble').length).toBe(lit.length);
   });
 
+  // A team of people who are all saying the same long thing: the hardest case for the room.
+  const crew = (count: number, said = 'Building the results list of the search page from the board') => {
+    const employees = Array.from({ length: count }, (_, i) => employee({ id: `m${i}`, name: `M${i}` }));
+    const tasks = employees.map((one, i) => task({ id: `t${i}`, title: `Task ${i}`, state: 'running', assigneeId: one.id }));
+    const runs = employees.map((one, i) => liveRun({ id: `r${i}`, taskId: `t${i}`, employeeId: one.id, activity: said }));
+    return officeScene(fromSnapshot(snapshot({ employees, tasks, runs })), T0);
+  };
+  const bubbleOf = (scene: SceneNode[], id: string) => scene.find((node) => node.id === `bubble:${id}`)!;
+  /** The widest a bubble can come out: its longest line in the room's type, and its padding. */
+  const widest = (bubble: SceneNode) => Math.max(...String(bubble.props.text).split('\n').map((line) => line.length)) * 6.2 + 22;
+
+  const linesOf = (bubble: SceneNode) => String(bubble.props.text).split('\n');
+  const part = (scene: SceneNode[], id: string) => scene.find((node) => node.id === id)!;
+
+  it("puts what someone says over their own desk, with its tail down at them: never over a neighbour, never over the row above", () => {
+    const scene = crew(4);
+    for (const id of ['m0', 'm1', 'm2', 'm3']) {
+      const bubble = bubbleOf(scene, id);
+      const head = personOf(scene, id);
+      expect(linesOf(bubble).length, id).toBeLessThanOrEqual(3);
+      for (const line of linesOf(bubble)) expect(line.length, line).toBeLessThanOrEqual(24);
+      expect(bubble.x).toBe(part(scene, `desk:${id}`).x);
+      // It ends just above the speaker's head, where its tail points.
+      expect(head.y - (bubble.y + bubble.h)).toBe(5);
+      expect(bubble.props).toMatchObject({ side: 'right', tail: 'down', tailAt: head.x + head.w / 2 - bubble.x });
+    }
+    // All of what was said is there: at full size a seat holds a whole status line.
+    expect(linesOf(bubbleOf(scene, 'm0')).join(' ')).toBe('Building the results list of the search page from the board');
+    // It ends before the next desk, and the row below does not talk over the names of the row above.
+    expect(bubbleOf(scene, 'm0').x + widest(bubbleOf(scene, 'm0'))).toBeLessThanOrEqual(part(scene, 'desk:m1').x);
+    expect(bubbleOf(scene, 'm2').y).toBeGreaterThanOrEqual(part(scene, 'tag:m0').y + part(scene, 'tag:m0').h);
+    // The first row leaves the rug's name alone: it is written 10 from the top of the rug, 12 tall.
+    expect(bubbleOf(scene, 'm0').y).toBeGreaterThanOrEqual(part(scene, 'rug:team1').y + 22);
+    // It grows upwards: a short one ends at the same place.
+    const short = bubbleOf(crew(4, 'docking the glass row'), 'm0');
+    expect(short.h).toBe(21);
+    expect(short.y + short.h).toBe(bubbleOf(scene, 'm0').y + bubbleOf(scene, 'm0').h);
+  });
+
+  it('on a crowded rug, where a seat has no room for words, every second seat talks one line higher so no two bubbles meet', () => {
+    const scene = crew(14);
+    const [a, b, c] = ['m0', 'm1', 'm2'].map((id) => bubbleOf(scene, id));
+    for (const one of [a!, b!, c!]) expect(linesOf(one)).toHaveLength(1);
+    expect(a!.y).toBe(c!.y);
+    expect(b!.y + b!.h).toBeLessThan(a!.y);
+    // On its own level a bubble has room up to the seat after the next.
+    expect(a!.x + widest(a!)).toBeLessThanOrEqual(c!.x);
+    expect(linesOf(a!)[0]!.length).toBeGreaterThanOrEqual(12);
+  });
+
+  it("lays a lead's words over the far end of their own desk, clear of the last column of the team, and stops a member's words at the lead's desk", () => {
+    const lead = employee({ id: 'lead', name: 'Lea' });
+    const members = Array.from({ length: 4 }, (_, i) => employee({ id: `m${i}`, name: `M${i}` }));
+    const said = 'Building the results list of the search page from the board';
+    const tasks = [...members, lead].map((one, i) => task({ id: `t${i}`, title: `Task ${i}`, state: 'running', assigneeId: one.id }));
+    const runs = [...members, lead].map((one, i) => liveRun({ id: `r${i}`, taskId: `t${i}`, employeeId: one.id, activity: said }));
+    const scene = officeScene(fromSnapshot(snapshot({ teams: [team({ leadId: 'lead' })], employees: [...members, lead], tasks, runs })), T0);
+    const leads = bubbleOf(scene, 'lead');
+    const desk = part(scene, 'desk:lead');
+    expect(leads.props).toMatchObject({ side: 'left', tail: 'down' });
+    // It opens to the left from the rug's edge: its right end is fixed, its left end is as far as its words go.
+    const left = leads.x - widest(leads);
+    expect(leads.x).toBeGreaterThan(desk.x + desk.w);
+    // Clear of the lead themselves, of the names of the last column, and of what the member beside the lead says.
+    expect(leads.y + leads.h).toBeLessThanOrEqual(personOf(scene, 'lead').y);
+    for (const id of ['m1', 'm3']) expect(left, id).toBeGreaterThanOrEqual(part(scene, `tag:${id}`).x + part(scene, `tag:${id}`).w);
+    expect(overlap({ x: left, y: leads.y, w: widest(leads), h: leads.h }, { x: bubbleOf(scene, 'm3').x, y: bubbleOf(scene, 'm3').y, w: widest(bubbleOf(scene, 'm3')), h: bubbleOf(scene, 'm3').h })).toBe(false);
+    expect(overlap({ x: left, y: leads.y, w: widest(leads), h: leads.h }, { x: bubbleOf(scene, 'm1').x, y: bubbleOf(scene, 'm1').y, w: widest(bubbleOf(scene, 'm1')), h: bubbleOf(scene, 'm1').h })).toBe(false);
+    // The members of the last column stop at the lead's desk.
+    for (const id of ['m1', 'm3']) expect(bubbleOf(scene, id).x + widest(bubbleOf(scene, id)), id).toBeLessThanOrEqual(desk.x);
+  });
+
+  it('on a rug of six and a lead, as in the demo, nobody talks over a name, a neighbour or the lead', () => {
+    const lead = employee({ id: 'lead', name: 'Lea' });
+    const members = Array.from({ length: 6 }, (_, i) => employee({ id: `m${i}`, name: `M${i}` }));
+    const all = [...members, lead];
+    const tasks = all.map((one, i) => task({ id: `t${i}`, title: `Task ${i}`, state: 'running', assigneeId: one.id }));
+    const runs = all.map((one, i) => liveRun({ id: `r${i}`, taskId: `t${i}`, employeeId: one.id, activity: 'Building the results list of the search page from the board' }));
+    const scene = officeScene(fromSnapshot(snapshot({ teams: [team({ leadId: 'lead' })], employees: all, tasks, runs })), T0);
+    const box = (id: string): Rect => {
+      const bubble = bubbleOf(scene, id);
+      const w = widest(bubble);
+      return { x: bubble.props.side === 'left' ? bubble.x - w : bubble.x, y: bubble.y, w, h: bubble.h };
+    };
+    const ids = all.map((one) => one.id);
+    for (const id of ids) {
+      // Nobody's words are over anybody's head or name, their own included.
+      for (const other of ids) {
+        expect(overlap(box(id), personOf(scene, other)), `${id} over ${other}`).toBe(false);
+        expect(overlap(box(id), part(scene, `tag:${other}`)), `${id} over the name of ${other}`).toBe(false);
+        if (other !== id) expect(overlap(box(id), box(other)), `${id} over what ${other} says`).toBe(false);
+      }
+      // The rug's name is written 8 from its top, 12 tall.
+      expect(box(id).y, id).toBeGreaterThanOrEqual(part(scene, 'rug:team1').y + 20);
+    }
+  });
+
+  it('gives a waiting run a quiet bubble', () => {
+    const waitingRun = liveRun({ activity: 'running the gate "tests"', waiting: { on: 'gate' as const, what: 'tests', since: T0.toISOString() } });
+    const scene = officeScene(fromSnapshot(snapshot({ tasks: [task({ state: 'running', assigneeId: 'emp1' })], runs: [waitingRun] })), T0);
+    expect(bubbleOf(scene, 'emp1').props).toMatchObject({ tone: 'waiting', text: 'Waiting for the check\n"tests"' });
+  });
+
   it('a lead wears white, the chief of staff wears dark, and a team shares one shirt colour', () => {
     const { store, now } = storyAt('start');
     const scene = officeScene(store, now);
@@ -213,6 +322,6 @@ describe('officeScene', () => {
     const scene = officeScene(store, now);
     const table = scene.find((node) => node.kind === 'table')!;
     for (const id of ['ios-lead', 'c2']) expect(Math.abs(personOf(scene, id).y - table.y)).toBeLessThan(120);
-    expect(ofKind(scene, 'bubble').some((b) => /^review · C2 Person page/.test(String(b.props.text)))).toBe(true);
+    expect(ofKind(scene, 'bubble').some((b) => /^Reviewing C2 Person page/.test(String(b.props.text)))).toBe(true);
   });
 });

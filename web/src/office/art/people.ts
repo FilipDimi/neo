@@ -30,25 +30,36 @@ export function tag(node: SceneNode): Container {
 
 const BUBBLE: Record<string, { fill: string; alpha: number; text: string; weight: '600' | '700' }> = {
   plain: { fill: '#F4F4F6', alpha: 1, text: '#0B0B0C', weight: '600' },
+  // Held up by the engine for a moment: said, but quietly.
+  waiting: { fill: '#2C2C31', alpha: 1, text: '#B4B4BC', weight: '600' },
   review: { fill: '#76D3CC', alpha: 0.18, text: '#76D3CC', weight: '600' },
   stuck: { fill: '#E0625A', alpha: 1, text: '#1A0A09', weight: '700' },
 };
 
-/** Words beside a person. The box is as wide as the words; `side` says which way it opens from its anchor. */
+/**
+ * What someone says: a speech bubble as wide as its words, with a tail towards whoever says it. `side` says which way
+ * it opens from its anchor. `tail` says where the speaker is: below it (at `tailAt` from its left end, or from its
+ * right end when negative), or to its left.
+ */
 export function bubble(node: SceneNode): Container {
   const look = BUBBLE[str(node.props.tone, 'plain')] ?? BUBBLE.plain!;
-  const text = words(str(node.props.text), { size: 10, weight: look.weight, color: look.text, lineHeight: 13 });
-  const w = Math.ceil(text.width) + 18;
+  const text = words(str(node.props.text), { size: 11, weight: look.weight, color: look.text, lineHeight: 13 });
+  const w = Math.ceil(text.width) + 22;
   const h = node.h;
   const left = node.props.side === 'left' ? -w : 0;
+  const fill = { color: look.fill, alpha: look.alpha };
   const g = new Graphics();
-  if (look.alpha === 1) shade(g, left, 0, w, h, 10, 8);
-  g.roundRect(left, 0, w, h, 10).fill({ color: look.fill, alpha: look.alpha });
-  // The corner nearest the speaker is square, as a speech bubble's is.
-  if (node.props.side === 'right') g.roundRect(left, h - 10, 10, 10, 2).fill(look.fill);
-  if (node.props.side === 'left') g.roundRect(left + w - 10, h - 10, 10, 10, 2).fill(look.fill);
+  if (look.alpha === 1) shade(g, left, 0, w, h, 11, 8);
+  g.roundRect(left, 0, w, h, 11).fill(fill);
+  if (node.props.tail === 'down') {
+    // Under the bubble, above the speaker's head; never past the bubble's own rounded ends.
+    const at = typeof node.props.tailAt === 'number' ? node.props.tailAt : 16;
+    const x = left + Math.max(15, Math.min(w - 15, at < 0 ? w + at : at));
+    g.poly([x - 5, h - 1, x, h + 4, x + 5, h - 1]).fill(fill);
+  }
+  if (node.props.tail === 'left') g.poly([left + 1, h - 16, left - 6, h - 9, left + 1, h - 6]).fill(fill);
   text.anchor.set(0, 0.5);
-  text.position.set(left + 9, h / 2);
+  text.position.set(left + 11, h / 2);
   const box = new Container();
   box.addChild(g, text);
   return box;

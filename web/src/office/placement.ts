@@ -8,7 +8,7 @@ import { WHY } from '../../../src/shared/view.ts';
 import { liveRuns, openDecisions, runsOf } from '../model/select.ts';
 import type { Store } from '../store/reduce.ts';
 
-export type Placement = { where: 'desk' | 'meeting' | 'stuck'; screen: 'dark' | 'lit'; bubble: string | null; tone: 'plain' | 'review' | 'stuck'; decisionId: string | null; taskId: string | null };
+export type Placement = { where: 'desk' | 'meeting' | 'stuck'; screen: 'dark' | 'lit'; bubble: string | null; /** `waiting`: at work, and held up by the engine for a moment (a check that is running, a turn to wait for). */ tone: 'plain' | 'review' | 'stuck' | 'waiting'; decisionId: string | null; taskId: string | null };
 
 /** A status line is a sentence of up to this many characters; the room wraps it, so all of it is kept. */
 const BUBBLE_MAX = 60;
@@ -47,7 +47,9 @@ export function wrap(text: string, perLine: number, lines = 2): string[] {
   }
   return line ? [...out, line] : out;
 }
-const times = (n: number): string => (n <= 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
+const times = (n: number): string => (n <= 1 ? '' : n === 2 ? ', twice' : `, ${n} times`);
+/** What someone is on, as they would say it, when their run has said nothing of its own. */
+const DOING: Record<Run['mode'], string> = { work: 'Working on', brief: 'Planning', integrate: 'Putting together', review: 'Reviewing', route: 'Answering' };
 const authored = (run: Run): boolean => run.mode === 'work' || run.mode === 'brief' || run.mode === 'integrate';
 
 export function placement(employeeId: string, store: Store, _now: Date): Placement {
@@ -60,7 +62,7 @@ export function placement(employeeId: string, store: Store, _now: Date): Placeme
   if (card) {
     const runs = card.taskId ? runsOf(store, card.taskId) : [];
     const lease = (card.runId ? store.runs.get(card.runId) : runs.at(-1))?.leaseMinutes;
-    const bubble = card.kind === 'lease' ? `silent ${lease ?? '?'} min · ${times(runs.filter((run) => run.outcome === 'expired').length)}` : WHY[card.kind];
+    const bubble = card.kind === 'lease' ? `Quiet for ${lease ?? '?'} min${times(runs.filter((run) => run.outcome === 'expired').length)}` : WHY[card.kind];
     return { where: 'stuck', screen: 'dark', bubble, tone: 'stuck', decisionId: card.id, taskId: card.taskId };
   }
 
@@ -74,15 +76,15 @@ export function placement(employeeId: string, store: Store, _now: Date): Placeme
       const author = runsOf(store, task.id).filter(authored).at(-1)?.employeeId ?? task.assigneeId;
       return author === employeeId;
     });
-  if (underReview) {
-    const lines = runsOf(store, underReview.id).filter(authored).at(-1)?.diffLines;
-    return { where: 'meeting', screen: 'dark', bubble: `review · ${cut(underReview.title, 26)}${lines != null ? ` · ${lines} lines` : ''}`, tone: 'review', decisionId: null, taskId: underReview.id };
-  }
+  if (underReview) return { where: 'meeting', screen: 'dark', bubble: `Reviewing ${cut(underReview.title, 30)}`, tone: 'review', decisionId: null, taskId: underReview.id };
 
   // 3. At the desk with the screen lit: a run. The bubble is the employee's own status line when it has set one.
   if (live) {
-    const title = store.tasks.get(live.taskId)?.title ?? 'a task';
-    return { where: 'desk', screen: 'lit', bubble: cut(live.activity ?? (live.mode === 'brief' ? `briefing ${title}` : title)), tone: 'plain', decisionId: null, taskId: live.taskId };
+    const task = store.tasks.get(live.taskId);
+    // Waiting is not working: a run the engine holds up for a moment says what for, quietly.
+    if (live.waiting) return { where: 'desk', screen: 'lit', bubble: live.waiting.on === 'gate' ? `Waiting for the check "${cut(live.waiting.what, 24)}"` : 'Waiting for my turn', tone: 'waiting', decisionId: null, taskId: live.taskId };
+    const doing = live.mode === 'route' || task?.kind === 'chat' ? 'Answering a message' : `${DOING[live.mode]} ${task?.title ?? 'a task'}`;
+    return { where: 'desk', screen: 'lit', bubble: cut(live.activity ?? doing), tone: 'plain', decisionId: null, taskId: live.taskId };
   }
 
   // 4. Idle.

@@ -6,14 +6,16 @@ import { money } from '../format.ts';
 import { MessageBox } from '../frame/MessageBox.tsx';
 import { Prose } from '../frame/Prose.tsx';
 import { checkedLine, countsCost } from '../../../src/shared/view.ts';
+import { happenings, priorityWord, stateWord, taskPath } from '../model/human.ts';
 import { glance, liveRuns } from '../model/select.ts';
-import { useStore } from '../store/store.ts';
+import { useNow, useStore } from '../store/store.ts';
 
 const sentence = (text: string): string => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 
 /** What a task stands on in the company's record: the decisions its maker named, and the contract's version. */
-type BuiltOn = { entries: RecordEntry[]; contract: string | null; changesContractTo: string | null };
-type Detail = { task: Task; children: Task[]; runs: Run[]; events: EventRow[]; decisions: Decision[]; builtOn?: BuiltOn };
+type BuiltOn = { entries: RecordEntry[]; contract: string | null; changesContractTo: string | null; /** What it is built on that has moved since, in a line. */ moved?: string | null };
+/** `events` is the last of everything on the task, for the live feed. `story` is what the engine recorded about it, without what its sessions typed. */
+type Detail = { task: Task; children: Task[]; runs: Run[]; events: EventRow[]; story: EventRow[]; decisions: Decision[]; builtOn?: BuiltOn };
 
 const decidedBy = (entry: RecordEntry): string => (entry.archived ? 'the log kept by hand' : entry.byName) ?? (entry.by.kind === 'user' ? 'the user' : entry.by.kind === 'chief' ? 'the chief of staff, for the user' : 'a team lead');
 
@@ -57,7 +59,7 @@ function BuiltOnLine({ builtOn }: { builtOn: BuiltOn }) {
         <div className="decision-open">
           <Prose text={shown.statement} />
           {shown.why && <Prose className="muted" text={shown.why} />}
-          <div className="label">
+          <div className="muted small">
             {decidedBy(shown)} · {shown.at.slice(0, 10)}
             {shown.replacedBy ? ` · replaced by ${shown.replacedBy}` : ''}
           </div>
@@ -103,10 +105,19 @@ function feedLine(row: EventRow, nameOf: (id: string) => string): string | null 
   }
 }
 
-/** Everything about one task: its brief, its sub-tasks, its runs, what is happening now, the diff, and a line to its employee. */
+/** How many lines of "What happened" are shown before "Earlier". */
+const HAPPENED_SHOWN = 6;
+/** What "The details" holds, one at a time. */
+type Detailed = TaskTab | 'runs' | 'brief';
+
 type Files = { folder: string | null; files: { path: string; bytes: number; text: string | null }[]; more: number };
 const size = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
+/**
+ * One task, for someone who has ten seconds: what it delivers, where it stands, the path it is on, its parts, and what
+ * happened, in plain sentences. Everything a session typed, every run and the changes themselves are one step away,
+ * under "The details".
+ */
 export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; tab?: TaskTab | undefined; onClose(): void }) {
   const api = useApi();
   const ui = useUi();
@@ -121,7 +132,16 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   const seq = useStore((store) => store.taskSeq[taskId] ?? 0, [taskId]);
   const messages = useStore((store) => store.messages);
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [showing, setShowing] = useState<TaskTab>(tab);
+  const [showing, setShowing] = useState<Detailed>(tab);
+  // The details stay shut until asked for. Opened from a card's "Open diff", the drawer lands on the changes.
+  const [detailsOpen, setDetailsOpen] = useState(tab === 'diff');
+  const [earlier, setEarlier] = useState(false);
+  const now = useNow(30_000);
+  const word = useStore((store) => stateWord(store, taskId), [taskId]);
+  const steps = useStore((store) => taskPath(store, taskId), [taskId]);
+  const partWord = useStore((store) => (id: string) => stateWord(store, id), []);
+  // What happened on it, in sentences, from the engine's own events.
+  const happened = useStore((store) => happenings(detail?.story ?? [], store, now), [detail, now.getTime()]);
   const [diff, setDiff] = useState<Diff | null>(null);
   const [files, setFiles] = useState<Files | null>(null);
   // A task with a repository shows what its branch changed. One without shows the files it wrote.
@@ -130,6 +150,7 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   const [sent, setSent] = useState<Message | null>(null);
   const [error, setError] = useState<string | null>(null);
   const feed = useRef<HTMLDivElement>(null);
+  const details = useRef<HTMLDetailsElement>(null);
   const following = useRef(true);
   const sending = useRef(false);
   const nameOf = (id: string | null) => (id === 'user' ? 'you' : ((id && employees.get(id)?.name) ?? 'nobody'));
@@ -143,7 +164,11 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId, seq]);
 
-  useEffect(() => setShowing(tab), [tab, taskId]);
+  useEffect(() => {
+    setShowing(tab);
+    setDetailsOpen(tab === 'diff');
+    setEarlier(false);
+  }, [tab, taskId]);
   useEffect(() => {
     if (showing !== 'diff') return;
     let current = true;
@@ -162,7 +187,11 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
   // Follow the feed while the reader is at its end; leave them alone when they have scrolled up.
   useEffect(() => {
     if (following.current && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
-  }, [detail]);
+  }, [detail, detailsOpen, showing]);
+  // The details open below everything else: opened, they are brought into view, so nobody has to go looking for them.
+  useEffect(() => {
+    if (detailsOpen) details.current?.scrollIntoView?.({ block: 'start', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }, [detailsOpen, taskId]);
 
   if (!task) return null;
   // What stands behind the last work on it, from what the engine verified only.
@@ -197,13 +226,15 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
     return line ? [{ id: row.id, line, words: row.event.kind === 'run_event' && row.event.event.kind === 'assistant_text' }] : [];
   });
 
+  const attention = live ? (live.mode === 'review' ? 'review' : 'working') : task.state === 'blocked' ? 'waiting' : task.state === 'failed' ? 'stopped' : task.state === 'done' ? 'done' : 'idle';
+
   return (
-    <aside className="drawer" role="dialog" aria-label={task.title}>
+    <aside className="drawer task" role="dialog" aria-label={task.title}>
       <header>
         <div>
-          <div className="label">
-            {team?.name} · {task.state} · P{task.priority}
-          </div>
+          <p className="where">
+            {team?.name}. {word}.
+          </p>
           <h2>{task.title}</h2>
         </div>
         <button type="button" className="quiet" aria-label="Close" onClick={onClose}>
@@ -211,135 +242,73 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
         </button>
       </header>
 
-      {/* What the task is and where it stands, for someone who has ten seconds. Everything else is below it, folded or further down. */}
+      {/* Where it stands and what it delivers, for someone who has ten seconds. */}
       {seen && (
-        <section className="glance" aria-label="At a glance">
+        <section className="glance" aria-label="At a glance" data-attention={attention}>
+          <p className="now-line">{seen.lines[0]}</p>
           <Prose className="glance-summary" text={seen.summary} />
-          <ul className="standing">
-            {seen.lines.map((line, index) => (
-              <li key={index}>{line}</li>
+          {/* The path every task takes. The step it is on is the bright one. */}
+          <ol className="path" aria-label="Where it is on its way">
+            {steps.map((step) => (
+              <li key={step.label} data-state={step.state} aria-current={step.state === 'now' || step.state === 'held' || step.state === 'stopped' ? 'step' : undefined}>
+                {step.label}
+              </li>
             ))}
-          </ul>
+          </ol>
+          {seen.lines.length > 1 && (
+            <ul className="standing">
+              {seen.lines.slice(1).map((line, index) => (
+                <li key={index}>{line}</li>
+              ))}
+            </ul>
+          )}
           {seen.report && (
-            <div className="glance-report">
-              <div className="label">Last report · {seen.report.by}</div>
-              <Prose text={seen.report.text} />
-            </div>
+            <details className="fold plain">
+              <summary>What {seen.report.by} last reported</summary>
+              <Prose className="glance-report" text={seen.report.text} />
+            </details>
           )}
         </section>
       )}
-      {checked && (
-        <p className="checked" aria-label="What was checked">
-          {checked}
+      {detail?.builtOn?.moved && (
+        <p className="moved" role="note">
+          Something this was built on has changed since: {detail.builtOn.moved}.
         </p>
-      )}
-      {detail?.builtOn && <BuiltOnLine builtOn={detail.builtOn} />}
-
-      {/* A brief that is no longer than its summary is already said above: only what is left of it is folded here. */}
-      {(!briefSaid || task.doneCondition || task.gates.length > 0 || task.ownership.length > 0) && (
-        <details className="fold">
-          <summary>{briefSaid ? 'Done when, gates and files' : 'The full brief'}</summary>
-          <section>
-            {!briefSaid && <Prose className="brief" text={task.brief} />}
-            {task.doneCondition && (
-              <p>
-                <span className="label">Done when</span> <span>{task.doneCondition}</span>
-              </p>
-            )}
-            {task.gates.length > 0 && <p className="muted">Gates: {task.gates.join(', ')}</p>}
-            {task.ownership.length > 0 && <p className="muted">Owns: {task.ownership.join(', ')}</p>}
-          </section>
-        </details>
       )}
 
       {children.length > 0 && (
         <section>
-          <div className="label">Sub-tasks</div>
+          <h3>Parts</h3>
           {children.map((child) => (
             <button key={child.id} type="button" className="child" onClick={() => ui.openTask(child.id)}>
               <span>{child.title}</span>
-              <span className="muted">
-                {nameOf(child.assigneeId)} · {child.state}
-              </span>
+              <span className="muted">{`${child.assigneeId ? `${nameOf(child.assigneeId)}, ` : ''}${partWord(child.id).toLowerCase()}`}</span>
             </button>
           ))}
         </section>
       )}
 
-      {/* Every run and what each review found: the record, for whoever wants it. The glance above says where it stands. */}
-      {runs.length > 0 && (
-        <details className="fold">
-          <summary>{`Runs · ${runs.length}`}</summary>
-          <section>
-          {runs.map((run) => (
-            <div key={run.id} className="run">
-              <span>{`${run.mode} · ${nameOf(run.employeeId)} · ${run.outcome}${run.reason ? ` (${run.reason})` : ''}${priced ? ` · ${money(run.costUsd)}` : ''}`}</span>
-              {run.gateResults.map((gate, index) => (
-                <span key={index} className={gate.exitCode === 0 ? 'gate ok' : 'gate bad'} title={gate.output}>
-                  {gate.name} {gate.exitCode === 0 ? 'passed' : 'failed'}
-                </span>
-              ))}
-              {/* What a review found, in the reviewer's order: the numbers are the ones its author answers by. */}
-              {run.findings && run.findings.length > 0 && (
-                <ol className="findings" aria-label="What the review found">
-                  {run.findings.map((finding, index) => (
-                    <li key={index} data-severity={finding.severity}>
-                      <b>{finding.severity}</b> {`${finding.file}${finding.line ? `:${finding.line}` : ''}: ${sentence(finding.title)}${finding.why.trim() ? ` ${sentence(finding.why)}` : ''}${finding.fix.trim() ? ` Fix: ${sentence(finding.fix)}` : ''}`}
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
-          ))}
-          </section>
-        </details>
-      )}
-
-      <nav className="tabs">
-        <button type="button" className={`pill small${showing === 'feed' ? ' on' : ''}`} onClick={() => setShowing('feed')}>
-          Live feed
-        </button>
-        <button type="button" className={`pill small${showing === 'diff' ? ' on' : ''}`} onClick={() => setShowing('diff')}>
-          {hasRepo ? 'Diff' : 'Files'}
-        </button>
-      </nav>
-      {showing === 'feed' ? (
-        <div
-          className="feed"
-          ref={feed}
-          onScroll={(event) => {
-            const box = event.currentTarget;
-            following.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
-          }}
-        >
-          {lines.length === 0 ? <p className="muted">Nothing has happened on this task yet.</p> : lines.map((entry) => (entry.words ? <Prose key={entry.id} text={entry.line} /> : <p key={entry.id}>{entry.line}</p>))}
-        </div>
-      ) : hasRepo ? (
-        <div className="feed">
-          {!diff ? <p className="muted">Loading…</p> : diff.patch ? <pre>{`${diff.stat}\n\n${diff.patch}`}</pre> : <p className="muted">No changes on this task's branch yet.</p>}
-        </div>
-      ) : (
-        <div className="feed files">
-          {!files ? (
-            <p className="muted">Loading…</p>
-          ) : files.files.length === 0 ? (
-            <p className="muted">This task has not written any files yet.</p>
-          ) : (
-            <>
-              {files.files.map((file, index) => (
-                <details key={file.path} open={index === 0}>
-                  <summary>{`${file.path} · ${size(file.bytes)}`}</summary>
-                  {file.text === null ? <p className="muted">This file is not shown here: it is not text, or it is too long. It is in the folder below.</p> : <pre>{file.text}</pre>}
-                </details>
-              ))}
-              {files.more > 0 && <p className="muted">{`and ${files.more} more`}</p>}
-              <p className="muted">
-                In <code>{files.folder}</code>
-              </p>
-            </>
-          )}
-        </div>
-      )}
+      {/* What happened, in sentences. Nothing a session typed is here: that is the live feed, under the details. */}
+      <section>
+        <h3>What happened</h3>
+        {happened.length === 0 ? (
+          <p className="muted">{detail ? 'Nothing has happened on this task yet.' : 'Loading…'}</p>
+        ) : (
+          <ol className="happened" aria-label="What happened">
+            {happened.slice(0, earlier ? happened.length : HAPPENED_SHOWN).map((one) => (
+              <li key={one.id}>
+                <time>{one.at}</time>
+                <span>{one.text}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+        {happened.length > HAPPENED_SHOWN && !earlier && (
+          <button type="button" className="quiet more-work" onClick={() => setEarlier(true)}>
+            Earlier ({happened.length - HAPPENED_SHOWN})
+          </button>
+        )}
+      </section>
 
       {error && (
         <p className="error" role="alert">
@@ -357,6 +326,108 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
       </form>
       {delivered && <p className="muted">{delivered === 'delivered' ? `Your message was delivered to ${reached}.` : `Your message is waiting for ${reached}'s next turn.`}</p>}
 
+      {/* One step away: the brief in full, every run, everything a session typed, and the changes themselves. */}
+      <details ref={details} className="fold plain details" open={detailsOpen} onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
+        <summary>The details</summary>
+        <div className="details-body">
+          {checked && (
+            <p className="checked" aria-label="What was checked">
+              {checked}
+            </p>
+          )}
+          {detail?.builtOn && <BuiltOnLine builtOn={detail.builtOn} />}
+          <nav className="tabs">
+            {(
+              [
+                ['brief', 'Brief'],
+                ['runs', `Runs (${runs.length})`],
+                ['feed', 'Live feed'],
+                ['diff', hasRepo ? 'Changes' : 'Files'],
+              ] as const
+            ).map(([key, label]) => (
+              <button key={key} type="button" className={`pill small${showing === key ? ' on' : ''}`} onClick={() => setShowing(key)}>
+                {label}
+              </button>
+            ))}
+          </nav>
+          {showing === 'brief' && (
+            <section className="brief-full">
+              {!briefSaid && <Prose className="brief" text={task.brief} />}
+              {briefSaid && <p className="muted">The brief is the line at the top: there is no more of it.</p>}
+              {task.doneCondition && (
+                <p>
+                  <b>Done when:</b> {task.doneCondition}
+                </p>
+              )}
+              {task.gates.length > 0 && <p className="muted">Checks it must pass: {task.gates.join(', ')}</p>}
+              {task.ownership.length > 0 && <p className="muted">Files it may change: {task.ownership.join(', ')}</p>}
+            </section>
+          )}
+          {showing === 'runs' && (
+            <section>
+              {runs.length === 0 && <p className="muted">Nobody has run on this task yet.</p>}
+              {runs.map((run) => (
+                <div key={run.id} className="run">
+                  <span>{`${run.mode} · ${nameOf(run.employeeId)} · ${run.outcome}${run.reason ? ` (${run.reason})` : ''}${priced ? ` · ${money(run.costUsd)}` : ''}`}</span>
+                  {run.gateResults.map((gate, index) => (
+                    <span key={index} className={gate.exitCode === 0 ? 'gate ok' : 'gate bad'} title={gate.output}>
+                      {gate.name} {gate.exitCode === 0 ? 'passed' : 'failed'}
+                    </span>
+                  ))}
+                  {/* What a review found, in the reviewer's order: the numbers are the ones its author answers by. */}
+                  {run.findings && run.findings.length > 0 && (
+                    <ol className="findings" aria-label="What the review found">
+                      {run.findings.map((finding, index) => (
+                        <li key={index} data-severity={finding.severity}>
+                          <b>{finding.severity}</b> {`${finding.file}${finding.line ? `:${finding.line}` : ''}: ${sentence(finding.title)}${finding.why.trim() ? ` ${sentence(finding.why)}` : ''}${finding.fix.trim() ? ` Fix: ${sentence(finding.fix)}` : ''}`}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              ))}
+            </section>
+          )}
+          {showing === 'feed' && (
+            <div
+              className="feed"
+              ref={feed}
+              onScroll={(event) => {
+                const box = event.currentTarget;
+                following.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+              }}
+            >
+              {lines.length === 0 ? <p className="muted">Nothing has happened on this task yet.</p> : lines.map((entry) => (entry.words ? <Prose key={entry.id} text={entry.line} /> : <p key={entry.id}>{entry.line}</p>))}
+            </div>
+          )}
+          {showing === 'diff' &&
+            (hasRepo ? (
+              <div className="feed">{!diff ? <p className="muted">Loading…</p> : diff.patch ? <pre>{`${diff.stat}\n\n${diff.patch}`}</pre> : <p className="muted">No changes on this task's branch yet.</p>}</div>
+            ) : (
+              <div className="feed files">
+                {!files ? (
+                  <p className="muted">Loading…</p>
+                ) : files.files.length === 0 ? (
+                  <p className="muted">This task has not written any files yet.</p>
+                ) : (
+                  <>
+                    {files.files.map((file, index) => (
+                      <details key={file.path} open={index === 0}>
+                        <summary>{`${file.path} · ${size(file.bytes)}`}</summary>
+                        {file.text === null ? <p className="muted">This file is not shown here: it is not text, or it is too long. It is in the folder below.</p> : <pre>{file.text}</pre>}
+                      </details>
+                    ))}
+                    {files.more > 0 && <p className="muted">{`and ${files.more} more`}</p>}
+                    <p className="muted">
+                      In <code>{files.folder}</code>
+                    </p>
+                  </>
+                )}
+              </div>
+            ))}
+        </div>
+      </details>
+
       <footer>
         {live && (
           <button type="button" className="pill small" onClick={() => void api.post(`/api/runs/${live.id}/stop`).catch(fail)}>
@@ -371,9 +442,11 @@ export function TaskDrawer({ taskId, tab = 'feed', onClose }: { taskId: string; 
         <label className="inline">
           Priority
           <select className="field" value={task.priority} onChange={(event) => void api.patch(`/api/tasks/${taskId}`, { priority: Number(event.target.value) }).catch(fail)}>
-            <option value={1}>P1</option>
-            <option value={2}>P2</option>
-            <option value={3}>P3</option>
+            {([1, 2, 3] as const).map((priority) => (
+              <option key={priority} value={priority}>
+                {priorityWord(priority)}
+              </option>
+            ))}
           </select>
         </label>
       </footer>
