@@ -152,6 +152,9 @@ describe('a design meeting', () => {
     expect(followUps.map((task) => [task.teamId, task.title, task.builtOn?.decisions])).toEqual([['ios', 'Show the stages', [decided!.id]], ['rust', 'Serve the stages', [decided!.id]]]);
     const told = store.recentMessages(setup.w.db, 20).filter((message) => message.fromId === 'neo' && message.toId === 'user');
     expect(told.at(-1)!.text).toMatch(new RegExp(`^Design agreed: Stages on cards\\. Decided ${decided!.id}: Cards carry a short title, and it is required\\. Contract 0\\.1\\.0\\. Tickets: iOS "Show the stages", Rust "Serve the stages"\\.$`));
+    // The lead who called it is told how it ended, in the same words.
+    const caller = store.recentMessages(setup.w.db, 40).filter((message) => message.toId === 'ilead' && message.fromId === 'neo');
+    expect(caller.map((message) => message.text)).toEqual([`The design meeting you called is over. ${told.at(-1)!.text}`]);
   });
 
   it('goes back to the author when a lead sends it back, and every lead reviews again', async () => {

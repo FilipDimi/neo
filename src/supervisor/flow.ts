@@ -14,7 +14,7 @@ import { addedLines, changedFiles, commitAll, diffStat, discardChanges, NestedRe
 import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
 import type { GateLimits, GateOptions, GateQueue } from '../git/gates.ts';
 import { must, type Identity } from '../git/git.ts';
-import { isMerged, landOn, mergeInto } from '../git/merge.ts';
+import { carryPaths, isMerged, landOn, mergeInto, type Carried } from '../git/merge.ts';
 import { treeOf } from '../git/tree.ts';
 import { outside, owns } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
@@ -23,6 +23,9 @@ import { checkedLine, countsCost } from '../shared/view.ts';
 import { TOOL_INPUT, type Check } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import { waitingOn } from './planning.ts';
+import { familyOf, isStale, movedFor, movedText } from './stale.ts';
+import { openWork, tell, tellTicket } from './tell.ts';
+import { compareVersions } from './record.ts';
 import { hasFiles, type Claims } from './proof.ts';
 import { builtOnFor, contractProblem, issueContractVersion } from './record.ts';
 import { dirOf, entriesFor, padded, underRecord, writeRecordFiles } from './recordFiles.ts';
@@ -944,8 +947,10 @@ export class Flow {
     const before = lastVerdict?.reason === VERDICT.send_back && (lastVerdict.findings?.length ?? 0) > 0 ? lastVerdict : undefined;
     const parts = this.partsOfTask(task.id).filter((child) => child.state === 'done');
     const nameOf = (id: string | null | undefined): string => (id && store.getEmployee(this.db, id)?.name) || 'someone';
+    const moved = movedFor(this.db, task);
     const material = {
       ...(next ? { meeting: reviewMaterial(this.db, task, next.team) } : {}),
+      ...(isStale(moved) ? { moved: movedText(moved) } : {}),
       summary: run.summary,
       gateResults: run.gateResults,
       checks: run.checks,
@@ -1110,9 +1115,15 @@ export class Flow {
     for (let attempt = 0; attempt < 3; attempt++) {
       const landing = await landOn(site.repo.path, site.folder, task.branch!, target, ENGINE, recheck);
       switch (landing.result) {
-        case 'landed':
+        case 'landed': {
           this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(this.db, task.id)!, mergedInto: target, landed: { over: landing.over, tip: landing.tip }, updatedAt: now.toISOString() }, cause: 'edited' }));
-          return this.complete(task.id);
+          // A contract version landed with it: the contract is carried to the other teams' branches while the folder is still there,
+          // and once the task is done whoever was built on an older version is told.
+          const carried = await this.carryContract(task, site, target, landing).catch(() => null);
+          await this.complete(task.id);
+          if (carried) this.tellContract(store.getTask(this.db, task.id)!, site.repo, target, carried, lastRun?.employeeId ?? task.createdBy);
+          return;
+        }
         case 'checkout_dirty':
           return ask(`"${task.title}" is ready to merge into ${target}, but your checkout at ${landing.where} has uncommitted changes on that branch, so the engine did not touch it. Merge once it is clean, or keep the branch.`, target);
         case 'gates_failed':
@@ -1133,6 +1144,53 @@ export class Flow {
       }
     }
     throw new Error(`${target} kept moving while "${task.title}" tried to land on it`);
+  }
+
+  /**
+   * The contract version this landing brought, carried to every other branch a team of the repository lands on. Null
+   * when the task and its parts changed no contract. Each branch with what became of it there.
+   */
+  private async carryContract(task: Task, site: { repo: Repo; folder: string }, target: string, landing: { over: string; tip: string }): Promise<{ version: string; branches: Map<string, Carried> } | null> {
+    const paths = (site.repo.contract?.paths ?? []).map((entry) => entry.replace(/\/\*{1,2}$/, '').replace(/\/+$/, ''));
+    const family = familyOf(this.db, task);
+    const brought = store.contractVersions(this.db, site.repo.id).filter((version) => version.taskId && family.has(version.taskId));
+    if (paths.length === 0 || brought.length === 0) return null;
+    const version = brought.map((one) => one.version).reduce((highest, one) => (compareVersions(one, highest) > 0 ? one : highest));
+    const others = new Set(store.allTeams(this.db).flatMap((team) => team.repos.filter((entry) => entry.repoId === site.repo.id && entry.mergeTarget && entry.mergeTarget !== target).map((entry) => entry.mergeTarget!)));
+    const branches = new Map<string, Carried>();
+    for (const branch of others) {
+      const result = await carryPaths({ repoPath: site.repo.path, dir: site.folder, from: landing.tip, was: landing.over, branch, paths, message: `Contract ${version}, from ${target}`, engine: ENGINE }).catch((): Carried => 'moved');
+      branches.set(branch, result);
+    }
+    return { version, branches };
+  }
+
+  /** A newer contract has landed: every open ticket of the repository built on an older one is told, and so is a team whose branch it could not be carried to. */
+  private tellContract(landed: Task, repo: Repo, target: string, carried: { version: string; branches: Map<string, Carried> }, fromId: string): void {
+    const family = familyOf(this.db, landed);
+    const paths = (repo.contract?.paths ?? []).join(', ');
+    const there = (result: Carried | undefined): boolean => result === 'carried' || result === 'same';
+    this.change((tx, now) => {
+      for (const task of openWork(this.db).filter((open) => open.repoId === repo.id && !family.has(open.id))) {
+        const moved = movedFor(this.db, task).contract;
+        if (!moved) continue;
+        const entry = store.getTeam(this.db, task.teamId)?.repos.find((one) => one.repoId === repo.id);
+        const branch = entry?.mergeTarget ?? entry?.baseBranch ?? target;
+        const where = branch === target ? '' : there(carried.branches.get(branch)) ? `, and the engine carried it to ${branch}` : `; it is not on ${branch} yet`;
+        tellTicket(tx, this.db, now, task, fromId, `the contract is now ${moved.to} (this ticket was made at ${moved.from}). ${moved.changes.join(' ')} It landed on ${target}${where}. Check whether your work depends on what changed.`);
+      }
+      for (const [branch, result] of carried.branches) {
+        if (there(result)) continue;
+        const why = result === 'not_in_step' ? `the contract there is not what it was on ${target} before this change` : result === 'checkout_dirty' ? 'that branch is checked out with changes that are not committed' : 'the branch moved while the engine wrote to it';
+        // Whoever speaks for the teams that land there: their lead, or on a team without one its people.
+        const teams = store.allTeams(this.db).filter((team) => team.repos.some((one) => one.repoId === repo.id && one.mergeTarget === branch));
+        const people = new Set(teams.flatMap((team) => (team.leadId ? [team.leadId] : store.allEmployees(this.db).filter((employee) => employee.teamId === team.id).map((employee) => employee.id))));
+        for (const toId of people) {
+          if (store.getEmployee(this.db, toId)?.fired !== false) continue;
+          tell(tx, now, { toId, fromId, taskId: null, text: `Contract ${carried.version} landed on ${target}, and the engine could not carry it to ${branch}: ${why}. Bring ${paths} over from ${target} as work of your team.` });
+        }
+      }
+    });
   }
 
   /** Marks the task done, clears its folder, and tells its parent. */

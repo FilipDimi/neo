@@ -129,7 +129,7 @@ export type Question = { from: string; text: string; choices: string[] };
 export type Previous = { by: string; findings: Finding[] };
 /** A task its lead split, put together again: who did that, and the parts, each reviewed on its own already. */
 export type Whole = { by: string; parts: { title: string; by: string }[] };
-export type Material = { summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; checks?: VerifiedCheck[] | undefined; notes?: string; mergeState?: string; parts?: Part[]; question?: Question; previous?: Previous; whole?: Whole; meeting?: ReviewMeeting };
+export type Material = { moved?: string; summary?: string | null; diffStat?: string; patch?: string; gateResults?: GateResult[]; checks?: VerifiedCheck[] | undefined; notes?: string; mergeState?: string; parts?: Part[]; question?: Question; previous?: Previous; whole?: Whole; meeting?: ReviewMeeting };
 
 /** A lead reviewing a meeting's design for its team: what the meeting is about, its own position, and what the design proposes. */
 function meetingLines(meeting: ReviewMeeting): string {
@@ -298,7 +298,7 @@ ${
       return `${header}
 
 You are reviewing this work, not doing it. The changed files are in your folder; read them.
-${material.meeting ? meetingLines(material.meeting) : ''}${
+${material.meeting ? meetingLines(material.meeting) : ''}${material.moved ? `\nSince this ticket was made, what it is built on has moved: ${material.moved} Check the work against what holds now, not against what held when the ticket was written.\n` : ''}${
   material.whole
     ? `\nThis is the whole task, put together by ${material.whole.by} from these sub-tasks, each of which was reviewed and approved on its own:\n${material.whole.parts.map((part) => `- "${part.title}", by ${part.by}`).join('\n')}\nDo not review the parts again. Review how they fit: what one part assumes of another, what fell between them, what was changed in putting them together, and whether the whole meets the done-condition.\n`
     : ''

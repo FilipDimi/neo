@@ -6,6 +6,7 @@
 import { apply, type Tx } from '../db/apply.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
+import { openWork, sentence, tellTicket } from './tell.ts';
 import type { ToolReply } from '../runtime/tools.ts';
 import type { ContractVersion, Decision, RecordEntry, Run, Task } from '../shared/types.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
@@ -52,7 +53,13 @@ export function recordDecision(tx: Tx, db: Db, now: Date, input: NewEntry): Reco
     ...(about ? { taskTitle: about.title } : {}),
   };
   tx.emit({ kind: 'record_changed', entry });
-  if (replaced) tx.emit({ kind: 'record_changed', entry: { ...replaced, replacedBy: entry.id } });
+  if (replaced) {
+    tx.emit({ kind: 'record_changed', entry: { ...replaced, replacedBy: entry.id } });
+    // Every open ticket built on the old one is told, at once, by whoever decided.
+    for (const task of openWork(db).filter((open) => open.builtOn?.decisions.includes(replaced.id))) {
+      tellTicket(tx, db, now, task, input.by.employeeId ?? 'user', `${replaced.id}, which this ticket is built on, was replaced by ${entry.id}: ${sentence(entry.statement)} Check your work against it.`);
+    }
+  }
   return entry;
 }
 

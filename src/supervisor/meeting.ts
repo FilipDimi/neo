@@ -14,6 +14,7 @@ import type { z } from 'zod';
 import * as decisions from './decisions.ts';
 import { builtOnFor, recordDecision } from './record.ts';
 import { requestFor } from './scheduler.ts';
+import { tell } from './tell.ts';
 
 export type MeetingCall = z.infer<typeof TOOL_INPUT.call_meeting>;
 type Report = z.infer<typeof TOOL_INPUT.report_done>;
@@ -288,8 +289,8 @@ export function settleMeeting(tx: Tx, db: Db, now: Date, meeting: Task): void {
     made.push(`${team.name} "${wanted.title}"`);
   }
   const chiefId = store.getCompany(db)?.chiefOfStaffId;
-  const chief = chiefId ? store.getEmployee(db, chiefId) : undefined;
-  if (!chief || chief.fired) return;
+  const found = chiefId ? store.getEmployee(db, chiefId) : undefined;
+  const chief = found && !found.fired ? found : undefined;
   const sentence = (text: string) => text.trim().replace(/[.\s]+$/, '');
   // Who accepted it as it is, when the leads did not all agree, and why: the card's answer says.
   const accepted = store.allDecisions(db).findLast((card) => card.taskId === meeting.id && card.kind === 'review' && card.answer?.optionId === 'accept');
@@ -309,7 +310,11 @@ export function settleMeeting(tx: Tx, db: Db, now: Date, meeting: Task): void {
     .filter(Boolean)
     .join(' ');
   const at = now.toISOString();
-  tx.emit({ kind: 'message_sent', message: { id: store.newId(), fromId: chief.id, toId: 'user', taskId: meeting.id, text, state: 'delivered', at, deliveredAt: at } });
+  if (chief) tx.emit({ kind: 'message_sent', message: { id: store.newId(), fromId: chief.id, toId: 'user', taskId: meeting.id, text, state: 'delivered', at, deliveredAt: at } });
+  // Whoever called the meeting is told how it ended, as the user is: its own work was waiting on nothing, and now knows.
+  const caller = store.getEmployee(db, m.calledBy);
+  const from = chief?.id ?? writer;
+  if (caller && !caller.fired && caller.id !== chief?.id && from) tell(tx, now, { toId: caller.id, fromId: from, taskId: null, text: `The design meeting you called is over. ${text}` });
 }
 
 /** What the one who called the meeting is told. */

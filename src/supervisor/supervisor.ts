@@ -4,7 +4,7 @@
  */
 import os from 'node:os';
 import path from 'node:path';
-import { apply, type Tx } from '../db/apply.ts';
+import { apply, onEvents, type Tx } from '../db/apply.ts';
 import { engineFiles, paths as pathsOf, type Paths } from '../db/dataDir.ts';
 import { leadsTo } from '../git/paths.ts';
 import type { Db } from '../db/open.ts';
@@ -34,6 +34,7 @@ import { dirOf } from './recordFiles.ts';
 import { holdMeeting, meetingReply, planMeeting, proposalsOf, type MeetingCall, type Proposals } from './meeting.ts';
 import { planLines, resolveAfter, waitingOn } from './planning.ts';
 import { verifyClaims, type Claims } from './proof.ts';
+import { isStale, movedFor, movedText, upToDate } from './stale.ts';
 import { account, askText, BUDGET, called, looked, MOVES, newWatch, progressed, refusal, refused, resulted, undelivered, type Budget, type Watch } from './progress.ts';
 import { printOf, treeOf } from '../git/tree.ts';
 import { recover } from './recover.ts';
@@ -107,6 +108,10 @@ export class Supervisor {
   private readonly reports = new Map<string, string>();
   /** What each run's report or review said was checked and held, until the run ends. */
   private readonly claims = new Map<string, Claims>();
+  /** Runs whose report was held once because what their ticket is built on had moved: the next one is taken. */
+  private readonly heldStale = new Set<string>();
+  /** Stops hearing the engine's own changes. */
+  private readonly unhear: () => void;
   /** The progress watch of each live run: what it called since it last got somewhere. */
   private readonly watches = new Map<string, Watch>();
   private readonly budget: Budget;
@@ -135,6 +140,11 @@ export class Supervisor {
     this.wallClock = options.wallClock ?? Date.now;
     this.apiPort = options.apiPort ?? 4317;
     this.runtimeModule = options.runtimeModule;
+    // A message that is written while its reader is running reaches that session as its next turn, whoever wrote it: the
+    // user, a colleague, or the engine telling it that something it depends on has changed.
+    this.unhear = onEvents(this.db, (rows) => {
+      for (const row of rows) if (row.event.kind === 'message_sent' && row.event.message.state === 'waiting') this.forward(row.event.message);
+    });
     this.budget = { ...BUDGET, ...options.progress };
     this.processes = options.processes ?? processes;
     this.dataDir = options.dataDir;
@@ -190,6 +200,7 @@ export class Supervisor {
 
   /** Stops the loop and every worker. Runs left in flight are picked up by recovery at the next start. */
   async stop(): Promise<void> {
+    this.unhear();
     clearInterval(this.timer);
     clearInterval(this.healthTimer);
     this.timer = undefined;
@@ -284,10 +295,15 @@ export class Supervisor {
     if (!toId || !store.getEmployee(this.db, toId)) throw new Error('there is nobody to deliver this message to');
     const now = this.now();
     const message: Message = { id: store.newId(), fromId, toId, taskId: task?.id ?? null, text, state: 'waiting', at: now.toISOString(), deliveredAt: null };
+    // Written down, it is passed on to the session if its reader is running (see `forward`).
     apply(this.db, (tx) => tx.emit({ kind: 'message_sent', message }), now);
-    const live = store.liveRuns(this.db).find((run) => run.employeeId === toId);
-    this.links.get(live?.id ?? '')?.send({ t: 'message', id: message.id, text: `Message from ${this.nameOf(fromId)}: ${text}` });
     return message;
+  }
+
+  /** Passes a waiting message to its reader's running session, if there is one: it is that session's next turn. */
+  private forward(message: Message): void {
+    const live = store.liveRuns(this.db).find((run) => run.employeeId === message.toId);
+    this.links.get(live?.id ?? '')?.send({ t: 'message', id: message.id, text: `Message from ${this.nameOf(message.fromId)}: ${message.text}` });
   }
 
   /** Stops a task for good: it fails, with everything under it, and its runs end. */
@@ -993,6 +1009,18 @@ export class Supervisor {
         // The draft of a meeting's design proposes decisions and tickets; nothing else does.
         const proposed = proposalsOf(this.db, store.getTask(this.db, run.taskId), report);
         if ('refused' in proposed) return { ok: false, text: proposed.refused };
+        // A ticket built on something that has since moved: its report is held once, until its author has answered for the change.
+        const reported = store.getTask(this.db, run.taskId);
+        const moved = reported && run.mode !== 'review' && run.mode !== 'route' ? movedFor(this.db, reported) : null;
+        if (reported && moved && isStale(moved)) {
+          if (!this.heldStale.has(run.id)) {
+            this.heldStale.add(run.id);
+            return { ok: false, text: `Not yet: what this ticket is built on has moved since it was made. ${movedText(moved)} Check your work against it, change what has to change, then report again and say in your summary how your work stands against it.` };
+          }
+          // It has been told and reports again: from here the ticket is built on what is current.
+          const current = upToDate(this.db, reported);
+          apply(this.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...reported, ...(current ? { builtOn: current } : {}), updatedAt: now.toISOString() }, cause: 'edited' }), now);
+        }
         this.reports.set(run.id, report.summary);
         this.claims.set(run.id, claims);
         if (proposed.proposals) this.proposals.set(run.id, proposed.proposals);
@@ -1160,6 +1188,7 @@ export class Supervisor {
     this.reports.delete(runId);
     this.claims.delete(runId);
     this.watches.delete(runId);
+    this.heldStale.delete(runId);
     this.proposals.delete(runId);
     this.routed.delete(runId);
     this.allowedWrites.delete(runId);

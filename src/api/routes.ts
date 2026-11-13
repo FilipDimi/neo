@@ -10,6 +10,7 @@ import { apply, lastEventId, readEvents } from '../db/apply.ts';
 import { paths as pathsOf } from '../db/dataDir.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
+import { movedFor, staleLine } from '../supervisor/stale.ts';
 import { git } from '../git/git.ts';
 import { folderOf } from '../supervisor/jobs.ts';
 import { diffOf } from './diff.ts';
@@ -268,7 +269,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     const task = found(store.getTask(db, id(request)), 'such task');
     const events = readEvents(db, 0, 100_000, task.id).slice(-200);
     // What it is built on, with the decisions themselves: the record is not in the snapshot, so the drawer gets what it shows from here.
-    const builtOn = { entries: indexFor(db, task).cited, contract: task.builtOn?.contract ?? null, changesContractTo: task.contractVersion ?? null };
+    const builtOn = { entries: indexFor(db, task).cited, contract: task.builtOn?.contract ?? null, changesContractTo: task.contractVersion ?? null, moved: staleLine(movedFor(db, task)) };
     return { task, children: store.listTasks(db, { parentId: task.id }), runs: store.runsOf(db, task.id), events, decisions: store.openDecisions(db, task.id), builtOn };
   });
 

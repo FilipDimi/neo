@@ -7,6 +7,7 @@ import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { ago, checkedLine, countsCost, WHY } from '../shared/view.ts';
 import { waitingOn } from './planning.ts';
+import { movedFor, staleLine } from './stale.ts';
 
 const SHOWN_PER_TEAM = 12;
 
@@ -66,7 +67,12 @@ export function companyNow(db: Db, now: Date): string {
                 : task.state === 'queued'
                   ? `waiting to start, for ${name(task.assigneeId ?? team.leadId)}`
                   : `nobody is on it right now (${name(task.assigneeId ?? team.leadId)} has it)`;
-      lines.push(`- "${task.title}" (${task.state}): ${what}`);
+      // Computed, never asked for: how far a split has come, and whether what the task is built on has moved.
+      const open = task.state !== 'done' && task.state !== 'failed';
+      const parts = open ? work.filter((child) => child.parentId === task.id && !child.meetingRole && !child.dropped) : [];
+      const progress = parts.length > 0 ? `; ${parts.filter((child) => child.state === 'done').length} of ${parts.length} parts done` : '';
+      const stale = open ? staleLine(movedFor(db, task)) : null;
+      lines.push(`- "${task.title}" (${task.state}): ${what}${progress}${stale ? `; ${stale}` : ''}`);
     }
     if (mine.length > SHOWN_PER_TEAM) lines.push(`- and ${mine.length - SHOWN_PER_TEAM} more`);
   }

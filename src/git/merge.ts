@@ -3,6 +3,10 @@
  * folder; a finished branch lands on its target only by fast-forward, and never under a
  * checkout that has uncommitted changes.
  */
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { assertOwnGitDir, git, must, type Identity } from './git.ts';
 import { checkoutOf, publish } from './folder.ts';
 
@@ -62,4 +66,69 @@ export async function landOn(repoPath: string, dir: string, branch: string, targ
   const forwarded = await git(checkout, ['merge', '-q', '--ff-only', branch]);
   if (forwarded.code === 0) return landed;
   return /untracked|overwritten/i.test(forwarded.out) ? { result: 'checkout_dirty', where: checkout } : { result: 'target_moved' };
+}
+
+export type Carried = 'carried' | 'same' | 'not_in_step' | 'checkout_dirty' | 'moved';
+
+/**
+ * Carries some paths, as they are at one commit, onto another branch of the user's repository, as one commit of the
+ * engine's on top of that branch. Only where that branch held those paths exactly as they `was` before the change:
+ * otherwise something there would be overwritten that nobody looked at, and nothing is done. The branch moves by
+ * fast-forward only, and never under someone's uncommitted work. Nothing in the folder's working tree is touched.
+ */
+export async function carryPaths(input: { repoPath: string; dir: string; from: string; was: string; branch: string; paths: string[]; message: string; engine: Identity }): Promise<Carried> {
+  const { repoPath, dir, from, was, branch, paths, engine } = input;
+  assertOwnGitDir(dir);
+  if ((await git(dir, ['fetch', '-q', 'origin', `refs/heads/${branch}`])).code !== 0) return 'moved';
+  const onto = await must(dir, ['rev-parse', 'FETCH_HEAD']);
+  // What a path is at a commit: the hash of its tree or file, or that it is not there.
+  const at = async (commit: string, file: string): Promise<string> => {
+    const found = await git(dir, ['rev-parse', '-q', '--verify', `${commit}:${file}`]);
+    return found.code === 0 ? found.out.trim() : 'absent';
+  };
+  let same = true;
+  let inStep = true;
+  for (const file of paths) {
+    const there = await at(onto, file);
+    if (there !== (await at(from, file))) same = false;
+    if (there !== (await at(was, file))) inStep = false;
+  }
+  if (same) return 'same';
+  if (!inStep) return 'not_in_step';
+
+  const index = path.join(os.tmpdir(), `vs-carry-${randomUUID()}`);
+  const env = { GIT_INDEX_FILE: index };
+  const ref = `refs/carry/${randomUUID()}`;
+  try {
+    await must2(dir, ['read-tree', onto], env);
+    for (const file of paths) {
+      // Only the scratch index is changed: -f, because git would otherwise compare it with the folder's files, which are another branch's.
+      await must2(dir, ['rm', '-r', '-q', '-f', '--cached', '--ignore-unmatch', '--', file], env);
+      const entry = (await git(dir, ['ls-tree', from, '--', file])).out.trim();
+      if (!entry) continue; // not there at the source: it goes
+      const [meta] = entry.split('\t');
+      const [mode, type, hash] = meta!.split(' ');
+      if (type === 'tree') await must2(dir, ['read-tree', `--prefix=${file.replace(/\/+$/, '')}/`, hash!], env);
+      else await must2(dir, ['update-index', '--add', '--cacheinfo', `${mode},${hash},${file}`], env);
+    }
+    const tree = await must2(dir, ['write-tree'], env);
+    const commit = (await git(dir, ['commit-tree', tree, '-p', onto, '-m', input.message], engine, { GIT_AUTHOR_NAME: engine.name, GIT_AUTHOR_EMAIL: engine.email, GIT_COMMITTER_NAME: engine.name, GIT_COMMITTER_EMAIL: engine.email })).out.trim();
+    if (!/^[0-9a-f]{40,64}$/.test(commit)) return 'moved';
+    await must(dir, ['update-ref', ref, commit]);
+    const checkout = await checkoutOf(repoPath, branch);
+    if (checkout === null) return (await git(repoPath, ['fetch', '-q', dir, `${ref}:refs/heads/${branch}`])).code === 0 ? 'carried' : 'moved';
+    if ((await must(checkout, ['status', '--porcelain', '--untracked-files=no'])) !== '') return 'checkout_dirty';
+    await must(repoPath, ['fetch', '-q', dir, ref]);
+    return (await git(checkout, ['merge', '-q', '--ff-only', commit])).code === 0 ? 'carried' : 'checkout_dirty';
+  } finally {
+    fs.rmSync(index, { force: true });
+    fs.rmSync(`${index}.lock`, { force: true });
+    await git(dir, ['update-ref', '-d', ref]);
+  }
+}
+
+async function must2(cwd: string, args: string[], env: Record<string, string>): Promise<string> {
+  const result = await git(cwd, args, undefined, env);
+  if (result.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.out}`);
+  return result.out.trim();
 }
