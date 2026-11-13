@@ -76,19 +76,59 @@ describe('App', () => {
     expect(await screen.findByRole('region', { name: 'Queued' })).toBeTruthy();
   });
 
-  it('keeps the deck folded on the office until asked, and pinned on the board', async () => {
+  it('keeps the deck folded into the amber pill on every view until asked: a card can be a page long, and the page under it is what was opened', async () => {
     const app = start(snapshotApi(), 'lease_card');
     await screen.findByText('lit screen = working');
     await app.play();
-    expect(screen.queryByRole('region', { name: 'Decisions waiting for you' })).toBeNull();
+    const deck = () => screen.queryByRole('region', { name: 'Decisions waiting for you' });
+    expect(deck()).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Decide for NH' }));
-    const deck = screen.getByRole('region', { name: 'Decisions waiting for you' });
-    expect(deck.querySelector('.focused')).not.toBeNull();
+    expect(deck()!.querySelector('.focused')).not.toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Close the decision deck' }));
-    expect(screen.queryByRole('region', { name: 'Decisions waiting for you' })).toBeNull();
+    expect(deck()).toBeNull();
 
+    // The board and the hire view are the same: the cards are not on them until the pill is pressed.
+    for (const view of ['Board', 'Hire']) {
+      await userEvent.click(screen.getByRole('button', { name: view }));
+      expect(deck(), view).toBeNull();
+      const pill = screen.getByRole('button', { name: /^Open the decision deck, \d+ waiting$/ });
+      await userEvent.click(pill);
+      expect(deck(), view).not.toBeNull();
+      // The pill shuts it again, and so do Escape and the Close button.
+      await userEvent.click(pill);
+      expect(deck(), view).toBeNull();
+      await userEvent.click(pill);
+      await userEvent.keyboard('{Escape}');
+      expect(deck(), view).toBeNull();
+      await userEvent.click(pill);
+      await userEvent.click(screen.getByRole('button', { name: 'Close the decision deck' }));
+      expect(deck(), view).toBeNull();
+    }
+    // Going to another view shuts it.
+    await userEvent.click(screen.getByRole('button', { name: /^Open the decision deck/ }));
+    expect(deck()).not.toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Board' }));
+    expect(deck()).toBeNull();
+  });
+
+  it('shuts the deck when its last card is answered, and a card raised later does not open it by itself', async () => {
+    const app = start(snapshotApi(), 'lease_card');
+    await screen.findByText('lit screen = working');
+    await app.play();
+    await userEvent.click(screen.getByRole('button', { name: 'Board' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Open the decision deck/ }));
     expect(screen.getByRole('region', { name: 'Decisions waiting for you' })).toBeTruthy();
+    // Every open card is answered elsewhere, then one of them is raised again.
+    const { store } = storyAt('lease_card');
+    const open = [...store.decisions.values()].filter((card) => card.answeredAt === null);
+    expect(open.length).toBeGreaterThan(0);
+    const send = (id: number, event: unknown) => act(async () => app.made[0]!.onmessage?.({ data: JSON.stringify({ id, at: new Date().toISOString(), taskId: null, runId: null, employeeId: null, teamId: null, event }) }));
+    let id = store.lastEventId;
+    for (const card of open) await send(++id, { kind: 'decision_answered', decision: { ...card, answer: { optionId: card.options[0]!.id }, answeredAt: new Date().toISOString() }, result: 'applied' });
+    expect(screen.queryByRole('region', { name: 'Decisions waiting for you' })).toBeNull();
+    await send(++id, { kind: 'decision_raised', decision: { ...open[0]!, id: 'later' } });
+    expect(screen.getByRole('button', { name: 'Open the decision deck, 1 waiting' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Decisions waiting for you' })).toBeNull();
   });
 
   it("opens a person's page from the office and closes it", async () => {

@@ -4,8 +4,8 @@ import { useNow, useStore } from '../store/store.ts';
 import { DecisionCard } from './DecisionCard.tsx';
 
 /**
- * The decision deck: every open card, newest first, pinned under the header on every view.
- * An unanswered card never goes away by itself; "Not now" only puts it aside on this screen.
+ * The decision deck: every open card, newest first. It is folded into the amber pill until asked for, on every view,
+ * and then lies over the page. An unanswered card never goes away by itself; "Not now" only puts it aside on this screen.
  */
 export function Deck({ focus }: { focus?: string | undefined }) {
   const now = useNow(15_000);

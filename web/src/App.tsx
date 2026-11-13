@@ -105,7 +105,8 @@ function Shell() {
         setView(next);
         setDeck({ open: false, focus: undefined });
       },
-      openDeck: (decisionId) => setDeck({ open: true, focus: decisionId }),
+      // Asked for by a card's own button, it opens on that card. Asked for by the pill, it opens, and shuts if it was open.
+      openDeck: (decisionId) => setDeck((current) => (decisionId === undefined && current.open ? { open: false, focus: undefined } : { open: true, focus: decisionId })),
       openTask(id, tab) {
         setPerson(null);
         setTask({ id, tab });
@@ -117,6 +118,17 @@ function Shell() {
     }),
     [view],
   );
+
+  // The deck shuts when its last card is answered, and stays shut: a card raised later does not open it by itself.
+  useEffect(() => {
+    if (cards === 0) setDeck({ open: false, focus: undefined });
+  }, [cards]);
+  useEffect(() => {
+    if (!deck.open) return;
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && setDeck({ open: false, focus: undefined });
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  }, [deck.open]);
 
   if (!hasCompany)
     return (
@@ -131,11 +143,11 @@ function Shell() {
       <div className="app">
         <Banner />
         {!office && <Header />}
-        {!office && <Deck focus={deck.focus} />}
         <main className="app-main">{office ? <Office /> : view === 'board' ? <Board /> : <Company />}</main>
-        {/* On the office the deck stays folded into the amber pill until it is asked for. */}
-        {office && deck.open && cards > 0 && (
-          <div className="office-deck">
+        {/* On every view the deck stays folded into the amber pill until it is asked for, and then lies over the page:
+            a card can be a page long, and the board or the hire form under it is what was opened. */}
+        {deck.open && cards > 0 && (
+          <div className="open-deck">
             <Deck focus={deck.focus} />
             <button type="button" className="pill small" aria-label="Close the decision deck" onClick={() => setDeck({ open: false, focus: undefined })}>
               Close

@@ -4,8 +4,9 @@
 .app-chat { flex: none; padding: 10px 24px 14px; border-top: 1px solid var(--header-line); display: flex; justify-content: flex-end; }
 .app-chat .chat { width: min(520px, 100%); }
 .app-chat .chat-line { min-height: 44px; padding-top: 3px; padding-bottom: 3px; border-radius: 22px; }
-.office-deck { position: absolute; top: 76px; left: 24px; right: 24px; z-index: 10; display: flex; align-items: flex-start; gap: 8px; }
-.office-deck .deck { flex-grow: 1; min-width: 0; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6); }
+/* The deck, asked for: over the page, under the bar, never taller than the window. */
+.open-deck { position: absolute; top: 76px; left: 24px; right: 24px; z-index: 10; display: flex; align-items: flex-start; gap: 8px; }
+.open-deck .deck { flex-grow: 1; min-width: 0; max-height: calc(100vh - 100px); overflow-y: auto; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6); }
 
 /* One message of a conversation with one person, on that person's page: theirs across the page, yours to the right. */
 .said {
