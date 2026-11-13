@@ -22,6 +22,8 @@ const TABLE: [TaskEvent, TaskState, TaskState][] = [
   ['fail', 'running', 'failed'],
   ['fail', 'review', 'failed'],
   ['fail', 'blocked', 'failed'],
+  ['wait', 'briefing', 'queued'],
+  ['wait', 'running', 'queued'],
 ];
 const STATES: TaskState[] = ['queued', 'briefing', 'running', 'review', 'blocked', 'done', 'failed'];
 const EVENTS = Object.keys(TRANSITIONS) as TaskEvent[];

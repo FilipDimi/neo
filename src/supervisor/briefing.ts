@@ -10,7 +10,7 @@ export const MAX_SUBTASKS = 8;
 
 export type ProposalReason = { code: 'unusable_ownership' | 'empty' | 'too_many' | 'overlap' | 'unknown_assignee' | 'assignee_not_in_team' | 'assignee_fired' | 'missing_done_condition' | 'unknown_gate' | 'caps_exceed_parent' | 'parent_is_a_child' | 'outside_parent' | 'unknown_order' | 'circular_order'; text: string };
 
-export function validateProposal(input: { parent: Task; team: Team; employees: Employee[]; repo: Repo | null; remainingUsd: number; subtasks: SubtaskProposal[] }): { ok: true } | { ok: false; reasons: ProposalReason[] } {
+export function validateProposal(input: { parent: Task; team: Team; employees: Employee[]; repo: Repo | null; remainingUsd: number; subtasks: SubtaskProposal[]; openTasks?: ReadonlySet<string> }): { ok: true } | { ok: false; reasons: ProposalReason[] } {
   const { parent, team, subtasks } = input;
   const reasons: ProposalReason[] = [];
   const add = (code: ProposalReason['code'], text: string) => void reasons.push({ code, text });
@@ -41,7 +41,7 @@ export function validateProposal(input: { parent: Task; team: Team; employees: E
       if (input.repo && overlaps(subtasks[i]!.ownership, subtasks[j]!.ownership)) add('overlap', `"${subtasks[i]!.title}" and "${subtasks[j]!.title}" own some of the same files. Give each its own files or folders; an empty list owns everything.`);
 
   // What waits for what has to be an order: every name a sub-task of this proposal, and no circle.
-  for (const problem of orderProblems(subtasks)) add(problem.code, problem.text);
+  for (const problem of orderProblems(subtasks, input.openTasks)) add(problem.code, problem.text);
 
   const caps = subtasks.reduce((sum, sub) => sum + sub.capUsd, 0);
   if (caps > input.remainingUsd + 1e-9) add('caps_exceed_parent', `The caps add up to $${caps.toFixed(2)}, but this task has $${Math.max(0, input.remainingUsd).toFixed(2)} left.`);

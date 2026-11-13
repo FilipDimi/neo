@@ -17,6 +17,7 @@ const teamFields = {
   repo: z.string().optional().describe("a registered repository's path or id"),
   baseBranch: z.string().optional().describe('the branch the team works from, in that repository'),
   mergeTarget: z.string().nullable().optional().describe('the branch finished work lands on by itself; null: every merge is a card for the user'),
+  owns: z.array(z.string().min(1)).nullable().optional().describe('the folders of that repository that are this team\'s own, such as ios or backend: a task made for the team without files of its own is held to them, and the chief of staff routes by them; null: none'),
   buildsWithXcode: z.boolean().optional().describe('may write Xcode build folders, and its gates get what Xcode needs'),
 };
 

@@ -15,9 +15,9 @@ import { readIndex } from './memory.ts';
 export const MAX_TURNS: Record<RunMode, number> = { brief: 40, review: 40, route: 20, work: 150, integrate: 150 };
 
 export const ENGINE_TOOLS_FOR: Record<RunMode, EngineTool[]> = {
-  brief: ['propose_subtasks', 'report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate'],
-  work: ['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate'],
-  integrate: ['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate'],
+  brief: ['propose_subtasks', 'report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'wait_for'],
+  work: ['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'wait_for'],
+  integrate: ['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'wait_for'],
   review: ['submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate'],
   route: ['create_task', 'set_status'],
 };

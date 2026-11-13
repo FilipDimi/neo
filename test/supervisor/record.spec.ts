@@ -142,7 +142,7 @@ describe('writing and reading decisions with the tools', () => {
 
   it('gives every run the tool that reads decisions, and the ones that write only to a lead or the chief of staff', () => {
     const base = { deciding: false, admin: false, chief: false, lead: false };
-    expect(engineToolsFor({ ...base, mode: 'work' })).toEqual(['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'read_decisions']);
+    expect(engineToolsFor({ ...base, mode: 'work' })).toEqual(['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'wait_for', 'read_decisions']);
     expect(engineToolsFor({ ...base, mode: 'review', lead: true })).toEqual(['submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting']);
     expect(engineToolsFor({ ...base, mode: 'route', chief: true })).toEqual(['create_task', 'set_status', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting']);
     expect(engineToolsFor({ ...base, mode: 'route', chief: true, deciding: true })).toEqual(['decide', 'set_status', 'read_decisions', 'record_decision', 'contract_version']);
@@ -213,7 +213,7 @@ describe('what a run is shown of the record, and what a ticket is built on', () 
     expect(() => w.sup.createTask({ ...base, decisions: ['D-1', 'D-9'] })).toThrow(/no decision D-9/);
     expect(w.sup.createTask({ ...base, decisions: ['d-2', 'D-2'] }).builtOn).toEqual({ decisions: ['D-2'], contract: null });
     // A ticket built on nothing, where there is no contract, says nothing.
-    expect(w.sup.createTask(base).builtOn).toBeUndefined();
+    expect(w.sup.createTask({ ...base, title: 'Write another note' }).builtOn).toBeUndefined();
     const parent = task({ builtOn: { decisions: ['D-1'], contract: '0.3.0' } });
     expect(builtOnFor(w.db, { decisions: ['D-2', 'D-1'], parent, repoId: null })).toEqual({ decisions: ['D-1', 'D-2'], contract: null });
   });

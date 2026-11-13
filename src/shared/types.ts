@@ -78,7 +78,8 @@ export const Company = z.object({
 });
 export type Company = z.infer<typeof Company>;
 
-export const TeamRepo = z.object({ repoId: id, baseBranch: z.string().min(1), mergeTarget: z.string().nullable() });
+/** `owns`: the folders of the repository that are this team's. A task made for the team without files of its own gets them. */
+export const TeamRepo = z.object({ repoId: id, baseBranch: z.string().min(1), mergeTarget: z.string().nullable(), owns: z.array(z.string().min(1)).optional() });
 export type TeamRepo = z.infer<typeof TeamRepo>;
 
 export const Team = z.object({
@@ -162,6 +163,8 @@ export const Task = z.object({
   builtOn: z.object({ decisions: z.array(z.string()), contract: z.string().nullable() }).optional(),
   /** The contract version the engine handed this ticket: it may change the contract, and must state this version there. */
   contractVersion: z.string().optional(),
+  /** The files it has changed and not landed, from the top of the repository: held until it is done or stopped. */
+  claims: z.array(z.string()).optional(),
   /** The tasks this one waits for: it is not started until they are done. */
   after: z.array(id).optional(),
   /** Of the sub-tasks it waited for, those whose work could not be merged into its folder cleanly: it reads them on their branches. */

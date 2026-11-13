@@ -18,7 +18,7 @@ const looked: ToSupervisor[] = [
   { t: 'event', event: { kind: 'tool_call', id: 'look-1', tool: 'Bash', input: { command: 'git diff' } } },
   { t: 'event', event: { kind: 'tool_result', id: 'look-1', ok: true } },
 ];
-const newTask = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', title: 'Write the note', brief: 'Write it.', assigneeId: 'emp1', ...over });
+const newTask = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', title: store.listTasks(w.db).some((task) => task.title === 'Write the note' && task.state !== 'done' && task.state !== 'failed') ? `Write the note (${store.listTasks(w.db).length + 1})` : 'Write the note', brief: 'Write it.', assigneeId: 'emp1', ...over });
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);

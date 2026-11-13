@@ -46,7 +46,7 @@ describe('a run, through the real worker logic', () => {
     expect(job.firstTurn).toContain('mcp__engine__report_done');
     expect(job.systemPrompt).not.toContain('Write NOTE.md');
     expect(job.tools).toEqual(['Read', 'Glob', 'Grep', 'Bash', 'Write', 'Edit']);
-    expect(job.engineTools).toEqual(['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'read_decisions']);
+    expect(job.engineTools).toEqual(['report_done', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'wait_for', 'read_decisions']);
     // No effort was chosen for this employee, so none is sent: the model uses its own.
     expect(job).not.toHaveProperty('effort');
     expect(job.cwd).toBe(path.join(w.dir, 'folders', task.id));

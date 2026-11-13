@@ -13,7 +13,7 @@ import * as store from '../db/store.ts';
 import { addedLines, changedFiles, commitAll, diffStat, discardChanges, NestedRepoError, patch } from '../git/commit.ts';
 import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
 import type { GateLimits, GateOptions, GateQueue } from '../git/gates.ts';
-import { must, type Identity } from '../git/git.ts';
+import { git, must, type Identity } from '../git/git.ts';
 import { carryPaths, isMerged, landOn, mergeInto, type Carried } from '../git/merge.ts';
 import { treeOf } from '../git/tree.ts';
 import { outside, owns } from '../git/ownership.ts';
@@ -23,6 +23,7 @@ import { checkedLine, countsCost } from '../shared/view.ts';
 import { TOOL_INPUT, type Check } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import { waitingOn } from './planning.ts';
+import { holdersOf } from './claims.ts';
 import { familyOf, isStale, movedFor, movedText } from './stale.ts';
 import { openWork, tell, tellTicket } from './tell.ts';
 import { compareVersions } from './record.ts';
@@ -161,6 +162,11 @@ export class Flow {
         changes.startedFrom = await must(dir, ['rev-parse', 'HEAD']);
       }
     }
+    // Started again after waiting for another task (wait_for): what it waited for is brought within reach, and it is told where that is.
+    if (request.resumeSessionId && store.runsOf(this.db, task.id).at(-1)?.reason === 'waiting') {
+      const notes = await this.reach({ ...task, ...changes }, { ...site, folder: changes.folder ?? site.folder });
+      return { task: changes, firstTurn: `What you waited for is done.\n\n${this.waitedLines({ ...task, ...changes }, notes)}\n\nCarry on with the task.` };
+    }
     if (request.mode !== 'integrate' || request.firstTurn) return { task: changes };
     const ready = { ...task, ...changes };
     // A meeting has nothing to merge: its author drafts the design from the positions.
@@ -187,7 +193,7 @@ export class Flow {
   }
 
   /** What a task waited for and where each of those is now, for its first turn. */
-  waitedLines(task: Task): string {
+  waitedLines(task: Task, notes: Map<string, string> = new Map()): string {
     const here = new Set(this.builtOn(task).map((dep) => dep.id));
     const left = new Set(task.unmerged ?? []);
     const lines = (task.after ?? []).map((id) => {
@@ -209,9 +215,35 @@ export class Flow {
                   : dep.branch
                     ? `done, kept on the branch ${dep.branch} (not merged)`
                     : 'done';
-      return `- "${dep.title}": ${where}`;
+      return `- "${dep.title}": ${where}${notes.has(id) ? `; ${notes.get(id)}` : ''}`;
     });
     return `This task waited for:\n${lines.join('\n')}`;
+  }
+
+  /**
+   * For a task a run put to wait, as it is started again: what it waited for is brought within reach. Where that landed on
+   * the branch this task works from, that branch is merged into its folder (a conflict is left there to resolve); a
+   * fellow part's branch is fetched, to be read. Returns what to say of each.
+   */
+  private async reach(task: Task, site: { repo: Repo; teamRepo: TeamRepo; folder: string }): Promise<Map<string, string>> {
+    const notes = new Map<string, string>();
+    const base = task.parentId ? null : site.teamRepo.baseBranch;
+    let merged: string | null = null;
+    for (const dep of waitingOn(this.db, task).done) {
+      if (dep.dropped || dep.repoId !== task.repoId) continue;
+      if (dep.parentId && dep.parentId === task.parentId && dep.branch) {
+        const fetched = await git(site.folder, ['fetch', '-q', 'origin', `refs/heads/${dep.branch}:refs/remotes/origin/${dep.branch}`]);
+        if (fetched.code === 0) notes.set(dep.id, `its work is on the branch ${dep.branch} (read a file of it with git show origin/${dep.branch}:<path>)`);
+        continue;
+      }
+      if (!base || dep.mergedInto !== base) continue;
+      if (merged === null) {
+        const result = await mergeInto(site.folder, base, ENGINE).catch(() => null);
+        merged = result === null ? '' : result.ok ? `the engine merged ${base} into your folder` : `the engine merged ${base} into your folder: CONFLICT in ${result.conflicts.join(', ')}. The conflict markers are in those files; resolve them`;
+      }
+      if (merged) notes.set(dep.id, merged);
+    }
+    return notes;
   }
 
   /**
@@ -222,24 +254,35 @@ export class Flow {
     const live = new Set(store.liveRuns(this.db).map((run) => run.taskId));
     for (const task of store.listTasks(this.db, { state: 'queued' })) {
       if (task.kind !== 'work' || !task.after?.length || live.has(task.id) || store.requestsOf(this.db, task.id).length > 0) continue;
-      // It ran before, or was asked about: it is past its wait.
-      if (store.runsOf(this.db, task.id).length > 0 || store.allDecisions(this.db).some((card) => card.taskId === task.id && card.subject?.waited === true)) continue;
+      // A task that ran before waits only if its last run put it to wait (wait_for): anything else queued is not this sweep's.
+      const last = store.runsOf(this.db, task.id).at(-1);
+      if (last && last.reason !== 'waiting') continue;
       const waits = waitingOn(this.db, task);
       const team = store.getTeam(this.db, task.teamId);
       if (!team) continue;
       // While something it waits for is still open there is nothing to decide yet: "start it anyway" would start it beside that.
       if (waits.open.length > 0) continue;
-      if (waits.stopped.length > 0) {
-        const names = waits.stopped.map((dep) => `"${dep.title}"`).join(' and ');
+      // A stopped dependency is asked about once. "Start it anyway" settles it for good, whatever the task waits for later.
+      const asked = store.allDecisions(this.db).filter((card) => card.taskId === task.id && card.subject?.waited === true);
+      const waived = new Set(asked.filter((card) => card.answer?.optionId === 'start').flatMap((card) => (Array.isArray(card.subject?.stopped) ? (card.subject.stopped as string[]) : [])));
+      const stopped = waits.stopped.filter((dep) => !waived.has(dep.id));
+      if (stopped.length > 0) {
+        const names = stopped.map((dep) => `"${dep.title}"`).join(' and ');
         this.change((tx, now) =>
           decisions.raise(tx, this.db, now, {
             taskId: task.id,
             kind: 'question',
-            text: `"${task.title}" was waiting for ${names}, which ${waits.stopped.length === 1 ? 'was' : 'were'} stopped. Start "${task.title}" anyway, or stop it too?`,
+            text: `"${task.title}" was waiting for ${names}, which ${stopped.length === 1 ? 'was' : 'were'} stopped. Start "${task.title}" anyway, or stop it too?`,
             options: [{ id: 'start', label: 'Start it anyway', effect: 'recheck' }, { id: 'stop', label: 'Stop it', effect: 'stop_task' }],
-            subject: { waited: true },
+            subject: { waited: true, stopped: stopped.map((dep) => dep.id) },
           }),
         );
+        continue;
+      }
+      // A run that put its task to wait carries on where it stopped, in the same session, if whoever ran it is still here.
+      const waiter = last && store.getEmployee(this.db, last.employeeId)?.fired === false ? last : undefined;
+      if (waiter) {
+        this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: waiter.mode, employeeId: waiter.employeeId, reason: 'resume', resumeSessionId: waiter.sessionId, firstTurn: 'What you waited for is done. Carry on with the task.' }, now) }));
         continue;
       }
       const who = requestFor(task, team);
@@ -314,7 +357,7 @@ export class Flow {
     const parent = store.getTask(this.db, run.taskId)!;
     const team = store.getTeam(this.db, parent.teamId)!;
     const repo = (parent.repoId && store.getRepo(this.db, parent.repoId)) || null;
-    const checked = validateProposal({ parent, team, employees: store.allEmployees(this.db), repo, remainingUsd: countsCost(store.getCompany(this.db)) ? parent.capUsd - store.spentOn(this.db, parent.id) : Infinity, subtasks });
+    const checked = validateProposal({ parent, team, employees: store.allEmployees(this.db), repo, remainingUsd: countsCost(store.getCompany(this.db)) ? parent.capUsd - store.spentOn(this.db, parent.id) : Infinity, subtasks, openTasks: new Set(openWork(this.db).map((task) => task.id)) });
     if (!checked.ok) {
       const refusals = (this.refusedProposals.get(run.id) ?? 0) + 1;
       this.refusedProposals.set(run.id, refusals);
@@ -335,11 +378,22 @@ export class Flow {
     } catch (failure) {
       return { ok: false, text: `${failure instanceof Error ? failure.message : String(failure)} mcp__engine__read_decisions finds them. Propose again.` };
     }
+    // A part that names files another open task holds waits for that task, or takes other files: two tasks do not change the same file side by side.
+    for (const sub of subtasks) {
+      const waits = new Set((sub.after ?? []).map((name) => name.trim()));
+      const inTheWay = holdersOf(this.db, { id: '', teamId: parent.teamId, repoId: parent.repoId, parentId: parent.id }, sub.ownership).filter(({ holder }) => !waits.has(holder.id));
+      if (inTheWay.length > 0) {
+        const { holder, file } = inTheWay[0]!;
+        const who = store.getEmployee(this.db, holder.assigneeId ?? '')?.name ?? 'someone';
+        return { ok: false, text: `"${sub.title}" names ${sub.ownership.join(', ')}, where "${holder.title}" (${who}) is changing ${file} and has not landed. Make the sub-task wait for it (after: ["${holder.id}"]), or give it other files. Propose again.` };
+      }
+    }
     if (subtasks.some((sub) => sub.contract) && !repo?.contract) return { ok: false, text: 'A sub-task is marked as changing the contract, but this task\'s repository has no contract named. Leave "contract" out and propose again.' };
     this.change((tx, now) => {
       // Each part has its id before any is written, so that one can name another it waits for.
       const ids = subtasks.map(() => store.newId());
-      const idOf = (title: string) => ids[subtasks.findIndex((other) => other.title.trim().toLowerCase() === title.trim().toLowerCase())]!;
+      // What a part waits for: another part, by its title, or a task outside the split, by its id.
+      const idOf = (name: string) => ids[subtasks.findIndex((other) => other.title.trim().toLowerCase() === name.trim().toLowerCase())] ?? name.trim();
       for (const [index, { decisions: _cited, contract: changes, after: waitsFor, ...sub }] of subtasks.entries()) {
         const after = (waitsFor ?? []).map(idOf);
         // Created a millisecond apart, so that creation order is the order they were proposed in.
@@ -640,6 +694,7 @@ export class Flow {
         if (this.site(task)) {
           if (!(await this.committed(run, task))) return;
           const changed = await this.changed(task);
+          this.claim(task, this.withoutRecord(task, changed));
           if (!this.ownershipHolds(run, this.withoutRecord(task, changed), task)) return;
           if (!(await this.recordFilesHold(task, changed))) return;
           if (!(await this.contractHolds(task))) return;
@@ -673,12 +728,21 @@ export class Flow {
     }
     // A split is not a way around what the task owns: what the parts changed between them, and what the lead changed putting them together, is held to it.
     const changed = await this.changed(task);
+    this.claim(task, this.withoutRecord(task, changed));
     if (checkOwnership && !this.ownershipHolds(run, this.withoutRecord(task, changed), task, true)) return;
     if (!(await this.recordFilesHold(task, changed))) return;
     if (!(await this.contractHolds(task))) return;
     if (!(await this.gatesPass(run.id, task))) return;
     // Each part was reviewed on its own; how they were put together was not. That is reviewed too before anything lands.
     return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
+  }
+
+  /** What the task holds, exactly: the files its commit changed. Held until it lands or is stopped. */
+  private claim(task: Task, files: string[]): void {
+    const current = store.getTask(this.db, task.id);
+    const held = [...files].sort();
+    if (!current || JSON.stringify(current.claims ?? []) === JSON.stringify(held)) return;
+    this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...current, claims: held, updatedAt: now.toISOString() }, cause: 'edited' }));
   }
 
   /** The folders of a repository that are the engine's own, which no diff of anyone's work shows. */

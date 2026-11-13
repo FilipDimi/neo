@@ -14,7 +14,7 @@ afterEach(async () => {
 
 const started: ToSupervisor = { t: 'event', event: { kind: 'session_started', sessionId: 'sess-1', model: 'claude-haiku-5-5', loginSource: 'none', tools: [] } };
 const usage = (costUsd: number, tokens = 100): ToSupervisor => ({ t: 'event', event: { kind: 'usage', inputTokens: tokens, outputTokens: tokens, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd, sessionCostUsd: costUsd } });
-const newTask = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', title: 'Write the note', brief: 'Write it.', assigneeId: 'emp1', capUsd: 2, ...over });
+const newTask = (w: World, over = {}) => w.sup.createTask({ teamId: 'team1', title: store.listTasks(w.db).some((task) => task.title === 'Write the note' && task.state !== 'done' && task.state !== 'failed') ? `Write the note (${store.listTasks(w.db).length + 1})` : 'Write the note', brief: 'Write it.', assigneeId: 'emp1', capUsd: 2, ...over });
 
 describe('task caps', () => {
   it('gives each run what the task has left as its budget', async () => {

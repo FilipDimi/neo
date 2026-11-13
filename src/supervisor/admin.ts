@@ -128,12 +128,13 @@ function withFields(db: Db, team: Team, input: Omit<z.infer<typeof ADMIN_INPUT.u
   const next: Team = { ...team };
   for (const key of ['purpose', 'selfManaged', 'dailyCapUsd', 'leaseMinutes', 'maxReviewRounds'] as const) if (input[key] !== undefined) (next as Record<string, unknown>)[key] = input[key];
   if (input.name !== undefined) next.name = input.name;
-  if (input.repo !== undefined || input.baseBranch !== undefined || input.mergeTarget !== undefined) {
+  if (input.repo !== undefined || input.baseBranch !== undefined || input.mergeTarget !== undefined || input.owns !== undefined) {
     const current = team.repos[0];
     const repoId = input.repo !== undefined ? findRepo(db, input.repo).id : current?.repoId;
     const baseBranch = input.baseBranch ?? current?.baseBranch;
     if (!repoId || !baseBranch) throw new Error('A team that works in a repository needs both the repository and its base branch.');
-    next.repos = [{ repoId, baseBranch, mergeTarget: input.mergeTarget !== undefined ? input.mergeTarget : (current?.mergeTarget ?? null) }];
+    const owns = input.owns !== undefined ? (input.owns ?? []) : (current?.owns ?? []);
+    next.repos = [{ repoId, baseBranch, mergeTarget: input.mergeTarget !== undefined ? input.mergeTarget : (current?.mergeTarget ?? null), ...(owns.length > 0 ? { owns } : {}) }];
   }
   if (input.buildsWithXcode !== undefined) {
     const others = team.sandboxWrite.filter((folder) => !XCODE_BUILD_FOLDERS.includes(folder));
@@ -149,7 +150,7 @@ function describeTeam(db: Db, team: Team): string {
   const parts = [
     team.selfManaged ? 'self-managed' : lead ? `led by ${lead}` : 'led, but has no lead yet',
     ...(countsCost(store.getCompany(db)) ? [`${usd(team.dailyCapUsd)} a day`] : []),
-    where ? `works in ${repo?.path ?? where.repoId} on ${where.baseBranch}, ${where.mergeTarget ? `merges onto ${where.mergeTarget} by itself` : 'merges by card'}` : 'works in plain folders',
+    where ? `works in ${repo?.path ?? where.repoId} on ${where.baseBranch}, ${where.mergeTarget ? `merges onto ${where.mergeTarget} by itself` : 'merges by card'}${where.owns?.length ? `, its folders: ${where.owns.join(', ')}` : ''}` : 'works in plain folders',
     ...(team.sandboxWrite.includes(XCODE_BUILD_FOLDERS[0]!) ? ['builds with Xcode'] : []),
   ];
   return `${team.name} (${parts.join('; ')})`;

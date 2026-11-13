@@ -42,7 +42,7 @@ export function waitingOn(db: Db, task: Pick<Task, 'after'>): { open: Task[]; st
 }
 
 /** In a proposal: sub-tasks that wait for something that is no sub-task of it, for themselves, or for each other in a circle. */
-export function orderProblems(subtasks: { title: string; after?: string[] | undefined }[]): { code: 'unknown_order' | 'circular_order'; text: string }[] {
+export function orderProblems(subtasks: { title: string; after?: string[] | undefined }[], known: ReadonlySet<string> = new Set()): { code: 'unknown_order' | 'circular_order'; text: string }[] {
   const problems: { code: 'unknown_order' | 'circular_order'; text: string }[] = [];
   const key = (title: string) => title.trim().toLowerCase();
   const titles = subtasks.map((sub) => key(sub.title));
@@ -51,7 +51,9 @@ export function orderProblems(subtasks: { title: string; after?: string[] | unde
     const waits: string[] = [];
     for (const name of sub.after ?? []) {
       const matches = titles.filter((title) => title === key(name)).length;
-      if (matches === 0) problems.push({ code: 'unknown_order', text: `"${sub.title}" waits for "${name}", which is not one of the sub-tasks you propose. Name another sub-task of this proposal by its exact title.` });
+      // A task outside the split is named by its id: it is waited for, and is no part of the order among the parts.
+      if (matches === 0 && known.has(name.trim())) continue;
+      if (matches === 0) problems.push({ code: 'unknown_order', text: `"${sub.title}" waits for "${name}", which is not one of the sub-tasks you propose. Name another sub-task of this proposal by its exact title, or a task outside it by its id.` });
       else if (matches > 1) problems.push({ code: 'unknown_order', text: `"${sub.title}" waits for "${name}", which is the title of ${matches} sub-tasks. Give each sub-task its own title.` });
       else waits.push(key(name));
     }

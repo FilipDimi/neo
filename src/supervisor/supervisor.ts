@@ -33,6 +33,7 @@ import { builtOnFor, indexFor, onContractVersion, onReadDecisions, onRecordDecis
 import { dirOf } from './recordFiles.ts';
 import { holdMeeting, meetingReply, planMeeting, proposalsOf, type MeetingCall, type Proposals } from './meeting.ts';
 import { planLines, resolveAfter, waitingOn } from './planning.ts';
+import { heldBy, holdersOf, sameAsk, waitsFor } from './claims.ts';
 import { verifyClaims, type Claims } from './proof.ts';
 import { isStale, movedFor, movedText, upToDate } from './stale.ts';
 import { account, askText, BUDGET, called, looked, MOVES, newWatch, progressed, refusal, refused, resulted, undelivered, type Budget, type Watch } from './progress.ts';
@@ -263,11 +264,25 @@ export class Supervisor {
     const vague = unusable(input.ownership ?? []);
     if (vague.length > 0) throw new Error(`${vague.map((entry) => `"${entry}"`).join(', ')} names no file or folder a task can own. Name files or folders by their path from the top of the repository, such as src/api or README.md`);
 
-    const { decisions: cited, after: waitsFor, ...fields } = input;
+    const { decisions: cited, after: named, ...fields } = input;
     const builtOn = builtOnFor(this.db, { decisions: cited, repoId });
-    const after = resolveAfter(this.db, waitsFor);
+    const after = resolveAfter(this.db, named);
+    // The same ask twice makes one task: while a task of that title is open on the team, a second is not made.
+    if ((input.kind ?? 'work') === 'work' && !input.parentId) {
+      const twin = store.listTasks(this.db, { teamId: team.id }).find((other) => other.kind === 'work' && !other.parentId && other.state !== 'done' && other.state !== 'failed' && sameAsk(other.title) === sameAsk(input.title));
+      if (twin) throw new Error(`"${twin.title}" is already on ${team.name}'s board (${twin.state}${twin.assigneeId ? `, ${this.nameOf(twin.assigneeId)} has it` : ''}): task ${twin.id}. If this is more of the same, send a message to that task; if it is something else, give it a title that says how`);
+    }
+    // Files it names that another open task holds: it waits for that task, or names other files.
+    const inTheWay = holdersOf(this.db, { id: '', teamId: team.id, repoId, parentId: input.parentId ?? null }, input.ownership ?? []).filter(({ holder }) => !after.includes(holder.id));
+    if (inTheWay.length > 0) {
+      const { holder, file } = inTheWay[0]!;
+      throw new Error(`this task names ${(input.ownership ?? []).join(', ')}, where "${holder.title}" (${holder.assigneeId ? this.nameOf(holder.assigneeId) : 'nobody yet'}) is changing ${file} and has not landed. Make it wait for that task (after: ["${holder.id}"]), or give it other files`);
+    }
+    // A task made without files of its own is held to its team's folders, where the team has them named.
+    const owns = team.repos.find((entry) => entry.repoId === repoId)?.owns ?? [];
+    const ownership = (input.ownership ?? []).length > 0 ? input.ownership! : owns;
     const now = this.now();
-    const task = store.newTask({ createdBy: 'user', ...fields, repoId, ...(builtOn ? { builtOn } : {}), ...(after.length > 0 ? { after } : {}) }, now);
+    const task = store.newTask({ createdBy: 'user', ...fields, repoId, ...(ownership.length > 0 ? { ownership } : {}), ...(builtOn ? { builtOn } : {}), ...(after.length > 0 ? { after } : {}) }, now);
     const who = requestFor(task, team);
     if ('problem' in who && who.problem === 'no_assignee') throw new Error(`a task on the self-managed team ${team.name} needs an assignee`);
     // A task that waits for others is not started here: the engine starts it when they are done.
@@ -680,6 +695,7 @@ export class Supervisor {
       return void this.unpaid.set(run.id, answers);
     }
     if (event.kind === 'usage') this.unpaid.delete(run.id);
+    if (event.kind === 'tool_result') this.noteClaim(run, event.id, event.ok);
     if (event.kind === 'tool_result') this.checkWriteLanded(run, event.id);
     if (event.kind === 'tool_call' || event.kind === 'tool_result') this.watch(run, event);
     const now = this.now();
@@ -923,9 +939,78 @@ export class Supervisor {
       allowed.set(call.id, call);
       this.allowedWrites.set(run.id, allowed);
     }
+    // A file another task on the same branch has changed and not landed is not written beside it.
+    const written = verdict.allow && (call.tool === 'Write' || call.tool === 'Edit' || call.tool === 'NotebookEdit') ? this.fileOf(folder, call) : null;
+    const holder = written ? heldBy(this.db, task, written) : null;
+    if (written && holder) {
+      if (watch) refused(watch, call.id);
+      this.allowedWrites.get(run.id)?.delete(call.id);
+      return {
+        allow: false,
+        reason: `Refused: ${written} is being changed by "${holder.title}" (${holder.assigneeId ? this.nameOf(holder.assigneeId) : 'its team'}), which has not landed. Two tasks do not change one file side by side. Do the rest of your work first. If you cannot finish without this file, call mcp__engine__wait_for with task "${holder.id}": the engine starts you again when it has landed, with its work in your folder.`,
+      };
+    }
     // A call that is refused is never made: its "failure" is not the command's.
     if (!verdict.allow && watch) refused(watch, call.id);
     return { allow: verdict.allow, ...(verdict.reason !== undefined && { reason: verdict.reason }), ...(verdict.stop && { stop: true }) };
+  }
+
+  /** The file a write names, from the top of the task's folder. Null when it names none, or one outside the folder. */
+  private fileOf(folder: string, call: { input: unknown }): string | null {
+    const named = (call.input as { file_path?: unknown; notebook_path?: unknown } | null) ?? {};
+    const file = typeof named.file_path === 'string' ? named.file_path : typeof named.notebook_path === 'string' ? named.notebook_path : null;
+    if (!file) return null;
+    const relative = path.relative(folder, path.resolve(folder, file));
+    return relative === '' || relative.startsWith('..') || path.isAbsolute(relative) ? null : relative;
+  }
+
+  /** Who holds a file a task wants to write: another open task on its branch that has changed it and not landed. */
+  heldBy(task: Task, file: string): Task | null {
+    return heldBy(this.db, task, file);
+  }
+
+  /** A write went through: the task holds that file from now until it lands. */
+  private noteClaim(run: Run, callId: string, ok: boolean): void {
+    const call = this.allowedWrites.get(run.id)?.get(callId);
+    const task = ok && call ? store.getTask(this.db, run.taskId) : undefined;
+    if (!task || !call || !task.repoId || run.mode === 'review' || run.mode === 'route') return;
+    const file = this.fileOf(folderOf(this.paths, task), call);
+    if (!file || task.claims?.includes(file)) return;
+    this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...task, claims: [...(task.claims ?? []), file], updatedAt: now.toISOString() }, cause: 'edited' }));
+  }
+
+  /**
+   * A run puts its task to wait for another: it cannot go on until that one is done. The run ends, nobody is asked,
+   * and the engine starts the same session again when the other is done.
+   */
+  private onWaitFor(run: Run, input: unknown): ToolReply {
+    const { task: name, why } = TOOL_INPUT.wait_for.parse(input);
+    const task = store.getTask(this.db, run.taskId);
+    if (!task || task.kind !== 'work' || task.meetingRole) return { ok: false, text: 'There is nothing here to put to wait.' };
+    let other: Task | undefined;
+    try {
+      other = store.getTask(this.db, resolveAfter(this.db, [name])[0] ?? '');
+    } catch (failure) {
+      return { ok: false, text: `${failure instanceof Error ? failure.message : String(failure)}.` };
+    }
+    if (!other) return { ok: false, text: `There is no open task "${name}" to wait for.` };
+    if (other.id === task.id) return { ok: false, text: 'A task cannot wait for itself.' };
+    if (other.id === task.parentId) return { ok: false, text: `"${other.title}" is the task this one is a part of: it is done when its parts are. Carry on, or ask with mcp__engine__request_decision.` };
+    if (other.parentId === task.id) return { ok: false, text: `"${other.title}" is a part of this task: the engine has you put the parts together when they are done. End your turn without waiting.` };
+    if (other.state === 'done') {
+      const where = other.mergedInto ? `merged into ${other.mergedInto}` : other.branch ? `kept on the branch ${other.branch}` : 'nothing was merged';
+      return { ok: false, text: `"${other.title}" is done already: ${where}. Take it from there and carry on.` };
+    }
+    if (other.state === 'failed') return { ok: false, text: `"${other.title}" was stopped: nothing will come of waiting for it. Carry on without it, or ask with mcp__engine__request_decision.` };
+    if (waitsFor(this.db, other, task.id)) return { ok: false, text: `"${other.title}" waits for this task, so the two would wait for each other. Do what it needs first, or ask with mcp__engine__request_decision.` };
+    if (!canTransition(task, 'wait')) return { ok: false, text: 'This task cannot be put to wait as it stands. Ask with mcp__engine__request_decision.' };
+    const waited = other;
+    this.change((tx, now) => {
+      tx.emit({ kind: 'run_activity', runId: run.id, taskId: task.id, employeeId: run.employeeId, text: `waiting for "${waited.title}": ${why.trim().slice(0, 120)}` });
+      decisions.move(tx, store.getTask(this.db, task.id)!, 'wait', now, { after: [...new Set([...(task.after ?? []), waited.id])] });
+    });
+    this.planned.set(run.id, { outcome: 'stopped', reason: 'waiting' });
+    return { ok: true, text: `Recorded: this task waits for "${waited.title}". End your turn now. The engine starts you again when it is done, and tells you where its work is.` };
   }
 
   /**
@@ -1145,6 +1230,8 @@ export class Supervisor {
         return onContractVersion(this.db, now, run, input);
       case 'call_meeting':
         return this.callMeeting(run.employeeId, TOOL_INPUT.call_meeting.parse(input));
+      case 'wait_for':
+        return this.onWaitFor(run, input);
       default:
         if ((ADMIN_TOOLS as readonly string[]).includes(name)) return this.adminCall(run, name, input);
         return { ok: false, text: `The tool ${name} is not available in this run.` };

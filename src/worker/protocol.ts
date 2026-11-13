@@ -16,12 +16,12 @@ export type Check = z.infer<typeof Check>;
 /** How many things one report or review may say were checked. */
 export const MAX_CHECKS = 20;
 
-export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', 'decide', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting', ...ADMIN_TOOLS] as const;
+export const ENGINE_TOOLS = ['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'set_status', 'run_gate', 'create_task', 'decide', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting', 'wait_for', ...ADMIN_TOOLS] as const;
 export const EngineTool = z.enum(ENGINE_TOOLS);
 export type EngineTool = z.infer<typeof EngineTool>;
 
 /** A tool call that ends a run's work: after one of these is accepted, the session takes no further turn. */
-export const CLOSING_TOOLS: ReadonlySet<EngineTool> = new Set(['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools']);
+export const CLOSING_TOOLS: ReadonlySet<EngineTool> = new Set(['propose_subtasks', 'report_done', 'submit_review', 'request_decision', 'request_tools', 'wait_for']);
 
 export const WorkerJob = z.object({
   runId: z.string(),
@@ -132,6 +132,7 @@ export const TOOL_INPUT = {
   decide: z.object({ option: z.string().min(1), notes: z.string() }),
   read_decisions: z.object({ ids: z.array(z.string().min(1)).max(20).optional(), search: z.string().optional() }),
   record_decision: z.object({ statement: z.string().trim().min(1).max(300), why: z.string(), replaces: z.string().min(1).optional(), onBehalfOfUser: z.boolean().optional() }),
+  wait_for: z.object({ task: z.string().min(1), why: z.string().min(1) }),
   call_meeting: z.object({ topic: z.string().trim().min(1).max(120), question: z.string().trim().min(1), teams: z.array(z.string().min(1)).min(1).max(8), author: z.string().min(1) }),
   contract_version: z.object({ change: z.enum(['breaking', 'adds', 'wording']), summary: z.string().trim().min(1), decisions: z.array(z.string().min(1)).optional(), ticket: z.string().min(1).optional() }),
   ...ADMIN_INPUT,

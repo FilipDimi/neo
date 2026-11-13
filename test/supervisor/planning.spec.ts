@@ -124,7 +124,8 @@ describe('what depends on what', () => {
     const make = (after: string[]) => () => setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Later', brief: 'x', doneCondition: 'y', after });
     expect(make(['Nothing like it'])).toThrow(/no open task "Nothing like it"/);
     setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Twin', brief: 'x', doneCondition: 'y' });
-    setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Twin', brief: 'x', doneCondition: 'y' });
+    // A second of that title cannot be made on the team any more; one written before that rule may still be there.
+    apply(setup.w.db, (tx) => tx.emit({ kind: 'task_changed', task: store.newTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Twin', brief: 'x', createdBy: 'user' }, setup.w.clock.now()), cause: 'created' }), setup.w.clock.now());
     expect(make(['Twin'])).toThrow(/More than one task is called "Twin".*by its id/s);
 
     const parent = store.newTask({ teamId: 'team1', title: 'Whole', brief: 'x', createdBy: 'user' }, new Date());

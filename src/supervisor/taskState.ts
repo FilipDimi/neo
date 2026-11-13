@@ -4,7 +4,7 @@
  */
 import type { Task, TaskState } from '../shared/types.ts';
 
-export type TaskEvent = 'start_brief' | 'start_work' | 'subtasks_created' | 'reported_done' | 'approved' | 'sent_back' | 'complete' | 'block' | 'unblock' | 'fail';
+export type TaskEvent = 'start_brief' | 'start_work' | 'subtasks_created' | 'reported_done' | 'approved' | 'sent_back' | 'complete' | 'block' | 'unblock' | 'fail' | 'wait';
 
 /** event -> from -> to. `block` and `unblock` are handled below, because they carry `blockedFrom`. */
 export const TRANSITIONS: Record<TaskEvent, Partial<Record<TaskState, TaskState>>> = {
@@ -18,6 +18,8 @@ export const TRANSITIONS: Record<TaskEvent, Partial<Record<TaskState, TaskState>
   block: { queued: 'blocked', briefing: 'blocked', running: 'blocked', review: 'blocked' },
   unblock: {},
   fail: { queued: 'failed', briefing: 'failed', running: 'failed', review: 'failed', blocked: 'failed' },
+  // A run put its task to wait for another: it is queued again, and the engine starts it when that one is done.
+  wait: { briefing: 'queued', running: 'queued' },
 };
 
 export class IllegalTransition extends Error {
