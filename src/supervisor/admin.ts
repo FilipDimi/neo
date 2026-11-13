@@ -133,7 +133,10 @@ function withFields(db: Db, team: Team, input: Omit<z.infer<typeof ADMIN_INPUT.u
     const repoId = input.repo !== undefined ? findRepo(db, input.repo).id : current?.repoId;
     const baseBranch = input.baseBranch ?? current?.baseBranch;
     if (!repoId || !baseBranch) throw new Error('A team that works in a repository needs both the repository and its base branch.');
-    const owns = input.owns !== undefined ? (input.owns ?? []) : (current?.owns ?? []);
+    // A team's folders are paths in one repository: they do not follow the team to another, and each has to name a file or a folder.
+    const owns = input.owns !== undefined ? (input.owns ?? []) : current?.repoId === repoId ? (current?.owns ?? []) : [];
+    const vague = unusable(owns);
+    if (vague.length > 0) throw new Error(`${vague.map((entry) => `"${entry}"`).join(', ')} names no file or folder. Name the team's folders by their path from the top of the repository, such as ios or backend/api.`);
     next.repos = [{ repoId, baseBranch, mergeTarget: input.mergeTarget !== undefined ? input.mergeTarget : (current?.mergeTarget ?? null), ...(owns.length > 0 ? { owns } : {}) }];
   }
   if (input.buildsWithXcode !== undefined) {

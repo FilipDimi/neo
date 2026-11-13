@@ -169,6 +169,8 @@ export const Task = z.object({
   claims: z.array(z.string()).optional(),
   /** The tasks this one waits for: it is not started until they are done. */
   after: z.array(id).optional(),
+  /** Of the sub-tasks it waited for, those whose work was merged into its folder when the folder was made. */
+  takenIn: z.array(id).optional(),
   /** Of the sub-tasks it waited for, those whose work could not be merged into its folder cleanly: it reads them on their branches. */
   unmerged: z.array(id).optional(),
   /** A ticket its lead closed as not needed, and why: nothing was done on it, and the whole goes on without it. */

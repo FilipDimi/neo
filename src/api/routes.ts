@@ -220,7 +220,14 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
   app.post('/api/teams/:id/remove', async (request) => ({ team: removeTeam(hireCtx(), found(store.getTeam(db, id(request)), 'such team').id) }));
 
   app.patch('/api/teams/:id', async (request) => {
-    const team = await checkedTeam({ ...found(store.getTeam(db, id(request)), 'such team'), ...TeamPatch.parse(request.body) });
+    const before = found(store.getTeam(db, id(request)), 'such team');
+    const patch = TeamPatch.parse(request.body);
+    // A team's folders are set through the setup tools; a save that does not mention them (the screen's form) leaves them as they are.
+    const repos = patch.repos?.map((entry) => {
+      const kept = before.repos.find((one) => one.repoId === entry.repoId)?.owns;
+      return 'owns' in entry || !kept ? entry : { ...entry, owns: kept };
+    });
+    const team = await checkedTeam({ ...before, ...patch, ...(repos ? { repos } : {}) });
     apply(db, (tx) => tx.emit({ kind: 'team_changed', team }), now());
     return { team };
   });

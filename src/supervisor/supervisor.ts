@@ -2,6 +2,7 @@
  * The supervisor: one loop that owns the database, starts one worker per run, enforces leases
  * and limits, and turns everything it may not decide into a card. It never runs a model session.
  */
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { apply, onEvents, type Tx } from '../db/apply.ts';
@@ -268,18 +269,20 @@ export class Supervisor {
     const after = resolveAfter(this.db, named);
     // The same ask twice makes one task: while a task of that title is open on the team, a second is not made.
     if ((input.kind ?? 'work') === 'work' && !input.parentId) {
-      const twin = store.listTasks(this.db, { teamId: team.id }).find((other) => other.kind === 'work' && !other.parentId && other.state !== 'done' && other.state !== 'failed' && sameAsk(other.title) === sameAsk(input.title));
+      const asked = sameAsk(input.title);
+      const twin = asked === '' ? undefined : store.listTasks(this.db, { teamId: team.id }).find((other) => other.kind === 'work' && !other.parentId && other.state !== 'done' && other.state !== 'failed' && sameAsk(other.title) === asked);
       if (twin) throw new Error(`"${twin.title}" is already on ${team.name}'s board (${twin.state}${twin.assigneeId ? `, ${this.nameOf(twin.assigneeId)} has it` : ''}): task ${twin.id}. If this is more of the same, send a message to that task; if it is something else, give it a title that says how`);
     }
     // Files it names that another open task holds: it waits for that task, or names other files.
-    const inTheWay = holdersOf(this.db, { id: '', teamId: team.id, repoId, parentId: input.parentId ?? null }, input.ownership ?? []).filter(({ holder }) => !after.includes(holder.id));
+    const inTheWay = holdersOf(this.db, { id: '', teamId: team.id, repoId, parentId: input.parentId ?? null }, input.ownership ?? []).filter(({ whole }) => !after.includes(whole.id));
     if (inTheWay.length > 0) {
-      const { holder, file } = inTheWay[0]!;
-      throw new Error(`this task names ${(input.ownership ?? []).join(', ')}, where "${holder.title}" (${holder.assigneeId ? this.nameOf(holder.assigneeId) : 'nobody yet'}) is changing ${file} and has not landed. Make it wait for that task (after: ["${holder.id}"]), or give it other files`);
+      const { whole, by, file } = inTheWay[0]!;
+      throw new Error(`this task names ${(input.ownership ?? []).join(', ')}, where "${whole.title}" (${by.assigneeId ? this.nameOf(by.assigneeId) : 'nobody yet'}) is changing ${file} and has not landed. Make it wait for that task (after: ["${whole.id}"]), or give it other files`);
     }
-    // A task made without files of its own is held to its team's folders, where the team has them named.
+    // A task made without files of its own is held to its team's folders, where the team has them named; the contract
+    // goes with them, since any team may change it under a version.
     const owns = team.repos.find((entry) => entry.repoId === repoId)?.owns ?? [];
-    const ownership = (input.ownership ?? []).length > 0 ? input.ownership! : owns;
+    const ownership = (input.ownership ?? []).length > 0 ? input.ownership! : owns.length > 0 ? [...owns, ...(repo?.contract?.paths ?? []).filter((entry) => !owns.includes(entry))] : [];
     const now = this.now();
     const task = store.newTask({ createdBy: 'user', ...fields, repoId, ...(ownership.length > 0 ? { ownership } : {}), ...(builtOn ? { builtOn } : {}), ...(after.length > 0 ? { after } : {}) }, now);
     const who = requestFor(task, team);
@@ -360,7 +363,8 @@ export class Supervisor {
       for (const request of store.requestsOf(this.db, task.id)) tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: task.id });
       // A task that still waits for others is not started by changing hands: the engine starts it when they are done.
       const waits = waitingOn(this.db, next);
-      if (store.runsOf(this.db, task.id).length === 0 && (waits.open.length > 0 || waits.stopped.length > 0)) return;
+      const lastRun = store.runsOf(this.db, task.id).at(-1);
+      if ((!lastRun || lastRun.reason === 'waiting') && (waits.open.length > 0 || waits.stopped.length > 0)) return;
       const who = requestFor(next, team);
       if ('problem' in who) decisions.raise(tx, this.db, now, { taskId: task.id, kind: 'staffing', text: decisions.staffingText(next, who.problem), options: decisions.optionsFor('staffing') });
       else tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, ...who, reason: 'new' }, now) });
@@ -915,6 +919,18 @@ export class Supervisor {
     const folder = folderOf(this.paths, task);
     const verdict = judgeToolCall({ task, team, employee, mode: run.mode, folder, company, grants: store.grantsOf(this.db, task.id), protect: engineFiles(this.paths), engineDirs: this.engineDirs(task) }, call);
     const now = this.now();
+    // A file another task on the same branch has changed and not landed is not written beside it. Looked at before anything
+    // else is used up for the call (a grant to make it once).
+    const written = verdict.allow && (call.tool === 'Write' || call.tool === 'Edit' || call.tool === 'NotebookEdit') ? this.fileOf(folder, call) : null;
+    const held = written ? heldBy(this.db, task, written) : null;
+    if (written && held) {
+      if (watch) refused(watch, call.id);
+      const part = task.parentId !== null;
+      return {
+        allow: false,
+        reason: `Refused: ${written} is being changed by "${held.whole.title}" (${held.by.assigneeId ? this.nameOf(held.by.assigneeId) : 'its team'}), which has not landed. Two tasks do not change one file side by side. Do the rest of your work first. If you cannot finish without this file, call mcp__engine__wait_for with task "${held.whole.id}": the engine starts you again when it has landed, ${part ? 'and tells you where its work is' : 'with its work in your folder'}.`,
+      };
+    }
     if (verdict.useGrant) {
       const grant = store.grantsOf(this.db, task.id).find((g) => g.id === verdict.useGrant)!;
       apply(this.db, (tx) => tx.emit({ kind: 'grant_changed', grant: { ...grant, used: true } }), now);
@@ -943,34 +959,37 @@ export class Supervisor {
       allowed.set(call.id, call);
       this.allowedWrites.set(run.id, allowed);
     }
-    // A file another task on the same branch has changed and not landed is not written beside it.
-    const written = verdict.allow && (call.tool === 'Write' || call.tool === 'Edit' || call.tool === 'NotebookEdit') ? this.fileOf(folder, call) : null;
-    const holder = written ? heldBy(this.db, task, written) : null;
-    if (written && holder) {
-      if (watch) refused(watch, call.id);
-      this.allowedWrites.get(run.id)?.delete(call.id);
-      return {
-        allow: false,
-        reason: `Refused: ${written} is being changed by "${holder.title}" (${holder.assigneeId ? this.nameOf(holder.assigneeId) : 'its team'}), which has not landed. Two tasks do not change one file side by side. Do the rest of your work first. If you cannot finish without this file, call mcp__engine__wait_for with task "${holder.id}": the engine starts you again when it has landed, with its work in your folder.`,
-      };
-    }
     // A call that is refused is never made: its "failure" is not the command's.
     if (!verdict.allow && watch) refused(watch, call.id);
     return { allow: verdict.allow, ...(verdict.reason !== undefined && { reason: verdict.reason }), ...(verdict.stop && { stop: true }) };
   }
 
-  /** The file a write names, from the top of the task's folder. Null when it names none, or one outside the folder. */
+  /** The file a write names, from the top of the task's folder, with links on the way followed. Null when it names none, or one outside the folder. */
   private fileOf(folder: string, call: { input: unknown }): string | null {
     const named = (call.input as { file_path?: unknown; notebook_path?: unknown } | null) ?? {};
     const file = typeof named.file_path === 'string' ? named.file_path : typeof named.notebook_path === 'string' ? named.notebook_path : null;
     if (!file) return null;
-    const relative = path.relative(folder, path.resolve(folder, file));
+    // Where the path really leads: the part of it that exists is followed through any link, the rest is taken as written.
+    const real = (target: string): string => {
+      let at = target;
+      const rest: string[] = [];
+      while (!fs.existsSync(at) && path.dirname(at) !== at) {
+        rest.unshift(path.basename(at));
+        at = path.dirname(at);
+      }
+      try {
+        return path.join(fs.realpathSync(at), ...rest);
+      } catch {
+        return target;
+      }
+    };
+    const relative = path.relative(real(folder), real(path.resolve(folder, file)));
     return relative === '' || relative.startsWith('..') || path.isAbsolute(relative) ? null : relative;
   }
 
-  /** Who holds a file a task wants to write: another open task on its branch that has changed it and not landed. */
+  /** What a task has to wait for to write a file: the task that holds it and has not landed (for a part, the whole it lands with). */
   heldBy(task: Task, file: string): Task | null {
-    return heldBy(this.db, task, file);
+    return heldBy(this.db, task, file)?.whole ?? null;
   }
 
   /** A write went through: the task holds that file from now until it lands. */
@@ -999,6 +1018,8 @@ export class Supervisor {
     }
     if (!other) return { ok: false, text: `There is no open task "${name}" to wait for.` };
     if (other.id === task.id) return { ok: false, text: 'A task cannot wait for itself.' };
+    // A part of another task lands with that task: its being done puts nothing on the branch. What is waited for is the whole.
+    if (other.parentId && other.parentId !== task.parentId && other.parentId !== task.id) other = store.getTask(this.db, other.parentId) ?? other;
     if (other.id === task.parentId) return { ok: false, text: `"${other.title}" is the task this one is a part of: it is done when its parts are. Carry on, or ask with mcp__engine__request_decision.` };
     if (other.parentId === task.id) return { ok: false, text: `"${other.title}" is a part of this task: the engine has you put the parts together when they are done. End your turn without waiting.` };
     if (other.state === 'done') {

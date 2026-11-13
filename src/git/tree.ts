@@ -27,7 +27,14 @@ export async function treeOf(dir: string): Promise<string | null> {
     const own = path.join(dir, '.git');
     const index = path.join(scratch, `index-${randomUUID()}`);
     // Starting from the folder's own index keeps this as cheap as a status: only what changed is read again.
-    if (fs.existsSync(path.join(own, 'index'))) fs.copyFileSync(path.join(own, 'index'), index);
+    if (fs.existsSync(path.join(own, 'index'))) {
+      fs.copyFileSync(path.join(own, 'index'), index);
+      // The copy keeps the index's own time. Git tells a file that may have changed in the very moment the index was
+      // written by comparing the two times, and reads such a file again; a copy stamped "now" would make every file look
+      // safely older, and an edit of the same size made in that moment would never be seen.
+      const stamp = fs.statSync(path.join(own, 'index'));
+      fs.utimesSync(index, stamp.atime, stamp.mtime);
+    }
     fs.mkdirSync(path.join(scratch, 'objects'));
     const env = { GIT_INDEX_FILE: index, GIT_OBJECT_DIRECTORY: path.join(scratch, 'objects'), GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(own, 'objects') };
     const added = await git(dir, ['add', '-A'], undefined, env);

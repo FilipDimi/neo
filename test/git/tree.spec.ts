@@ -29,6 +29,17 @@ describe('the tree of a folder', () => {
     expect(await treeOf(dir)).toBe(first);
   });
 
+  it('sees a change of the same size made in the same second as the last commit, also when it looks a second later', async () => {
+    // Start right after a second begins, so the commit and the edit share it.
+    while (Date.now() % 1000 > 150) await new Promise((resolve) => setTimeout(resolve, 5));
+    const dir = gitRepo([], { 'a.txt': 'one\n' });
+    const first = await treeOf(dir);
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'two\n');
+    expect(await treeOf(dir)).not.toBe(first);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(await treeOf(dir)).not.toBe(first);
+  });
+
   it('leaves ignored files aside, and does not touch what is staged', async () => {
     const dir = gitRepo([], { 'a.txt': 'one\n', '.gitignore': 'build/\n' });
     const first = await treeOf(dir);

@@ -22,6 +22,13 @@ export function recover(db: Db, now: Date, processes: Processes): { expired: str
     }
     const task = store.getTask(db, run.taskId);
     const teamId = store.getEmployee(db, run.employeeId)?.teamId ?? '';
+    // A run that had put its task to wait for another, and was cut off before it ended: it is over as it meant to be,
+    // and the engine starts the task again when what it waits for is done.
+    if (task?.state === 'queued' && (task.after?.length ?? 0) > 0) {
+      apply(db, (tx) => tx.emit({ kind: 'run_ended', run: { ...run, outcome: 'stopped', reason: 'waiting', endedAt: now.toISOString() }, teamId }), now);
+      expired.push(run.id);
+      continue;
+    }
     apply(
       db,
       (tx) => {

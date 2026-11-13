@@ -23,7 +23,7 @@ import { checkedLine, countsCost } from '../shared/view.ts';
 import { TOOL_INPUT, type Check } from '../worker/protocol.ts';
 import { validateProposal } from './briefing.ts';
 import { waitingOn } from './planning.ts';
-import { holdersOf, landingBranch } from './claims.ts';
+import { heldBy, holdersOf, landingBranch } from './claims.ts';
 import { familyOf, movedFor } from './stale.ts';
 import { openWork, tellTicket } from './tell.ts';
 import { compareVersions } from './record.ts';
@@ -156,8 +156,9 @@ export class Flow {
       });
       Object.assign(changes, { folder: dir, branch });
       if (fresh) {
-        const left = await this.takeIn(task, dir);
+        const { taken, left } = await this.takeIn(task, dir);
         if (left.length > 0 || task.unmerged) changes.unmerged = left;
+        if (taken.length > 0 || task.takenIn) changes.takenIn = taken;
         // Where the branch began: what the task changed is measured from it once the branch has been taken in elsewhere.
         changes.startedFrom = await must(dir, ['rev-parse', 'HEAD']);
       }
@@ -181,20 +182,25 @@ export class Flow {
   }
 
   /** Merges into a new folder the finished sub-tasks its task waited for. One that conflicts is left out; returns those. */
-  private async takeIn(task: Task, dir: string): Promise<string[]> {
+  private async takeIn(task: Task, dir: string): Promise<{ taken: string[]; left: string[] }> {
+    const taken: string[] = [];
     const left: string[] = [];
     for (const dep of this.builtOn(task)) {
       const merged = await mergeInto(dir, dep.branch!, ENGINE).catch(() => ({ ok: false as const, conflicts: [] }));
-      if (merged.ok) continue;
+      if (merged.ok) {
+        taken.push(dep.id);
+        continue;
+      }
       await must(dir, ['merge', '--abort']).catch(() => undefined);
       left.push(dep.id);
     }
-    return left;
+    return { taken, left };
   }
 
   /** What a task waited for and where each of those is now, for its first turn. */
   waitedLines(task: Task, notes: Map<string, string> = new Map()): string {
-    const here = new Set(this.builtOn(task).map((dep) => dep.id));
+    // In the folder is what was merged into it when it was made: a fellow part waited for later is on its branch.
+    const here = new Set(task.takenIn ?? []);
     const left = new Set(task.unmerged ?? []);
     const lines = (task.after ?? []).map((id) => {
       const dep = store.getTask(this.db, id);
@@ -210,6 +216,8 @@ export class Flow {
               ? `done, on the branch ${dep.branch}; it could not be merged into your folder cleanly, so read it there`
               : here.has(id)
                 ? 'done; its work is in your folder'
+                : dep.parentId && dep.parentId === task.parentId
+                  ? 'done'
                 : dep.mergedInto
                   ? `done, merged into ${dep.mergedInto}`
                   : dep.branch
@@ -227,23 +235,46 @@ export class Flow {
    */
   private async reach(task: Task, site: { repo: Repo; teamRepo: TeamRepo; folder: string }): Promise<Map<string, string>> {
     const notes = new Map<string, string>();
-    const base = task.parentId ? null : site.teamRepo.baseBranch;
-    let merged: string | null = null;
+    // What the task itself lands on, or works from: a dependency that landed there can be merged into its folder.
+    const mine = new Set([site.teamRepo.baseBranch, ...(site.teamRepo.mergeTarget ? [site.teamRepo.mergeTarget] : [])]);
+    const merged = new Map<string, string>();
     for (const dep of waitingOn(this.db, task).done) {
       if (dep.dropped || dep.repoId !== task.repoId) continue;
       if (dep.parentId && dep.parentId === task.parentId && dep.branch) {
         const fetched = await git(site.folder, ['fetch', '-q', 'origin', `refs/heads/${dep.branch}:refs/remotes/origin/${dep.branch}`]);
-        if (fetched.code === 0) notes.set(dep.id, `its work is on the branch ${dep.branch} (read a file of it with git show origin/${dep.branch}:<path>)`);
+        if (fetched.code === 0) notes.set(dep.id, `its work is on the branch ${dep.branch}, not in your folder (read a file of it with git show origin/${dep.branch}:<path>)`);
         continue;
       }
-      if (!base || dep.mergedInto !== base) continue;
-      if (merged === null) {
-        const result = await mergeInto(site.folder, base, ENGINE).catch(() => null);
-        merged = result === null ? '' : result.ok ? `the engine merged ${base} into your folder` : `the engine merged ${base} into your folder: CONFLICT in ${result.conflicts.join(', ')}. The conflict markers are in those files; resolve them`;
+      const branch = dep.mergedInto;
+      if (!branch || !mine.has(branch)) continue;
+      // A part's folder comes from the task it is a part of, and is measured against it: a whole branch merged into it would
+      // count as the part's own change. It is told where the work is instead.
+      if (task.parentId) {
+        const fetched = await git(site.folder, ['fetch', '-q', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+        notes.set(dep.id, `it is not in your folder: your folder comes from the task you are a part of, which does not have it yet${fetched.code === 0 ? ` (read a file of it with git show origin/${branch}:<path>)` : ''}`);
+        continue;
       }
-      if (merged) notes.set(dep.id, merged);
+      if (!merged.has(branch)) merged.set(branch, await this.mergeBranch(task, site.folder, branch));
+      notes.set(dep.id, merged.get(branch)!);
     }
     return notes;
+  }
+
+  /**
+   * Merges a branch of the repository into a task's folder, for a task that waited for what landed there. What the task
+   * has done so far is committed first, so that nothing of it stands in the merge's way unseen; a conflict is left in
+   * the folder for its author. Returns what to tell it, also when the merge could not be made.
+   */
+  private async mergeBranch(task: Task, folder: string, branch: string): Promise<string> {
+    try {
+      const last = store.runsOf(this.db, task.id).filter(authored).at(-1);
+      const author: Identity = { name: store.getEmployee(this.db, last?.employeeId ?? '')?.name ?? 'Employee', email: `${last?.employeeId ?? 'employee'}@virtual-startup.invalid` };
+      await commitAll(folder, author, `${task.title}: work so far, before taking in ${branch}`, task.branch ?? undefined);
+      const result = await mergeInto(folder, branch, ENGINE);
+      return result.ok ? `the engine merged ${branch} into your folder` : `the engine merged ${branch} into your folder: CONFLICT in ${result.conflicts.join(', ')}. The conflict markers are in those files; resolve them`;
+    } catch (failure) {
+      return `the engine could not merge ${branch} into your folder (${(failure instanceof Error ? failure.message : String(failure)).split('\n')[0]}): its work is on ${branch}, and reaches you when your own work lands there`;
+    }
   }
 
   /**
@@ -280,7 +311,8 @@ export class Flow {
         continue;
       }
       // A run that put its task to wait carries on where it stopped, in the same session, if whoever ran it is still here.
-      const waiter = last && store.getEmployee(this.db, last.employeeId)?.fired === false ? last : undefined;
+      // Only if the task is still theirs: one that was given to someone else meanwhile starts afresh for them.
+      const waiter = last && store.getEmployee(this.db, last.employeeId)?.fired === false && (task.assigneeId === null || task.assigneeId === last.employeeId) ? last : undefined;
       if (waiter) {
         this.change((tx, now) => tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode: waiter.mode, employeeId: waiter.employeeId, reason: 'resume', resumeSessionId: waiter.sessionId, firstTurn: 'What you waited for is done. Carry on with the task.' }, now) }));
         continue;
@@ -357,7 +389,7 @@ export class Flow {
     const parent = store.getTask(this.db, run.taskId)!;
     const team = store.getTeam(this.db, parent.teamId)!;
     const repo = (parent.repoId && store.getRepo(this.db, parent.repoId)) || null;
-    const checked = validateProposal({ parent, team, employees: store.allEmployees(this.db), repo, remainingUsd: countsCost(store.getCompany(this.db)) ? parent.capUsd - store.spentOn(this.db, parent.id) : Infinity, subtasks, openTasks: new Set(openWork(this.db).map((task) => task.id)) });
+    const checked = validateProposal({ parent, team, employees: store.allEmployees(this.db), repo, remainingUsd: countsCost(store.getCompany(this.db)) ? parent.capUsd - store.spentOn(this.db, parent.id) : Infinity, subtasks, openTasks: new Set(openWork(this.db).filter((task) => task.id !== parent.id && task.parentId !== parent.id).map((task) => task.id)) });
     if (!checked.ok) {
       const refusals = (this.refusedProposals.get(run.id) ?? 0) + 1;
       this.refusedProposals.set(run.id, refusals);
@@ -381,11 +413,11 @@ export class Flow {
     // A part that names files another open task holds waits for that task, or takes other files: two tasks do not change the same file side by side.
     for (const sub of subtasks) {
       const waits = new Set((sub.after ?? []).map((name) => name.trim()));
-      const inTheWay = holdersOf(this.db, { id: '', teamId: parent.teamId, repoId: parent.repoId, parentId: parent.id }, sub.ownership).filter(({ holder }) => !waits.has(holder.id));
+      const inTheWay = holdersOf(this.db, { id: '', teamId: parent.teamId, repoId: parent.repoId, parentId: parent.id }, sub.ownership).filter(({ whole }) => !waits.has(whole.id));
       if (inTheWay.length > 0) {
-        const { holder, file } = inTheWay[0]!;
-        const who = store.getEmployee(this.db, holder.assigneeId ?? '')?.name ?? 'someone';
-        return { ok: false, text: `"${sub.title}" names ${sub.ownership.join(', ')}, where "${holder.title}" (${who}) is changing ${file} and has not landed. Make the sub-task wait for it (after: ["${holder.id}"]), or give it other files. Propose again.` };
+        const { whole, by, file } = inTheWay[0]!;
+        const who = store.getEmployee(this.db, by.assigneeId ?? '')?.name ?? 'someone';
+        return { ok: false, text: `"${sub.title}" names ${sub.ownership.join(', ')}, where "${whole.title}" (${who}) is changing ${file} and has not landed. Make the sub-task wait for it (after: ["${whole.id}"]), or give it other files. Propose again.` };
       }
     }
     if (subtasks.some((sub) => sub.contract) && !repo?.contract) return { ok: false, text: 'A sub-task is marked as changing the contract, but this task\'s repository has no contract named. Leave "contract" out and propose again.' };
@@ -694,7 +726,7 @@ export class Flow {
         if (this.site(task)) {
           if (!(await this.committed(run, task))) return;
           const changed = await this.changed(task);
-          this.claim(task, this.withoutRecord(task, changed));
+          if (!this.claimsHold(task, this.withoutRecord(task, changed))) return;
           if (!this.ownershipHolds(run, this.withoutRecord(task, changed), task)) return;
           if (!(await this.recordFilesHold(task, changed))) return;
           if (!(await this.contractHolds(task))) return;
@@ -728,7 +760,7 @@ export class Flow {
     }
     // A split is not a way around what the task owns: what the parts changed between them, and what the lead changed putting them together, is held to it.
     const changed = await this.changed(task);
-    this.claim(task, this.withoutRecord(task, changed));
+    if (!this.claimsHold(task, this.withoutRecord(task, changed))) return;
     if (checkOwnership && !this.ownershipHolds(run, this.withoutRecord(task, changed), task, true)) return;
     if (!(await this.recordFilesHold(task, changed))) return;
     if (!(await this.contractHolds(task))) return;
@@ -737,12 +769,29 @@ export class Flow {
     return this.workAccepted(store.getRun(this.db, run.id)!, store.getTask(this.db, task.id)!);
   }
 
-  /** What the task holds, exactly: the files its commit changed. Held until it lands or is stopped. */
-  private claim(task: Task, files: string[]): void {
+  /**
+   * What the task holds, exactly: the files its commit changed, held until its work lands or it is stopped. A file a
+   * command changed that another task already holds (a write would have been refused) sends the work back: false.
+   */
+  private claimsHold(task: Task, files: string[]): boolean {
     const current = store.getTask(this.db, task.id);
+    if (!current) return true;
+    // Looked at and claimed in one step, so that of two tasks that reach here together one is first.
+    const mine = new Set(current.claims ?? []);
+    const taken = files.filter((file) => !mine.has(file)).flatMap((file) => heldBy(this.db, current, file) ?? []);
+    if (taken.length > 0) {
+      const { whole, by, file } = taken[0]!;
+      const who = store.getEmployee(this.db, by.assigneeId ?? '')?.name ?? 'its team';
+      this.sendBack(
+        current,
+        `${file} is being changed by "${whole.title}" (${who}), which has not landed. Your work changed it too${taken.length > 1 ? `, and ${taken.length - 1} more of its files` : ''}: two tasks do not change one file side by side. Put it back as it was and call mcp__engine__report_done again; or, if your work cannot be done without it, call mcp__engine__wait_for with task "${whole.id}" and take it up again when that has landed.`,
+        `"${current.title}" changed ${file}, which "${whole.title}" holds`,
+      );
+      return false;
+    }
     const held = [...files].sort();
-    if (!current || JSON.stringify(current.claims ?? []) === JSON.stringify(held)) return;
-    this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...current, claims: held, updatedAt: now.toISOString() }, cause: 'edited' }));
+    if (JSON.stringify(current.claims ?? []) !== JSON.stringify(held)) this.change((tx, now) => tx.emit({ kind: 'task_changed', task: { ...current, claims: held, updatedAt: now.toISOString() }, cause: 'edited' }));
+    return true;
   }
 
   /** The folders of a repository that are the engine's own, which no diff of anyone's work shows. */

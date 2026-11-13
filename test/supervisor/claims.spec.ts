@@ -1,8 +1,11 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apply } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
+import { adminTool } from '../../src/supervisor/admin.ts';
 import { companyNow } from '../../src/supervisor/companyNow.ts';
+import { recover } from '../../src/supervisor/recover.ts';
 import { buildFirstTurn } from '../../src/supervisor/definition.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
 import { staged, type Scene } from '../fixtures/staged.ts';
@@ -206,5 +209,180 @@ describe('plans, folders, and the same ask twice', () => {
     expect(make(setup, 'Fix the list scroll', 'other').teamId).toBe('team2');
     setup.w.sup.cancelTask(first.id);
     expect(make(setup, 'Fix the list scroll', 'emp2').title).toBe('Fix the list scroll');
+  });
+});
+
+describe('what the review of claims found', () => {
+  /** A whole that is open, with one part that is done and holds a file: nothing of it has landed. */
+  const wholeWithDonePart = (setup: Setup) => {
+    const whole = make(setup, 'Whole', 'emp1');
+    const at = setup.w.clock.now();
+    const part = store.newTask({ teamId: 'team1', parentId: whole.id, assigneeId: 'emp1', title: 'Part', brief: 'x', createdBy: 'emp1', repoId: 'repo1', state: 'done', ownership: ['src/f.md'], claims: ['src/f.md'] }, at);
+    apply(setup.w.db, (tx) => {
+      tx.emit({ kind: 'task_changed', task: part, cause: 'created' });
+      tx.emit({ kind: 'task_changed', task: { ...store.getTask(setup.w.db, whole.id)!, state: 'running' }, cause: 'state' });
+      for (const request of store.requestsOf(setup.w.db, whole.id)) tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: whole.id });
+    }, at);
+    return { whole: store.getTask(setup.w.db, whole.id)!, part };
+  };
+  const held = (setup: Setup, taskId: string, file: string) => (setup.w.sup as unknown as { heldBy(task: unknown, file: string): { title: string } | null }).heldBy(store.getTask(setup.w.db, taskId)!, file);
+
+  it('keeps a finished part\'s files held until its whole has landed, and names the whole as what to wait for', async () => {
+    const replies: { ok: boolean; text: string }[] = [];
+    let setup: Setup;
+    let partId = '';
+    setup = shared(async (s) => {
+      if (titleOf(s) !== 'Outside') return;
+      replies.push(await s.engine('wait_for', { task: partId, why: 'It holds src/f.md.' }));
+    });
+    const { whole, part } = wholeWithDonePart(setup);
+    partId = part.id;
+    const outside = make(setup, 'Outside', 'emp2');
+    expect(held(setup, outside.id, 'src/f.md')).toMatchObject({ title: 'Whole' });
+    expect(() => make(setup, 'Planned', 'emp2', { ownership: ['src'] })).toThrow(new RegExp(`where "Whole" .* is changing src/f\\.md and has not landed.*after: \\["${whole.id}"\\]`, 's'));
+    await setup.w.sup.tick();
+    await setup.fixture.idle();
+    await setup.w.sup.settle();
+    // Waiting for the part is waiting for its whole: the part being done puts nothing on the branch.
+    expect(replies).toMatchObject([{ ok: true, text: expect.stringContaining('waits for "Whole"') }]);
+    expect(store.getTask(setup.w.db, outside.id)).toMatchObject({ state: 'queued', after: [whole.id] });
+    // Landed: nobody's.
+    apply(setup.w.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(setup.w.db, whole.id)!, state: 'done', mergedInto: 'team' }, cause: 'state' }), setup.w.clock.now());
+    expect(held(setup, outside.id, 'src/f.md')).toBeNull();
+  });
+
+  it('sees a circle that goes through a whole and its part', async () => {
+    const replies: { ok: boolean; text: string }[] = [];
+    let setup: Setup;
+    let partId = '';
+    setup = shared(async (s) => {
+      if (titleOf(s) !== 'Part two') return;
+      replies.push(await s.engine('wait_for', { task: 'Outside', why: 'x' }));
+      s.write('two.md', 'x\n');
+      await s.engine('report_done', { summary: 'Two.' });
+    });
+    const { whole } = wholeWithDonePart(setup);
+    // Outside waits for the whole; a part of the whole then wants to wait for Outside.
+    make(setup, 'Outside', 'emp2', { after: [whole.id] });
+    const at = setup.w.clock.now();
+    const two = store.newTask({ teamId: 'team1', parentId: whole.id, assigneeId: 'emp1', title: 'Part two', brief: 'x', createdBy: 'emp1', repoId: 'repo1', ownership: ['two.md'] }, at);
+    partId = two.id;
+    apply(setup.w.db, (tx) => {
+      tx.emit({ kind: 'task_changed', task: two, cause: 'created' });
+      tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: two.id, mode: 'work', employeeId: 'emp1', reason: 'new' }, at) });
+    }, at);
+    await setup.w.sup.tick();
+    await setup.fixture.idle();
+    await setup.w.sup.settle();
+    expect(replies).toMatchObject([{ ok: false, text: expect.stringMatching(/"Outside" waits for this task/) }]);
+    expect(store.getTask(setup.w.db, partId)!.after).toBeUndefined();
+  });
+
+  it('commits a waiting task\'s work before taking in what it waited for, and says so when the two collide', async () => {
+    const turns: string[] = [];
+    const setup = shared(
+      async (s) => {
+        const title = titleOf(s) === '?' ? 'Second' : titleOf(s);
+        if (title === 'First') {
+          s.write('common.md', 'from the first\n');
+          return void (await s.engine('report_done', { summary: 'First.' }));
+        }
+        turns.push(s.input.prompt);
+        if (!s.resumed) {
+          // Work of its own, not committed, in a file the other task will also write.
+          s.write('common.md', 'from the second\n');
+          return void (await s.engine('wait_for', { task: 'First', why: 'It builds on it.' }));
+        }
+        s.write('common.md', 'from the first\nfrom the second\n');
+        await s.engine('report_done', { summary: 'Second, on top of the first.' });
+      },
+      { concurrency: 1 },
+    );
+    const second = make(setup, 'Second', 'emp2');
+    make(setup, 'First', 'emp1');
+    await drain(setup);
+    expect(turns[1]).toMatch(/- "First": done, merged into team; the engine merged team into your folder: CONFLICT in common\.md/);
+    expect(store.getTask(setup.w.db, second.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+    expect(fileAt(setup.repoPath, 'team', 'common.md')).toBe('from the first\nfrom the second');
+  });
+
+  it('does not start a task that put itself to wait because it was given to someone else, and then starts it afresh for them', async () => {
+    const who: string[] = [];
+    const setup = shared(
+      async (s) => {
+        const title = titleOf(s);
+        if (title === 'First') {
+          s.write('first.md', 'x\n');
+          return void (await s.engine('report_done', { summary: 'First.' }));
+        }
+        who.push(`${s.who}${s.resumed ? ' (resumed)' : ''}`);
+        if (who.length === 1) return void (await s.engine('wait_for', { task: 'First', why: 'x' }));
+        s.write('second.md', 'x\n');
+        await s.engine('report_done', { summary: 'Second.' });
+      },
+      { concurrency: 1 },
+    );
+    const second = make(setup, 'Second', 'emp2');
+    make(setup, 'First', 'emp1');
+    await setup.w.sup.tick();
+    await setup.fixture.idle();
+    await setup.w.sup.settle();
+    expect(store.getTask(setup.w.db, second.id)!.state).toBe('queued');
+    setup.w.sup.editTask(second.id, { assigneeId: 'emp1' });
+    expect(store.requestsOf(setup.w.db, second.id)).toEqual([]);
+    await drain(setup);
+    // It was Grace's session that waited; the task is Ada's now, who starts it from the beginning.
+    expect(who).toEqual(['Grace', 'Ada']);
+    expect(store.getTask(setup.w.db, second.id)).toMatchObject({ state: 'done' });
+  });
+
+  it('sends back work whose commands changed a file another task holds', async () => {
+    const turns: string[] = [];
+    const setup = shared(async (s) => {
+      if (titleOf(s) === 'First' ) return;
+      turns.push(s.input.prompt);
+      if (!s.resumed) s.write('shared.md', 'written by a command\n');
+      else fs.rmSync(path.join(s.cwd, 'shared.md'));
+      s.write('second.md', 'x\n');
+      await s.engine('report_done', { summary: 'Second.' });
+    });
+    const first = make(setup, 'First', 'emp1');
+    apply(setup.w.db, (tx) => {
+      tx.emit({ kind: 'task_changed', task: { ...store.getTask(setup.w.db, first.id)!, state: 'blocked', claims: ['shared.md'] }, cause: 'edited' });
+    }, setup.w.clock.now());
+    const second = make(setup, 'Second', 'emp2');
+    await drain(setup);
+    expect(turns[1]).toMatch(/shared\.md is being changed by "First" \(Ada\), which has not landed\. Your work changed it too/);
+    expect(store.getTask(setup.w.db, second.id)).toMatchObject({ state: 'done', claims: ['second.md'] });
+  });
+
+  it('tells titles apart in any alphabet, and takes a team\'s folders only as paths, with the contract beside them', async () => {
+    const setup = shared(() => {}, { owns: ['ios'] });
+    make(setup, 'Поправи го скролот', 'emp1');
+    expect(make(setup, 'Додади копче', 'emp2').title).toBe('Додади копче');
+    expect(() => make(setup, 'поправи  го скролот!', 'emp2')).toThrow(/is already on/);
+    expect(make(setup, '???', 'emp1').title).toBe('???');
+    expect(make(setup, '!!!', 'emp1').title).toBe('!!!');
+    // A team's folders, where the repository has a contract: a task held to the folders may still change the contract under a version.
+    apply(setup.w.db, (tx) => tx.emit({ kind: 'repo_changed', repo: { ...store.getRepo(setup.w.db, 'repo1')!, contract: { paths: ['docs/contract'] } } }), setup.w.clock.now());
+    expect(make(setup, 'With the contract', 'emp1').ownership).toEqual(['ios', 'docs/contract']);
+    await expect(adminTool({ db: setup.w.db, now: setup.w.clock.now(), paths: setup.w.sup.paths, skills: [] }, 'update_team', { team: 'team1', owns: ['/ios'] })).rejects.toThrow(/names no file or folder/);
+  });
+
+  it('does not start again, at a restart, a run whose task had been put to wait', () => {
+    const setup = shared(() => {});
+    const first = make(setup, 'First', 'emp1');
+    const second = make(setup, 'Second', 'emp2');
+    const at = setup.w.clock.now();
+    apply(setup.w.db, (tx) => {
+      const request = store.requestsOf(setup.w.db, second.id)[0]!;
+      const run = store.newRun(request, at, 15);
+      tx.emit({ kind: 'run_started', run, requestId: request.id, teamId: 'team1' });
+      // The engine was killed after the wait was written down and before the run had ended.
+      tx.emit({ kind: 'task_changed', task: { ...store.getTask(setup.w.db, second.id)!, state: 'queued', after: [first.id] }, cause: 'state' });
+    }, at);
+    recover(setup.w.db, at, { startedAt: () => null, killGroup: () => {} } as never);
+    expect(store.runsOf(setup.w.db, second.id).map((run) => [run.outcome, run.reason])).toEqual([['stopped', 'waiting']]);
+    expect(store.requestsOf(setup.w.db, second.id)).toEqual([]);
   });
 });
