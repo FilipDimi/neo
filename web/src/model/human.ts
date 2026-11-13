@@ -5,8 +5,8 @@
  */
 import type { EventRow } from '../../../src/shared/events.ts';
 import type { Run, Task } from '../../../src/shared/types.ts';
-import { ago, WHY } from '../../../src/shared/view.ts';
-import { untilWhen } from '../format.ts';
+import { ago, WHY, type TaskLine } from '../../../src/shared/view.ts';
+import { whenPast } from '../format.ts';
 import { PALETTE, SKIN } from '../office/layout.ts';
 import type { Store } from '../store/reduce.ts';
 import { liveRuns, openDecisions, personStatus } from './select.ts';
@@ -47,13 +47,13 @@ export function memoryNotes(index: string): Note[] {
 
 // ---------- a task, in a word and as a path ----------
 
-/** Where a task stands, in a word or two. */
-export function stateWord(store: Store, taskId: string): string {
-  const task = store.tasks.get(taskId);
+/** Where a task stands, in a word or two. A task the board no longer holds is said from its line. */
+export function stateWord(store: Store, taskId: string, line?: TaskLine): string {
+  const task = store.tasks.get(taskId) ?? line;
   if (!task) return '';
   switch (task.state) {
     case 'done':
-      return task.mergedInto ? 'Landed' : 'Done';
+      return task.dropped ? 'Not needed' : task.mergedInto ? 'Landed' : 'Done';
     case 'failed':
       return 'Stopped';
     case 'blocked':
@@ -77,12 +77,17 @@ export type Step = { label: string; state: 'done' | 'now' | 'next' | 'held' | 's
 export function taskPath(store: Store, taskId: string): Step[] {
   const task = store.tasks.get(taskId);
   if (!task) return [];
+  // A ticket closed as not needed was asked for and ended there: nothing was built or checked.
+  if (task.dropped) return [{ label: 'Asked', state: 'done' }, { label: 'Built', state: 'next' }, { label: 'Checked', state: 'next' }, { label: 'Not needed', state: 'done' }];
   const labels = ['Asked', 'Built', 'Checked', task.mergedInto ? 'Landed' : 'Done'];
   if (task.state === 'done') return labels.map((label) => ({ label, state: 'done' as const }));
   const stageOf = (state: Task['state'] | null): number => (state === 'review' ? 2 : state === 'running' || state === 'briefing' ? 1 : 0);
   const runs = [...store.runs.values()].filter((run) => run.taskId === taskId).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-  // A stopped task does not say where it was: its runs do. A review after the last work means it had reached the check.
-  const reached = runs.length === 0 ? 0 : runs.slice(runs.findLastIndex(authored) + 1).some((run) => run.mode === 'review') ? 2 : 1;
+  // A stopped task does not say where it was: its runs do. A review after work that was reported means it had reached
+  // the check. A lead answering a member's question runs as a review too, after work that stopped with the question:
+  // that task was still being built.
+  const lastWork = runs.findLastIndex(authored);
+  const reached = runs.length === 0 ? 0 : lastWork >= 0 && runs[lastWork]!.outcome === 'done' && runs.slice(lastWork + 1).some((run) => run.mode === 'review') ? 2 : 1;
   const stage = task.state === 'failed' ? reached : task.state === 'blocked' ? stageOf(task.blockedFrom) : stageOf(task.state);
   const here: Step['state'] = task.state === 'failed' ? 'stopped' : task.state === 'blocked' ? 'held' : 'now';
   return labels.map((label, index) => ({ label, state: index < stage ? 'done' : index === stage ? here : 'next' }));
@@ -92,7 +97,7 @@ export const priorityWord = (priority: 1 | 2 | 3): string => (priority === 1 ? '
 
 // ---------- a person, at a glance ----------
 
-export type Work = { taskId: string; title: string; did: string; state: string; when: string };
+export type Work = { taskId: string; title: string; did: string; state: string; when: string; /** Whether the board still holds the task, so that it can be opened. */ open: boolean };
 export type PersonView = {
   /** Where they belong and what they are doing, in two short sentences. */
   who: string;
@@ -128,28 +133,45 @@ export function portraitOf(store: Store, employeeId: string): { shirt: string; s
 const VERB: Record<Run['mode'], string> = { work: 'Working on', brief: 'Planning', integrate: 'Putting together', review: 'Reviewing', route: 'Answering in the chat' };
 const WEEK_MS = 7 * 24 * 3600_000;
 
-/** A person's page, above the fold: who they are, what they are doing, how the week went and what they last worked on. */
-export function personView(store: Store, employeeId: string, runs: Run[], now: Date): PersonView | null {
+/**
+ * A person's page, above the fold: who they are, what they are doing, how the week went and what they last worked on.
+ * `runs` are theirs, as the engine gives them to the page; `lines` name the tasks of those runs, for the ones the
+ * board no longer holds.
+ */
+export function personView(store: Store, employeeId: string, runs: Run[], now: Date, lines: TaskLine[] = []): PersonView | null {
   const employee = store.employees.get(employeeId);
   if (!employee) return null;
   const team = store.teams.get(employee.teamId);
-  const status = personStatus(store, employeeId);
   const belongs = store.company?.chiefOfStaffId === employeeId ? 'Chief of staff' : team?.leadId === employeeId ? `Leads ${team.name}` : `${team?.name ?? 'No'} team`;
-  const saying = { working: 'Working now', reviewing: 'Reviewing now', stuck: 'Waiting on you', idle: 'Free right now' }[status];
+  const name = (id: string | null | undefined): string => (id && store.employees.get(id)?.name) || 'Someone';
 
-  // What is in front of them: a card that waits on the user about their work comes first, then the run that is live.
-  const live = liveRuns(store).find((run) => run.employeeId === employeeId);
+  // What is in front of them. A card on the user's desk about them comes first: their run went silent, or a task of
+  // theirs is held by a card. Then the run that is live. Then a card about their task that someone decides for the user.
   const open = openDecisions(store);
-  const held = [...store.tasks.values()].find((task) => task.state === 'blocked' && task.assigneeId === employeeId && open.some((card) => card.taskId === task.id));
+  const mineHeld = (task: Task): boolean => task.state === 'blocked' && task.assigneeId === employeeId;
+  const silent = open.find((card) => card.kind === 'lease' && card.employeeId === employeeId);
+  const held = silent ? (silent.taskId ? store.tasks.get(silent.taskId) : undefined) : [...store.tasks.values()].find((task) => mineHeld(task) && open.some((card) => card.taskId === task.id));
+  const onUser = Boolean(silent || held);
+  const live = liveRuns(store).find((run) => run.employeeId === employeeId);
   const liveTask = live ? store.tasks.get(live.taskId) : undefined;
-  const doing = held
-    ? { text: `Waiting on you about "${held.title}"`, taskId: held.id }
+  const deciding = [...store.decisions.values()].find((card) => card.answeredAt === null && card.deciderId && card.taskId !== null && mineHeld(store.tasks.get(card.taskId) ?? ({} as Task)));
+  const decided = deciding?.taskId ? store.tasks.get(deciding.taskId) : undefined;
+  const saying = onUser ? 'Waiting on you' : live ? (live.mode === 'review' ? 'Reviewing now' : 'Working now') : decided ? 'Waiting for a decision' : 'Free right now';
+  const doing = onUser
+    ? held
+      ? { text: `Waiting on you about "${held.title}"`, taskId: held.kind === 'work' ? held.id : null }
+      : { text: 'Their run went quiet: the card is on your desk', taskId: null }
     : live
       ? { text: live.mode === 'route' || liveTask?.kind === 'chat' ? VERB.route : `${VERB[live.mode]} "${liveTask?.title ?? 'a task'}", for ${ago(live.startedAt, now)}`, taskId: liveTask?.kind === 'work' ? liveTask.id : null }
-      : null;
+      : decided
+        ? { text: `${name(deciding!.deciderId)} is deciding about "${decided.title}"`, taskId: decided.id }
+        : null;
 
-  // By task, not by run: a task they went back to four times is one line.
-  const mine = runs.filter((run) => run.employeeId === employeeId && store.tasks.get(run.taskId)?.kind === 'work');
+  // By task, not by run: a task they went back to four times is one line. A task the board no longer holds is named
+  // from its line.
+  const byId = new Map(lines.map((line) => [line.id, line]));
+  const known = (taskId: string): TaskLine | undefined => store.tasks.get(taskId) ?? byId.get(taskId);
+  const mine = runs.filter((run) => run.employeeId === employeeId && known(run.taskId)?.kind === 'work');
   const last = new Map<string, Run[]>();
   for (const run of [...mine].sort((a, b) => a.startedAt.localeCompare(b.startedAt))) last.set(run.taskId, [...(last.get(run.taskId) ?? []), run]);
   const when = (run: Run): string => (run.outcome === 'running' ? 'now' : `${ago(run.endedAt ?? run.startedAt, now)} ago`);
@@ -158,7 +180,7 @@ export function personView(store: Store, employeeId: string, runs: Run[], now: D
     .sort((a, b) => b.at.localeCompare(a.at))
     .map(({ taskId, of }): Work => {
       const did = of.some((run) => run.mode === 'integrate') ? 'put it together' : of.some((run) => run.mode === 'work') ? 'worked on it' : of.some((run) => run.mode === 'brief') ? 'planned it' : 'reviewed it';
-      return { taskId, title: store.tasks.get(taskId)!.title, did, state: stateWord(store, taskId), when: when(of.at(-1)!) };
+      return { taskId, title: known(taskId)!.title, did, state: stateWord(store, taskId, byId.get(taskId)), when: when(of.at(-1)!), open: store.tasks.has(taskId) };
     });
 
   const since = new Date(now.getTime() - WEEK_MS).toISOString();
@@ -183,12 +205,15 @@ export function happenings(events: EventRow[], store: Store, now: Date): Happeni
   const who = (id: string | null | undefined): string => (id === 'user' ? 'You' : (id && store.employees.get(id)?.name) || 'Someone');
   const STARTED: Record<Run['mode'], string> = { work: 'started working on it', brief: 'started planning it', integrate: 'started putting the parts together', review: 'started reviewing it', route: 'started answering' };
   const told: Happening[] = [];
-  const say = (row: EventRow, text: string | null) => void (text && told.push({ id: row.id, at: untilWhen(row.at, now), text }));
-  // A run's ending is written down again when its work is committed: it is told once.
-  const over = new Set<string>();
+  const say = (row: EventRow, text: string | null) => void (text && told.push({ id: row.id, at: whenPast(row.at, now), text }));
+  // A run's ending is written down again when its work is committed: it is told once, by how it ended the first time.
+  const over = new Map<string, string | null>();
   // Work that follows a send-back is a fix, from its start to its report.
   let sentBack = false;
   const fixing = new Set<string>();
+  // A lead's answer to a member's question runs as a review, after work that stopped with the question. It is no review.
+  let asked = false;
+  const answering = new Set<string>();
   for (const row of events) {
     const event = row.event;
     switch (event.kind) {
@@ -197,17 +222,34 @@ export function happenings(events: EventRow[], store: Store, now: Date): Happeni
         else if (event.cause === 'state' && event.task.state === 'done') say(row, event.task.dropped ? `${who(event.task.dropped.by)} closed it as not needed.` : event.task.mergedInto ? `It landed on ${event.task.mergedInto}.` : 'It is done.');
         else if (event.cause === 'state' && event.task.state === 'failed') say(row, 'It was stopped.');
         break;
-      case 'run_started':
+      case 'run_started': {
+        const name = who(event.run.employeeId);
         if (sentBack && authored(event.run)) fixing.add(event.run.id);
+        if (asked && event.run.mode === 'review') answering.add(event.run.id);
         if (event.run.mode !== 'route') sentBack = false;
-        say(row, fixing.has(event.run.id) ? `${who(event.run.employeeId)} started fixing it.` : `${who(event.run.employeeId)} ${STARTED[event.run.mode]}.`);
+        if (authored(event.run)) asked = false;
+        say(row, fixing.has(event.run.id) ? `${name} started fixing it.` : answering.has(event.run.id) ? `${name} took the question.` : `${name} ${STARTED[event.run.mode]}.`);
         break;
-      case 'run_ended':
-        if (over.has(event.run.id)) break;
-        over.add(event.run.id);
-        if (event.run.mode === 'review' && event.run.outcome === 'done' && event.run.reason === 'sent_back') sentBack = true;
-        say(row, fixing.has(event.run.id) && event.run.outcome === 'done' ? `${who(event.run.employeeId)} reported it fixed.` : ended(event.run, who(event.run.employeeId)));
+      }
+      case 'run_ended': {
+        const { run } = event;
+        const name = who(run.employeeId);
+        if (over.has(run.id)) {
+          // The one ending that changes after the fact: an approval that did not stand, because a check it relied on failed.
+          if (run.mode === 'review' && run.reason === 'sent_back' && over.get(run.id) === 'approved') {
+            over.set(run.id, 'sent_back');
+            sentBack = true;
+            say(row, `${name}'s approval did not stand: a check it relied on failed, so it went back.`);
+          }
+          break;
+        }
+        over.set(run.id, run.reason);
+        if (run.mode === 'review' && run.outcome === 'done' && run.reason === 'sent_back') sentBack = true;
+        if (authored(run) && run.reason === 'question') asked = true;
+        if (answering.has(run.id)) asked = false;
+        say(row, fixing.has(run.id) && run.outcome === 'done' ? `${name} reported it fixed.` : answering.has(run.id) && run.reason === 'escalated' ? `${name} passed the question on.` : ended(run, name));
         break;
+      }
       case 'gate_finished':
         // A check the employee asked for while working is its own business; the engine's own are the task's.
         if (!event.asked) say(row, `The check "${event.result.name}" ${event.result.exitCode === 0 ? 'passed' : 'failed'}${event.result.reused ? ' (on exactly these files, a moment before)' : ''}.`);

@@ -52,6 +52,7 @@ export function glance(store: Store, taskId: string, _now: Date): Glance | null 
   const lines: string[] = [];
 
   if (live) lines.push(live.mode === 'review' ? `${who(live.employeeId)} is reviewing it now.` : live.mode === 'brief' ? `${who(live.employeeId)} is planning it.` : `${who(live.employeeId)} is working on it now${live.activity ? `: ${live.activity.replace(/[.!?]+$/, '')}` : ''}.`);
+  else if (task.dropped) lines.push(`${who(task.dropped.by)} closed it as not needed${task.dropped.why.trim() ? `: ${task.dropped.why.trim().replace(/[.!?]+$/, '')}` : ''}.`);
   else if (task.state === 'done') lines.push(task.mergedInto ? `Done. It landed on ${task.mergedInto}.` : task.branch ? `Done. Its work is kept on the branch ${task.branch}.` : 'Done.');
   else if (task.state === 'failed') lines.push('Stopped.');
   else if (card) lines.push(`Waiting on you: ${WHY[card.kind]}.`);
@@ -216,7 +217,8 @@ export type OrgTeam = { id: string; name: string; summary: string; lead: Person 
 
 export function personStatus(store: Store, employeeId: string): PersonStatus {
   const open = openDecisions(store);
-  const stuck = [...store.tasks.values()].some((task) => task.state === 'blocked' && task.assigneeId === employeeId) || open.some((decision) => decision.kind === 'lease' && decision.employeeId === employeeId);
+  // Stuck is waiting on the user: a card on the user's desk about their run, or about a task of theirs. A card someone decides for the user is not that.
+  const stuck = open.some((decision) => decision.kind === 'lease' && decision.employeeId === employeeId) || [...store.tasks.values()].some((task) => task.state === 'blocked' && task.assigneeId === employeeId && open.some((decision) => decision.taskId === task.id));
   if (stuck) return 'stuck';
   const live = liveRuns(store).find((run) => run.employeeId === employeeId);
   if (!live) return 'idle';

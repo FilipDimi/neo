@@ -238,6 +238,8 @@ describe('a task at a glance', () => {
     expect(at({ tasks: [task({ state: 'blocked' })], decisions: [decision({ kind: 'question' })] }).lines[0]).toBe('Waiting on you: has a question.');
     expect(at({ tasks: [task({ state: 'blocked' })], decisions: [decision({ kind: 'review', deciderId: 'neo' })] }).lines[0]).toBe('Neo is deciding what happens next.');
     expect(at({ tasks: [task({ state: 'done', mergedInto: 'team' })] }).lines[0]).toBe('Done. It landed on team.');
+    // A ticket closed as not needed says who closed it and why, not that it is done.
+    expect(at({ tasks: [task({ state: 'done', dropped: { by: 'lead', why: 'Covered by another ticket.' } })] }).lines[0]).toBe('Priya closed it as not needed: Covered by another ticket.');
     expect(at({ tasks: [task({ state: 'failed' })] }).lines[0]).toBe('Stopped.');
   });
 

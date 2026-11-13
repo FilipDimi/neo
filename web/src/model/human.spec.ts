@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { EventRow } from '../../../src/shared/events.ts';
 import { company, decision, employee, plus, run, T0, task, team } from '../../../test/rows.ts';
 import { fromSnapshot, type Snapshot } from '../store/reduce.ts';
+import { STORY_KINDS } from '../../../src/shared/view.ts';
+import { placement } from '../office/placement.ts';
 import { happenings, memoryNotes, modelName, personView, priorityWord, stateWord, taskPath } from './human.ts';
+import { personStatus } from './select.ts';
 
 const people = [employee({ id: 'neo', name: 'Neo', teamId: 'office' }), employee({ id: 'lead', name: 'Priya' }), employee(), employee({ id: 'emp2', name: 'Grace' })];
 const teams = [team({ id: 'office', name: 'Office', leadId: 'neo' }), team({ leadId: 'lead' })];
@@ -67,9 +70,9 @@ describe('a person, at a glance', () => {
     const seen = personView(storeOf({ tasks, runs }), 'emp1', runs, T0)!;
     expect(seen.week).toBe('This week Ada worked on 1 task and reviewed 1.');
     expect(seen.recent).toEqual([
-      { taskId: 'a', title: 'Serve the stages', did: 'worked on it', state: 'In review', when: '2 h ago' },
-      { taskId: 'b', title: 'Contract 0.10.1', did: 'reviewed it', state: 'Landed', when: '1 d ago' },
-      { taskId: 'c', title: 'Old work', did: 'worked on it', state: 'Done', when: '9 d ago' },
+      { taskId: 'a', title: 'Serve the stages', did: 'worked on it', state: 'In review', when: '2 h ago', open: true },
+      { taskId: 'b', title: 'Contract 0.10.1', did: 'reviewed it', state: 'Landed', when: '1 d ago', open: true },
+      { taskId: 'c', title: 'Old work', did: 'worked on it', state: 'Done', when: '9 d ago', open: true },
     ]);
     expect(personView(storeOf({ tasks }), 'emp2', [], T0)!.week).toBe('Grace has not worked on anything this week.');
   });
@@ -183,5 +186,126 @@ describe('what happened on a task, in plain sentences', () => {
     expect(ended('silent', 'expired')).toBe("Ada's run went silent.");
     expect(ended('crashed', 'failed')).toBe("Ada's run failed.");
     expect(happenings([row(1, { kind: 'run_activity', runId: 'w', taskId: 'task1', employeeId: 'emp1', text: 'typing' })], store, T0)).toEqual([]);
+  });
+});
+
+describe('what the review of these screens found', () => {
+  const daysAgo = (days: number, minute = 0) => new Date(T0.getTime() - days * 24 * 3600_000 + minute * 60_000).toISOString();
+
+  it("counts a person's week from all their runs, also on tasks the board no longer holds, and says which of them still open", () => {
+    // Eight tasks finished two days ago. The board holds the last three; the page is given a line for each.
+    const done = Array.from({ length: 8 }, (_, i) => task({ id: `t${i}`, title: `Ticket ${i}`, state: 'done', mergedInto: i === 0 ? 'main' : null, assigneeId: 'emp1' }));
+    const runs = done.map((one, i) => run({ id: `r${i}`, taskId: one.id, employeeId: 'emp1', outcome: 'done', startedAt: daysAgo(2, i), endedAt: daysAgo(2, i) }));
+    const lines = done.map(({ id, title, kind, state, mergedInto }) => ({ id, title, kind, state, mergedInto }));
+    const seen = personView(storeOf({ tasks: done.slice(5) }), 'emp1', runs, T0, lines)!;
+    expect(seen.week).toBe('This week Ada worked on 8 tasks.');
+    expect(seen.recent.map((work) => [work.title, work.open])).toEqual([['Ticket 7', true], ['Ticket 6', true], ['Ticket 5', true], ['Ticket 4', false], ['Ticket 3', false], ['Ticket 2', false], ['Ticket 1', false], ['Ticket 0', false]]);
+    expect(seen.recent.at(-1)).toMatchObject({ did: 'worked on it', state: 'Landed' });
+    // A run on a task nothing is known of is left out, as before.
+    expect(personView(storeOf(), 'emp1', runs, T0)!.week).toBe('Ada has not worked on anything this week.');
+  });
+
+  it('says "Waiting on you" only about a card on your desk: one the chief of staff is deciding is said as that, and opens its task', () => {
+    const store = storeOf({ company: company({ chiefOfStaffId: 'neo', decider: 'chief' }), tasks: [task({ title: 'Serve the stages', state: 'blocked', blockedFrom: 'running', assigneeId: 'emp1' })], decisions: [decision({ kind: 'question', deciderId: 'neo' })] });
+    expect(stateWord(store, 'task1')).toBe('Being decided');
+    const seen = personView(store, 'emp1', [], T0)!;
+    expect(seen.who).toBe('Engineering team. Waiting for a decision.');
+    // Nor is that person shown as stuck anywhere else: stuck is waiting on you.
+    expect(personStatus(store, 'emp1')).toBe('idle');
+    expect(seen.doing).toEqual({ text: 'Neo is deciding about "Serve the stages"', taskId: 'task1' });
+  });
+
+  it('says what is waiting on you when the card is about their run on a task that is not assigned to them', () => {
+    const silent = run({ id: 'r1', employeeId: 'lead', mode: 'brief', outcome: 'expired', reason: 'silent', endedAt: T0.toISOString() });
+    const store = storeOf({ tasks: [task({ title: 'Serve the stages', state: 'blocked', blockedFrom: 'briefing', assigneeId: null })], runs: [silent], decisions: [decision({ kind: 'lease', employeeId: 'lead', runId: 'r1' })] });
+    expect(placement('lead', store, T0)).toMatchObject({ where: 'stuck', taskId: 'task1' });
+    const seen = personView(store, 'lead', [silent], T0)!;
+    expect(seen.who).toBe('Leads Engineering. Waiting on you.');
+    expect(seen.doing).toEqual({ text: 'Waiting on you about "Serve the stages"', taskId: 'task1' });
+  });
+
+  const steps = (store: ReturnType<typeof storeOf>) => taskPath(store, 'task1').map((step) => `${step.label}:${step.state}`);
+
+  it('a task stopped while its lead was answering a question was stopped while being built, not at the check', () => {
+    const asked = run({ id: 'w', employeeId: 'emp1', outcome: 'stopped', reason: 'question', startedAt: plus(T0, -600).toISOString(), endedAt: plus(T0, -300).toISOString() });
+    const answer = run({ id: 'a', employeeId: 'lead', mode: 'review', outcome: 'done', reason: 'escalated', startedAt: plus(T0, -200).toISOString(), endedAt: plus(T0, -100).toISOString() });
+    expect(steps(storeOf({ tasks: [task({ state: 'failed', assigneeId: 'emp1' })], runs: [asked, answer] }))).toEqual(['Asked:done', 'Built:stopped', 'Checked:next', 'Done:next']);
+    // Stopped after a real review of reported work, it had reached the check.
+    const reported = { ...asked, outcome: 'done' as const, reason: null };
+    expect(steps(storeOf({ tasks: [task({ state: 'failed', assigneeId: 'emp1' })], runs: [reported, { ...answer, reason: 'sent_back' }] }))).toEqual(['Asked:done', 'Built:done', 'Checked:stopped', 'Done:next']);
+  });
+
+  it('a ticket closed as not needed was asked for and ended there: nothing was built or checked', () => {
+    const store = storeOf({ tasks: [task({ state: 'done', parentId: 'whole', dropped: { by: 'lead', why: 'Covered by another ticket.' } })] });
+    expect(steps(store)).toEqual(['Asked:done', 'Built:next', 'Checked:next', 'Not needed:done']);
+    expect(stateWord(store, 'task1')).toBe('Not needed');
+  });
+
+  describe('in what happened', () => {
+    const store = storeOf({ tasks: [task({ title: 'Serve the stages' })] });
+    const row = (id: number, event: EventRow['event'], at: Date = plus(T0, id * 60)): EventRow => ({ id, at: at.toISOString(), taskId: 'task1', runId: null, employeeId: null, teamId: null, event });
+    const work = run({ id: 'w', employeeId: 'emp1' });
+    const review = run({ id: 'r', mode: 'review', employeeId: 'lead' });
+    const ended = (one: typeof work, over: Partial<typeof work>) => ({ ...one, outcome: 'done' as const, endedAt: T0.toISOString(), ...over });
+
+    it('an approval the engine turned into a send-back, because a check it relied on failed, is told as that, and the work after it is a fix', () => {
+      const again = run({ id: 'w2', employeeId: 'emp1' });
+      const told = happenings(
+        [
+          row(1, { kind: 'run_started', run: review, requestId: null, teamId: 'team1' }),
+          row(2, { kind: 'run_ended', run: ended(review, { reason: 'approved' }), teamId: 'team1' }),
+          row(3, { kind: 'gate_finished', runId: 'r', taskId: 'task1', result: { name: 'tests', command: 'npm test', exitCode: 1, output: '', durationMs: 1 } }),
+          row(4, { kind: 'run_ended', run: ended(review, { reason: 'sent_back' }), teamId: 'team1' }),
+          row(5, { kind: 'run_started', run: again, requestId: null, teamId: 'team1' }),
+          row(6, { kind: 'run_ended', run: ended(again, {}), teamId: 'team1' }),
+          row(7, { kind: 'run_ended', run: ended(again, { commit: 'abc' }), teamId: 'team1' }),
+        ],
+        store,
+        plus(T0, 3600),
+      ).map((one) => one.text);
+      expect(told).toEqual(['Ada reported it fixed.', 'Ada started fixing it.', "Priya's approval did not stand: a check it relied on failed, so it went back.", 'The check "tests" failed.', 'Priya approved it.', 'Priya started reviewing it.']);
+    });
+
+    it("a lead's answer to a question is told as that, not as a review, and the work after it is not a fix", () => {
+      const again = run({ id: 'w2', employeeId: 'emp1' });
+      const told = happenings(
+        [
+          row(1, { kind: 'run_started', run: work, requestId: null, teamId: 'team1' }),
+          row(2, { kind: 'run_ended', run: { ...work, outcome: 'stopped', reason: 'question', endedAt: T0.toISOString() }, teamId: 'team1' }),
+          row(3, { kind: 'run_started', run: review, requestId: null, teamId: 'team1' }),
+          row(4, { kind: 'run_ended', run: ended(review, { reason: 'answered' }), teamId: 'team1' }),
+          row(5, { kind: 'run_started', run: again, requestId: null, teamId: 'team1' }),
+          row(6, { kind: 'run_ended', run: ended(again, {}), teamId: 'team1' }),
+          row(7, { kind: 'run_started', run: { ...review, id: 'r2' }, requestId: null, teamId: 'team1' }),
+        ],
+        store,
+        plus(T0, 3600),
+      ).map((one) => one.text);
+      expect(told).toEqual(['Priya started reviewing it.', 'Ada reported it done.', 'Ada started working on it.', 'Priya answered a question about it.', 'Priya took the question.', 'Ada stopped with a question.', 'Ada started working on it.']);
+    });
+
+    it('tells what happened long ago by its date, what happened this week by its day, and today by the hour', () => {
+      const created = (id: number, days: number) => row(id, { kind: 'task_changed', task: task(), cause: 'created' }, new Date(T0.getTime() - days * 24 * 3600_000));
+      const [today, yesterday, lastWeek] = happenings([created(1, 8), created(2, 1), created(3, 0)], store, T0).map((one) => one.at);
+      expect(today).toMatch(/^\d\d:\d\d$/);
+      expect(yesterday).toMatch(/^[A-Z][a-z]{2} \d\d:\d\d$/);
+      expect(lastWeek).toMatch(/^\d{1,2} [A-Z][a-z]{2}$/);
+    });
+
+    it('is told only from the kinds of event the engine keeps for the story', () => {
+      const kinds = [
+        row(1, { kind: 'task_changed', task: task(), cause: 'created' }),
+        row(2, { kind: 'run_started', run: work, requestId: null, teamId: 'team1' }),
+        row(3, { kind: 'run_ended', run: ended(work, {}), teamId: 'team1' }),
+        row(4, { kind: 'gate_finished', runId: 'w', taskId: 'task1', result: { name: 'rust', command: 'x', exitCode: 0, output: '', durationMs: 1 } }),
+        row(5, { kind: 'decision_raised', decision: decision({ kind: 'merge' }) }),
+        row(6, { kind: 'decision_answered', decision: decision({ kind: 'merge', answer: { optionId: 'merge' }, answeredAt: T0.toISOString(), options: [{ id: 'merge', label: 'Merge', effect: 'merge' }] }), result: 'applied' }),
+        row(7, { kind: 'run_activity', runId: 'w', taskId: 'task1', employeeId: 'emp1', text: 'typing' }),
+        row(8, { kind: 'task_changed', task: task({ claims: ['a.ts'] }), cause: 'edited' }),
+      ];
+      const told = happenings(kinds, store, plus(T0, 3600));
+      expect(told.map((one) => one.id).sort()).toEqual([1, 2, 3, 4, 5, 6]);
+      for (const one of told) expect(STORY_KINDS).toContain(kinds.find((each) => each.id === one.id)!.event.kind);
+    });
   });
 });

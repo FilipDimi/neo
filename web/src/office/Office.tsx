@@ -24,7 +24,7 @@ function hitsOf(scene: SceneNode[], ui: Ui, widthOf: (id: string) => number | nu
     } else if (node.kind === 'bubble' && typeof props.taskId === 'string') {
       const taskId = props.taskId;
       const w = widthOf(node.id) ?? Math.max(...text(props.text).split('\n').map((line) => line.length)) * 6.2 + 22; // until the canvas has measured it
-      hits.push({ id: node.id, x: props.side === 'left' ? node.x - w : node.x, y: node.y, w, h: node.h, label: `Open the task: ${text(props.text).replace(/\n/g, ' ')}`, act: () => ui.openTask(taskId) });
+      hits.push({ id: node.id, x: props.side === 'left' ? node.x - w : node.x, y: node.y, w, h: node.h, label: `Open the task: ${text(props.full) || text(props.text).replace(/\n/g, ' ')}`, act: () => ui.openTask(taskId) });
     } else if (node.kind === 'monitor' && typeof props.taskId === 'string') {
       const taskId = props.taskId;
       // The lit screen opens the same task as the bubble beside it: a bigger target for a mouse, not a second thing to read out.

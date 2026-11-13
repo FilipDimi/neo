@@ -232,6 +232,16 @@ describe('TeamForm', () => {
 describe('PersonPage', () => {
   const detail = { employee: store.employees.get('lead')!, memoryIndex: '- 2026-11-08: Learned the roster shape.', runs: [run({ employeeId: 'lead', outcome: 'done', mode: 'review', costUsd: 0.2 })], spentToday: 1.5 };
 
+  it('lists work on a task the board no longer holds, from the line the engine gives for it, and does not pretend it opens', async () => {
+    const earlier = run({ id: 'r1', employeeId: 'lead', taskId: 'gone', outcome: 'done', mode: 'work', startedAt: T0.toISOString(), endedAt: T0.toISOString() });
+    const api = fakeApi(() => ({ ...detail, runs: [earlier], tasks: [{ id: 'gone', title: 'Last week\'s ticket', kind: 'work', state: 'done', mergedInto: 'main' }] }));
+    mount(<PersonPage employeeId="lead" onClose={() => {}} />, { store, now: T0, api });
+    expect(await screen.findByText('This week Priya worked on 1 task.')).toBeTruthy();
+    const title = screen.getByText("Last week's ticket");
+    expect(title.closest('li')!.textContent).toContain('worked on it, landed, 0 s ago');
+    expect(title.closest('button')).toBeNull();
+  });
+
   it('opens on who the person is, how their week went and what they last worked on', async () => {
     const reviewed = run({ id: 'r1', employeeId: 'lead', taskId: 'task1', outcome: 'done', mode: 'review', reason: 'approved', costUsd: 0.2, startedAt: T0.toISOString(), endedAt: T0.toISOString() });
     const withWork = { ...store, tasks: new Map([['task1', task({ title: 'Serve the stages', teamId: 'ios', state: 'done', mergedInto: 'team' })]]) };

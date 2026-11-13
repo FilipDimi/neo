@@ -96,7 +96,7 @@ export function cardLine(task: Task, runs: Run[], decisions: Decision[], now: Da
     case 'briefing':
     case 'running': {
       if (live) return live.activity ?? parts(`event ${ago(live.lastEventAt, now)} ago`, runs.some((run) => run.gateResults.length > 0) ? gatePart(task, runs) : '');
-      if (children.length > 0) return `${children.filter((child) => child.state === 'done').length} of ${children.length} sub-tasks done`;
+      if (children.length > 0) return `${children.filter((child) => child.state === 'done').length} of ${children.length} parts done`;
       return '';
     }
     case 'review': {
@@ -125,3 +125,12 @@ export function longestSilence(liveRuns: Run[], now: Date): { runId: string; sec
   }
   return longest;
 }
+
+/** What is needed of a task to name it and say where it stands, for a page that lists work the board no longer holds. */
+export type TaskLine = Pick<Task, 'id' | 'title' | 'kind' | 'state' | 'mergedInto' | 'dropped'>;
+
+/**
+ * The kinds of event a task's story is told from: asked for, started, ended, checked, a card raised and answered.
+ * What a session typed, a status line set, a file claimed, a wait: none of that is in it.
+ */
+export const STORY_KINDS = ['task_changed', 'run_started', 'run_ended', 'gate_finished', 'decision_raised', 'decision_answered'] as const;

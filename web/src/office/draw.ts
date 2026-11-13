@@ -15,7 +15,7 @@ export const WALK_MS = 600;
 export const FADE_MS = 300;
 const WALKS: ReadonlySet<SceneKind> = new Set(['person', 'tag']);
 // What a node carries for clicks and labels. None of it changes a pixel.
-const NOT_LOOK = new Set(['employeeId', 'name', 'decisionId', 'taskId', 'status', 'saying', 'where']);
+const NOT_LOOK = new Set(['employeeId', 'name', 'decisionId', 'taskId', 'status', 'saying', 'where', 'full']);
 
 /** Everything about a node that changes how it is drawn. The same look means the same object is kept. */
 function lookOf(node: SceneNode): string {

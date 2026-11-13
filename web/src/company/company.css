@@ -58,8 +58,9 @@ button.doing:hover { border-color: #3A3A40; }
 .week { color: var(--soft); }
 .work { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .work li + li { border-top: 1px solid var(--line); }
-.work button { width: 100%; text-align: left; background: none; border: 0; padding: 9px 2px; display: flex; flex-direction: column; gap: 2px; }
-.work button:hover .work-title { text-decoration: underline; text-underline-offset: 3px; }
+.work .work-row { width: 100%; text-align: left; background: none; border: 0; padding: 9px 2px; display: flex; flex-direction: column; gap: 2px; }
+.work button.work-row:hover .work-title { text-decoration: underline; text-underline-offset: 3px; }
+.work div.work-row .work-title { color: var(--soft); }
 .work-title { font-weight: 600; overflow-wrap: anywhere; }
 .work-line { font-size: 12px; color: var(--muted); }
 .more-work { align-self: flex-start; padding-left: 2px; }

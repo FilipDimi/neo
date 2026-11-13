@@ -7,7 +7,8 @@ import { countsCost, longestSilence } from '../../../src/shared/view.ts';
 import { ago, initials, money, untilWhen } from '../format.ts';
 import { board, liveRuns, openDecisions, spendToday } from '../model/select.ts';
 import type { Store } from '../store/reduce.ts';
-import { CHIEF, DESK, FLOOR, KITCHEN, LEAD_DESK, MEETING, PALETTE, rugs, seats, SKIN, STUCK, WALL, type Rect } from './layout.ts';
+import { BUBBLE, layBubbles, type Speaker } from './bubbles.ts';
+import { CHIEF, DESK, FLOOR, KITCHEN, MEETING, PALETTE, rugs, seats, SKIN, STUCK, WALL, type Rect } from './layout.ts';
 import { placement, wrap, type Placement } from './placement.ts';
 
 export type SceneKind = 'floor' | 'window' | 'rug' | 'label' | 'desk' | 'monitor' | 'chair' | 'person' | 'tag' | 'bubble' | 'whiteboard' | 'table' | 'couch' | 'lamp' | 'tray' | 'counter' | 'plant' | 'wallboard' | 'button';
@@ -22,16 +23,6 @@ const CHIEF_SHIRT = '#2A2A2E';
 /** Where a person stands relative to a member's desk, a lead's desk, the meeting table and the couch, at full size. */
 type Offsets = { monitor: Point; chair: Point; person: Point; tag: Point & { w: number } };
 type Point = { x: number; y: number };
-/**
- * A bubble of one line is this tall, and this much taller for every line after it. It ends `gap` above its speaker's
- * head, where its tail points. A letter is `letter` wide and the words have `pad` around them. Two lines are as tall
- * as fits between a rug's name and the heads of its first row on a rug of six.
- */
-const BUBBLE = { h: 21, line: 13, gap: 5, letter: 6.2, pad: 22 };
-/** How many letters fit on a line of a bubble that may be this wide. */
-const lettersIn = (width: number): number => Math.floor((width - BUBBLE.pad) / BUBBLE.letter);
-/** A seat too small for a line of this many letters has no room of its own for words. */
-const FEWEST = 12;
 const AT_DESK: Offsets = { monitor: { x: 34, y: -14 }, chair: { x: 40, y: 64 }, person: { x: 48, y: 36 }, tag: { x: 26, y: 110, w: 68 } };
 // A lead's desk stands on end at the right of the rug.
 const AT_LEAD_DESK: Offsets = { monitor: { x: 8, y: 60 }, chair: { x: 14, y: 146 }, person: { x: 22, y: 118 }, tag: { x: -2, y: 192, w: 76 } };
@@ -78,8 +69,16 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
   const people = new Map<string, Record<string, unknown>>();
   // What people are saying goes on top of every seat, so a neighbour's desk never covers it.
   const bubbles: SceneNode[] = [];
+  // Who is saying something at a desk of the rug being laid out, and what must never be behind words there: every
+  // person and name on it.
+  let speakers: Speaker[] = [];
+  let solid: Rect[] = [];
+  const says = (employeeId: string, lines: string[], box: Rect, how: Record<string, unknown>): void => {
+    const at = placed.get(employeeId)!;
+    bubbles.push(node(`bubble:${employeeId}`, 'bubble', box, { text: lines.join('\n'), full: at.bubble, tone: at.tone, taskId: at.taskId, ...how }));
+  };
   /** A desk with its screen and chair, and the person at it unless they are in the meeting room or on the couch. */
-  function seat(employeeId: string, desk: Rect, scale: number, offsets: Offsets, shirt: string, room: { column: number; right: number } = { column: 0, right: Infinity }): void {
+  function seat(employeeId: string, desk: Rect, scale: number, offsets: Offsets, shirt: string): void {
     const employee = store.employees.get(employeeId)!;
     const at = placed.get(employeeId)!;
     const lit = at.where === 'desk' && at.screen === 'lit';
@@ -91,37 +90,18 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
     const props = { employeeId, name: employee.name, shirt, skin: SKIN[hash(employeeId) % SKIN.length], where: at.where, tone: at.tone, status, saying: at.bubble, decisionId: at.decisionId, taskId: at.taskId };
     if (at.where === 'meeting') return void (meeting.push(employeeId), people.set(employeeId, props));
     if (at.where === 'stuck') return void (couch.push(employeeId), people.set(employeeId, props));
-    add(node(`person:${employeeId}`, 'person', place(offsets.person, 24, 46), { ...props, scale }));
-    add(node(`tag:${employeeId}`, 'tag', { ...place(offsets.tag, offsets.tag.w, 18), h: 18 }, { text: tagText(employee.name), tone: lit ? 'active' : 'idle' }));
-    if (at.bubble) {
-      const say = (lines: string[], box: { x: number; bottom: number }, how: Record<string, unknown>): void => {
-        const h = BUBBLE.h + (lines.length - 1) * BUBBLE.line;
-        bubbles.push(node(`bubble:${employeeId}`, 'bubble', { x: box.x, y: box.bottom - h, w: 0, h }, { text: lines.join('\n'), tone: at.tone, taskId: at.taskId, ...how }));
-      };
-      const head = place(offsets.person, 24, 46);
-      if (offsets === AT_DESK) {
-        // Over the speaker's own desk, with its tail down at them, and growing upwards: it starts at the desk's left
-        // edge and ends before the next desk, so nobody's face or words are ever behind someone else's. Three lines
-        // at full size; two where the row above is closer.
-        const own = lettersIn(Math.min(DESK.pitchX * scale - 8, room.right - desk.x));
-        const bottom = head.y - BUBBLE.gap;
-        const tail = { side: 'right', tail: 'down', tailAt: head.x + head.w / 2 - desk.x };
-        if (own >= FEWEST) say(wrap(at.bubble, own, scale >= 0.9 ? 3 : 2), { x: desk.x, bottom }, tail);
-        // A crowded rug has no such room. There a bubble is one line that may reach to the seat after the next, and
-        // every second seat talks one line higher: two neighbours never talk over each other.
-        else say(wrap(at.bubble, Math.max(FEWEST, Math.min(26, lettersIn(2 * DESK.pitchX * scale - 8))), 1), { x: desk.x, bottom: room.column % 2 === 1 ? bottom - BUBBLE.h - 3 : bottom }, tail);
-      } else if (offsets === AT_LEAD_DESK) {
-        // A lead's desk stands at the right edge of the rug, beside the rows. Their bubble lies over the far end of
-        // it and opens to the left, into the aisle between two rows: clear of the row above and of what is said below.
-        const right = desk.x + (LEAD_DESK.fromRight - 4) * scale;
-        const letters = Math.max(FEWEST, Math.min(22, lettersIn(right - room.right)));
-        say(wrap(at.bubble, letters, 3), { x: right, bottom: desk.y + 44 * scale }, { side: 'left', tail: 'down', tailAt: -(right - (head.x + head.w / 2)) });
-      } else {
-        // The chief of staff has a room of their own: the bubble stands beside the desk, where nothing else is.
-        const anchor = place(CHIEF_SAYS, 0, 0);
-        say(wrap(at.bubble, CHIEF_SAYS.letters, 2), { x: anchor.x, bottom: anchor.y + BUBBLE.h }, { side: 'right', tail: 'left' });
-      }
-    }
+    const head = place(offsets.person, 24, 46);
+    const tag = { ...place(offsets.tag, offsets.tag.w, 18), h: 18 };
+    add(node(`person:${employeeId}`, 'person', head, { ...props, scale }));
+    add(node(`tag:${employeeId}`, 'tag', tag, { text: tagText(employee.name), tone: lit ? 'active' : 'idle' }));
+    solid.push(head, tag);
+    if (!at.bubble) return;
+    if (offsets !== AT_CHIEF_DESK) return void speakers.push({ id: employeeId, text: at.bubble, desk, head, scale, lead: offsets === AT_LEAD_DESK });
+    // The chief of staff has a room of their own: the bubble stands beside the desk, where nothing else is.
+    const anchor = place(CHIEF_SAYS, 0, 0);
+    const lines = wrap(at.bubble, CHIEF_SAYS.letters, 2);
+    const h = BUBBLE.h + (lines.length - 1) * BUBBLE.line;
+    says(employeeId, lines, { x: anchor.x, y: anchor.y + BUBBLE.h - h, w: 0, h }, { side: 'right', tail: 'left' });
   }
 
   const rects = rugs(teams.length);
@@ -132,13 +112,13 @@ export function officeScene(store: Store, now: Date): SceneNode[] {
     const members = staff.filter((employee) => employee.teamId === team.id && employee.id !== lead?.id && employee.id !== chief?.id);
     add(node(`rug:${team.id}`, 'rug', rug, { label: team.name, style: 'team', fill: palette.rug, edge: palette.edge, labelColor: palette.label }));
     const seated = seats(rug, members.length, Boolean(lead));
-    // A member's place in its row, and how far to the right its words may go: up to the lead's desk, or the rug's edge.
-    const column = (i: number): number => seated.desks.slice(0, i).filter((desk) => desk.y === seated.desks[i]!.y).length;
-    const right = (seated.lead ? seated.lead.x : rug.x + rug.w) - 6;
-    for (const [i, member] of members.entries()) seat(member.id, seated.desks[i]!, seated.scale, AT_DESK, palette.shirt, { column: column(i), right });
-    // A lead's words stop short of the name tags of the last column of desks.
-    const lastTag = Math.max(rug.x, ...seated.desks.map((desk) => desk.x + (AT_DESK.tag.x + AT_DESK.tag.w + 4) * seated.scale));
-    if (lead && seated.lead) seat(lead.id, seated.lead, seated.scale, AT_LEAD_DESK, LEAD_SHIRT, { column: 0, right: lastTag });
+    [speakers, solid] = [[], []];
+    for (const [i, member] of members.entries()) seat(member.id, seated.desks[i]!, seated.scale, AT_DESK, palette.shirt);
+    if (lead && seated.lead) seat(lead.id, seated.lead, seated.scale, AT_LEAD_DESK, LEAD_SHIRT);
+    // What is said on this rug, once everyone on it has their place. The rug's name is written 20 in and 8 down, 12
+    // tall, in capitals of about 7.6 a letter.
+    const name = { x: rug.x + 20, y: rug.y + 8, w: team.name.length * 7.6 + 4, h: 12 };
+    for (const one of layBubbles(rug, name, speakers, solid, DESK.pitchX, lead && seated.lead ? seated.lead : null)) says(one.id, one.lines, { x: one.x, y: one.y, w: 0, h: one.h }, { side: one.side, tail: 'down', tailAt: one.tailAt });
   }
 
   // The chief of staff: a wider desk with a tray of envelopes, one per decision waiting for the user.

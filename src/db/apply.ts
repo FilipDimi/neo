@@ -5,6 +5,7 @@
  */
 import { EngineEvent, subjectsOf, type EventRow } from '../shared/events.ts';
 import { changesOf, type TableName } from '../shared/project.ts';
+import { STORY_KINDS } from '../shared/view.ts';
 import type { Db } from './open.ts';
 
 export type Tx = {
@@ -72,13 +73,16 @@ export function readEvents(db: Db, sinceId: number, limit = 5000, taskId?: strin
 const rowOf = (r: StoredEvent): EventRow => ({ id: r.id, at: r.at, taskId: r.task_id, runId: r.run_id, employeeId: r.employee_id, teamId: r.team_id, event: JSON.parse(r.payload) as EventRow['event'] });
 
 /**
- * A task's story: what the engine recorded about it (asked for, started, checked, reviewed, decided, landed), without
- * what its sessions typed. The last `limit` of it, oldest first. A long run types thousands of lines; none of them
- * pushes the task's start out of this.
+ * A task's story: what the engine recorded about it that is told (asked for, started, ended, checked, a card raised
+ * and answered), oldest first. Not what its sessions typed, nor a status line set, a file claimed or a wait: a long
+ * task has thousands of those, and none of them pushes its start out of this. The story is its beginning and the
+ * last `limit` of the rest.
  */
 export function readStory(db: Db, taskId: string, limit = 300): EventRow[] {
-  const rows = db.prepare("SELECT * FROM events WHERE task_id = ? AND kind != 'run_event' ORDER BY id DESC LIMIT ?").all(taskId, limit) as StoredEvent[];
-  return rows.reverse().map(rowOf);
+  const told = `task_id = ? AND kind IN (${STORY_KINDS.map(() => '?').join(', ')}) AND NOT (kind = 'task_changed' AND json_extract(payload, '$.cause') = 'edited')`;
+  const last = (db.prepare(`SELECT * FROM events WHERE ${told} ORDER BY id DESC LIMIT ?`).all(taskId, ...STORY_KINDS, limit) as StoredEvent[]).reverse();
+  const first = db.prepare(`SELECT * FROM events WHERE ${told} ORDER BY id LIMIT 1`).get(taskId, ...STORY_KINDS) as StoredEvent | undefined;
+  return (first && last[0] && first.id < last[0].id ? [first, ...last] : last).map(rowOf);
 }
 
 export function lastEventId(db: Db): number {

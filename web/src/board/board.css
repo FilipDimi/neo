@@ -61,9 +61,9 @@
 .path li[aria-current] { color: var(--text); font-weight: 600; }
 .path li[aria-current]::before { top: 1px; left: -2px; width: 16px; height: 16px; border-color: var(--step); background: var(--step); box-shadow: 0 0 0 4px color-mix(in srgb, var(--step) 24%, transparent); }
 .path li[data-state='held']::before { background: var(--surface); }
-.glance[data-attention='done'] .path li { color: var(--text); }
-.glance[data-attention='done'] .path li::before { border-color: var(--done); background: var(--done); }
-.glance[data-attention='done'] .path li::after { background: var(--done); }
+.glance[data-attention='done'] .path li[data-state='done'] { color: var(--text); }
+.glance[data-attention='done'] .path li[data-state='done']::before { border-color: var(--done); background: var(--done); }
+.glance[data-attention='done'] .path li[data-state='done']:not(:last-child)::after { background: var(--done); }
 @media (prefers-reduced-motion: no-preference) {
   .glance[data-attention='working'] .path li[data-state='now']::before, .glance[data-attention='review'] .path li[data-state='now']::before { animation: path-here 2.4s ease-in-out infinite; }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { Capability, Employee, Message, Run } from '../../../src/shared/types.ts';
 import { useApi, useUi } from '../app/context.ts';
-import { countsCost } from '../../../src/shared/view.ts';
+import { countsCost, type TaskLine } from '../../../src/shared/view.ts';
 import { money } from '../format.ts';
 import { Figure } from '../frame/Figure.tsx';
 import { MessageBox } from '../frame/MessageBox.tsx';
@@ -12,7 +12,8 @@ import { personStatus } from '../model/select.ts';
 import { useNow, useStore } from '../store/store.ts';
 import type { HireOptions } from './HireForm.tsx';
 
-type Detail = { employee: Employee; memoryIndex: string; runs: Run[]; spentToday: number };
+/** `runs` are theirs from the last week, or their last thirty. `tasks` name the tasks of those runs: the board may no longer hold them. */
+type Detail = { employee: Employee; memoryIndex: string; runs: Run[]; tasks: TaskLine[]; spentToday: number };
 type Draft = { role: string; model: string; effort: string; capabilities: Capability[]; skills: string[] };
 const CAPABILITY_LABEL: Record<string, string> = { read_files: 'read files', run_commands: 'run commands', write_code: 'write code', web_search: 'web search', git_push: 'git push', send_messages: 'send messages' };
 const toggle = <T,>(list: T[], item: T, on: boolean): T[] => (on ? [...list.filter((other) => other !== item), item] : list.filter((other) => other !== item));
@@ -54,7 +55,7 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
   const [allWork, setAllWork] = useState(false);
   const fail = (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure));
   // What the page says above the fold, from the store and this person's runs.
-  const view = useStore((store) => personView(store, employeeId, detail?.runs ?? [], now), [employeeId, detail, now.getTime()]);
+  const view = useStore((store) => personView(store, employeeId, detail?.runs ?? [], now, detail?.tasks ?? []), [employeeId, detail, now.getTime()]);
 
   useEffect(() => {
     let current = true;
@@ -163,12 +164,22 @@ export function PersonPage({ employeeId, onClose }: { employeeId: string; onClos
             <ul className="work">
               {recent.slice(0, allWork ? recent.length : RECENT_SHOWN).map((work) => (
                 <li key={work.taskId}>
-                  <button type="button" onClick={() => ui.openTask(work.taskId)}>
-                    <span className="work-title">{work.title}</span>
-                    <span className="work-line">
-                      {work.did}, {work.state.toLowerCase()}, {work.when}
-                    </span>
-                  </button>
+                  {/* A task the board still holds opens. One that is history is told, and that is all there is of it here. */}
+                  {work.open ? (
+                    <button type="button" className="work-row" onClick={() => ui.openTask(work.taskId)}>
+                      <span className="work-title">{work.title}</span>
+                      <span className="work-line">
+                        {work.did}, {work.state.toLowerCase()}, {work.when}
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="work-row">
+                      <span className="work-title">{work.title}</span>
+                      <span className="work-line">
+                        {work.did}, {work.state.toLowerCase()}, {work.when}
+                      </span>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

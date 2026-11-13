@@ -60,7 +60,7 @@ describe('cardLine', () => {
 
   it('counts the sub-tasks of a parent that is waiting for them', () => {
     const children = [task({ id: 'a', state: 'done' }), task({ id: 'b', state: 'running' }), task({ id: 'c', state: 'queued' })];
-    expect(cardLine(task({ state: 'running' }), [run({ mode: 'brief', outcome: 'done' })], [], now, children)).toBe('1 of 3 sub-tasks done');
+    expect(cardLine(task({ state: 'running' }), [run({ mode: 'brief', outcome: 'done' })], [], now, children)).toBe('1 of 3 parts done');
   });
 
   it('says where a done task was merged, why a failed one failed, and nothing for a queued one', () => {

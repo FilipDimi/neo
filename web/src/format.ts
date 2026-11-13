@@ -18,6 +18,17 @@ export function untilWhen(until: string, now: Date): string {
   return at.toDateString() === now.toDateString() ? time : `${DAYS[at.getDay()]} ${time}`;
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** When something happened: the time, with the weekday when it was in the last six days, and the date alone when it is older. */
+export function whenPast(at: string, now: Date): string {
+  const then = new Date(at);
+  const day = (date: Date): number => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const daysAgo = Math.round((day(now) - day(then)) / 86_400_000);
+  if (daysAgo > 6) return `${then.getDate()} ${MONTHS[then.getMonth()]}${then.getFullYear() === now.getFullYear() ? '' : ` ${then.getFullYear()}`}`;
+  return untilWhen(at, now);
+}
+
 /** Two letters for a name tag: the initials of two words, or the first two letters of one. */
 export function initials(name: string): string {
   const words = name.trim().split(/\s+/);

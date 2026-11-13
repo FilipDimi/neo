@@ -17,7 +17,7 @@ import { diffOf } from './diff.ts';
 import { writtenFiles } from './files.ts';
 import { PRESETS } from '../presets/presets.ts';
 import { EVENT_VERSION } from '../shared/events.ts';
-import { EARLIER_SHOWN } from '../shared/view.ts';
+import { EARLIER_SHOWN, type TaskLine } from '../shared/view.ts';
 import { EFFORT_LABELS, MODEL_LABELS } from '../shared/prices.ts';
 import { Capability, Company, Effort, Gate, ModelTier, Repo, Service, type Task, Team, TeamRepo } from '../shared/types.ts';
 import { availableCapabilities, CAPABILITIES } from '../supervisor/blastRadius.ts';
@@ -252,11 +252,17 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
 
   app.get('/api/employees/:id', async (request) => {
     const employee = found(store.getEmployee(db, id(request)), 'such employee');
-    const runs = store
-      .allRuns(db)
-      .filter((run) => run.employeeId === employee.id)
-      .slice(-30);
-    return { employee, memoryIndex: employee.fired ? '' : readIndex(employee.memoryDir), runs, spentToday: store.spendToday(db, now()).byEmployee.get(employee.id) ?? 0 };
+    // The page says how their week went and what they last worked on: every run of theirs from the last seven days, and
+    // their last thirty where the week holds fewer. With them, a line for each task those runs were on: the board
+    // holds only what is open and what finished last, and a week's work is more than that.
+    const mine = store.allRuns(db).filter((run) => run.employeeId === employee.id);
+    const since = new Date(now().getTime() - 7 * 86_400_000).toISOString();
+    const runs = mine.filter((run, index) => index >= mine.length - 30 || (run.endedAt ?? run.startedAt) >= since);
+    const tasks: TaskLine[] = [...new Set(runs.map((run) => run.taskId))].flatMap((taskId) => {
+      const task = store.getTask(db, taskId);
+      return task ? [{ id: task.id, title: task.title, kind: task.kind, state: task.state, mergedInto: task.mergedInto, ...(task.dropped ? { dropped: task.dropped } : {}) }] : [];
+    });
+    return { employee, memoryIndex: employee.fired ? '' : readIndex(employee.memoryDir), runs, tasks, spentToday: store.spendToday(db, now()).byEmployee.get(employee.id) ?? 0 };
   });
 
   app.patch('/api/employees/:id', async (request) => ({ employee: edit(hireCtx(), found(store.getEmployee(db, id(request)), 'such employee').id, EmployeePatch.parse(request.body)) }));

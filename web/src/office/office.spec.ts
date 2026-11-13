@@ -177,17 +177,6 @@ describe('officeScene', () => {
     expect(short.y + short.h).toBe(bubbleOf(scene, 'm0').y + bubbleOf(scene, 'm0').h);
   });
 
-  it('on a crowded rug, where a seat has no room for words, every second seat talks one line higher so no two bubbles meet', () => {
-    const scene = crew(14);
-    const [a, b, c] = ['m0', 'm1', 'm2'].map((id) => bubbleOf(scene, id));
-    for (const one of [a!, b!, c!]) expect(linesOf(one)).toHaveLength(1);
-    expect(a!.y).toBe(c!.y);
-    expect(b!.y + b!.h).toBeLessThan(a!.y);
-    // On its own level a bubble has room up to the seat after the next.
-    expect(a!.x + widest(a!)).toBeLessThanOrEqual(c!.x);
-    expect(linesOf(a!)[0]!.length).toBeGreaterThanOrEqual(12);
-  });
-
   it("lays a lead's words over the far end of their own desk, clear of the last column of the team, and stops a member's words at the lead's desk", () => {
     const lead = employee({ id: 'lead', name: 'Lea' });
     const members = Array.from({ length: 4 }, (_, i) => employee({ id: `m${i}`, name: `M${i}` }));
@@ -233,6 +222,108 @@ describe('officeScene', () => {
       // The rug's name is written 8 from its top, 12 tall.
       expect(box(id).y, id).toBeGreaterThanOrEqual(part(scene, 'rug:team1').y + 20);
     }
+  });
+
+  // ---------- every rug, not only the artboard's ----------
+
+  /** A bubble's box as the room reckons it: its longest line at 6.2 a letter and 22 of padding, opening left or right from where it stands. */
+  const boxOf = (scene: SceneNode[], id: string): Rect => {
+    const bubble = part(scene, `bubble:${id}`);
+    const w = widest(bubble);
+    return { x: bubble.props.side === 'left' ? bubble.x - w : bubble.x, y: bubble.y, w, h: bubble.h };
+  };
+  /** A company of teams, each `[members, has a lead]`, where the people named in `talking` (everyone, unless told) are at work and say the same thing. Team t's people are `m{t}_{i}` and `lead{t}`. */
+  function office(shape: [members: number, lead: boolean][], talking?: string[], said = 'Building the results list of the search page from the board'): SceneNode[] {
+    const teams = shape.map(([, led], t) => team({ id: `t${t}`, name: `Team ${t}`, leadId: led ? `lead${t}` : null }));
+    const employees = teams.flatMap((one, t) => [...Array.from({ length: shape[t]![0] }, (_, i) => employee({ id: `m${t}_${i}`, name: `M${i}`, teamId: one.id })), ...(shape[t]![1] ? [employee({ id: `lead${t}`, name: 'Lea', teamId: one.id })] : [])]);
+    const busy = employees.filter((one) => !talking || talking.includes(one.id));
+    const tasks = busy.map((one) => task({ id: `task:${one.id}`, title: `Task of ${one.id}`, state: 'running', assigneeId: one.id, teamId: one.teamId }));
+    const runs = busy.map((one) => liveRun({ id: `run:${one.id}`, taskId: `task:${one.id}`, employeeId: one.id, activity: said }));
+    return officeScene(fromSnapshot(snapshot({ teams, employees, tasks, runs })), T0);
+  }
+  /** Everything wrong with where the bubbles of one rug lie: over a face, a name, each other, the rug's name or its edge. */
+  function wrongs(scene: SceneNode[], rugId: string, ids: string[]): string[] {
+    const rug = part(scene, rugId);
+    const talking = ids.filter((id) => scene.some((node) => node.id === `bubble:${id}`));
+    const out: string[] = [];
+    for (const id of talking) {
+      const box = boxOf(scene, id);
+      for (const other of ids) {
+        if (overlap(box, personOf(scene, other))) out.push(`${id} over ${other}`);
+        if (overlap(box, part(scene, `tag:${other}`))) out.push(`${id} over the name of ${other}`);
+        if (other !== id && talking.includes(other) && overlap(box, boxOf(scene, other))) out.push(`${id} over what ${other} says`);
+      }
+      if (box.y < rug.y || box.x < rug.x || box.x + box.w > rug.x + rug.w) out.push(`${id} off the rug`);
+    }
+    return out;
+  }
+  const team0 = (members: number, lead: boolean) => [...Array.from({ length: members }, (_, i) => `m0_${i}`), ...(lead ? ['lead0'] : [])];
+
+  it('on rugs of every size, with everyone talking at once, nobody talks over a face, a name, a neighbour or the edge of the rug', () => {
+    for (const lead of [false, true]) {
+      for (const members of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14]) {
+        const scene = office([[members, lead]]);
+        expect(wrongs(scene, 'rug:t0', team0(members, lead)), `${members} members${lead ? ' and a lead' : ''}`).toEqual([]);
+      }
+    }
+    // The second and third rugs of the artboard's room are narrower and lower.
+    for (const members of [1, 2, 3, 4, 5]) {
+      const scene = office([[4, true], [members, true], [members, true]]);
+      for (const t of [1, 2]) expect(wrongs(scene, `rug:t${t}`, [...Array.from({ length: members }, (_, i) => `m${t}_${i}`), `lead${t}`]), `${members} and a lead on rug ${t}`).toEqual([]);
+    }
+  });
+
+  it("ends a row of bubbles under the band of the rug's name wherever a few words fit there, and never lies on the name while they fit beside it", () => {
+    for (const [members, lead] of [[4, true], [6, true], [7, true]] as const) {
+      const scene = office([[members, lead]]);
+      const rug = part(scene, 'rug:t0');
+      for (const id of team0(members, lead)) expect(boxOf(scene, id).y, `${id} of ${members}`).toBeGreaterThanOrEqual(rug.y + 20);
+    }
+    // A rug of nine: the last seat of the first row has room for eight letters under the band. It says a line more,
+    // in the band, where the name is not.
+    const nine = office([[9, false]]);
+    const rug = part(nine, 'rug:t0');
+    const written = { x: rug.x + 20, y: rug.y + 8, w: 'Team 0'.length * 7.6 + 4, h: 12 };
+    for (const id of team0(9, false)) expect(overlap(boxOf(nine, id), written), id).toBe(false);
+    expect(boxOf(nine, 'm0_3').y).toBeLessThan(rug.y + 20);
+    expect(linesOf(part(nine, 'bubble:m0_3'))).toHaveLength(2);
+  });
+
+  it('on the third rug, which is low, a lead beside the first row talks above their own head and not over the member', () => {
+    const scene = office([[4, true], [2, true], [1, true]]);
+    expect(overlap(boxOf(scene, 'm2_0'), boxOf(scene, 'lead2'))).toBe(false);
+    // The lead's whole sentence is there all the same.
+    expect(linesOf(part(scene, 'bubble:lead2')).join(' ')).toBe('Building the results list of the search page from the board');
+    const two = office([[4, true], [2, true], [2, true]]);
+    const said = boxOf(two, 'm2_1');
+    expect(said.x + said.w, "the member's words end before the lead's desk").toBeLessThanOrEqual(part(two, 'desk:lead2').x);
+    expect(overlap(boxOf(two, 'lead2'), part(two, 'tag:m2_1'))).toBe(false);
+  });
+
+  it('says more of a sentence over a neighbour who is saying nothing, and keeps to its own seat beside one who talks', () => {
+    const alone = boxOf(office([[6, false]], ['m0_0']), 'm0_0');
+    const both = office([[6, false]], ['m0_0', 'm0_1']);
+    const shown = (scene: SceneNode[], id: string) => linesOf(part(scene, `bubble:${id}`)).join(' ').length;
+    expect(shown(office([[6, false]], ['m0_0']), 'm0_0')).toBeGreaterThan(shown(both, 'm0_0'));
+    expect(alone.x + alone.w).toBeGreaterThan(part(both, 'desk:m0_1').x);
+    expect(boxOf(both, 'm0_0').x + boxOf(both, 'm0_0').w).toBeLessThanOrEqual(part(both, 'desk:m0_1').x);
+    // Never past the seat after the next.
+    expect(alone.x + alone.w).toBeLessThanOrEqual(part(both, 'desk:m0_2').x);
+  });
+
+  it('on a crowded rug everyone says less, on one line; where not even a few letters fit, three dots or nothing, and the whole sentence stays one click away', () => {
+    const crowded = office([[14, false]]);
+    for (const id of team0(14, false)) expect(linesOf(part(crowded, `bubble:${id}`))).toHaveLength(1);
+    // A room of five teams: the rugs are a third as wide, the seats tiny.
+    const tiny = office([[12, true], [1, false], [1, false], [1, false], [1, false]]);
+    expect(wrongs(tiny, 'rug:t0', team0(12, true))).toEqual([]);
+    const bubbles = tiny.filter((node) => node.kind === 'bubble' && node.id.startsWith('bubble:m0_'));
+    expect(bubbles.length).toBeGreaterThan(0);
+    for (const bubble of bubbles) {
+      expect(String(bubble.props.text).length <= 12 || bubble.props.text === '…').toBe(true);
+      expect(bubble.props.full).toBe('Building the results list of the search page from the board');
+    }
+    expect(bubbles.some((bubble) => bubble.props.text === '…')).toBe(true);
   });
 
   it('gives a waiting run a quiet bubble', () => {

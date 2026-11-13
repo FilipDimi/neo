@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { apply } from '../../src/db/apply.ts';
+import { apply, readStory } from '../../src/db/apply.ts';
 import { paths } from '../../src/db/dataDir.ts';
 import { openDb } from '../../src/db/open.ts';
 import * as store from '../../src/db/store.ts';
@@ -111,6 +111,58 @@ describe('tasks and the snapshot', () => {
     expect(detail.story[0].event).toMatchObject({ kind: 'task_changed', cause: 'created' });
     expect(detail.story.map((e: any) => e.event.kind)).toEqual(expect.arrayContaining(['run_started', 'run_ended']));
     expect(detail.story.map((e: any) => e.id)).toEqual([...detail.story.map((e: any) => e.id)].sort((a: number, b: number) => a - b));
+  });
+
+  it("keeps a task's beginning in its story however long it gets, and counts nothing against it that the story does not tell", async () => {
+    const { call, w } = await fresh();
+    const created = task({ id: 'long', title: 'A long task', state: 'running', assigneeId: 'emp1' });
+    const worked = run({ id: 'r1', taskId: 'long', employeeId: 'emp1' });
+    apply(w.db, (tx) => {
+      tx.emit({ kind: 'task_changed', task: created, cause: 'created' });
+      tx.emit({ kind: 'run_started', run: worked, requestId: null, teamId: 'team1' });
+      // A day of work: a status line when the focus changes, and a file claimed the first time each is written.
+      for (let n = 0; n < 120; n++) tx.emit({ kind: 'run_activity', runId: 'r1', taskId: 'long', employeeId: 'emp1', text: `Building part ${n}` });
+      for (let n = 0; n < 180; n++) tx.emit({ kind: 'task_changed', task: { ...created, claims: Array.from({ length: n + 1 }, (_, i) => `src/file${i}.ts`) }, cause: 'edited' });
+    });
+    const story = (await call('GET', '/api/tasks/long')).json.story;
+    expect(story.map((row: any) => [row.event.kind, row.event.cause])).toEqual([['task_changed', 'created'], ['run_started', undefined]]);
+    // More to tell than the story holds: its beginning, then the last of it.
+    apply(w.db, (tx) => {
+      for (let n = 0; n < 10; n++) tx.emit({ kind: 'run_started', run: { ...worked, id: `again${n}` }, requestId: null, teamId: 'team1' });
+    });
+    const short = readStory(w.db, 'long', 4);
+    expect(short).toHaveLength(5);
+    expect(short[0]!.event).toMatchObject({ kind: 'task_changed', cause: 'created' });
+    expect(short.slice(1).map((row) => (row.event.kind === 'run_started' ? row.event.run.id : ''))).toEqual(['again6', 'again7', 'again8', 'again9']);
+  });
+
+  it("gives a person's page their whole week: every run of the last seven days, and a line for each task, also those the board no longer holds", async () => {
+    const { call, w } = await fresh();
+    const daysAgo = (days: number, minute = 0) => new Date(T0.getTime() - days * 24 * 3600_000 + minute * 60_000).toISOString();
+    apply(w.db, (tx) => {
+      // Long ago, one thing. This week, forty reviews for Ada, and eight tasks finished by Grace two days ago.
+      tx.emit({ kind: 'task_changed', task: task({ id: 'old', title: 'Old work', state: 'done', mergedInto: 'main', assigneeId: 'emp2', updatedAt: daysAgo(20) }), cause: 'state' });
+      tx.emit({ kind: 'run_ended', run: run({ id: 'old', taskId: 'old', employeeId: 'emp2', outcome: 'done', startedAt: daysAgo(20), endedAt: daysAgo(20) }), teamId: 'team1' });
+      for (let i = 0; i < 40; i++) {
+        tx.emit({ kind: 'task_changed', task: task({ id: `rev${i}`, title: `Reviewed ${i}`, state: 'review', assigneeId: 'emp2' }), cause: 'state' });
+        tx.emit({ kind: 'run_ended', run: run({ id: `rev${i}`, taskId: `rev${i}`, employeeId: 'emp1', mode: 'review', outcome: 'done', reason: 'sent_back', startedAt: daysAgo(1, i), endedAt: daysAgo(1, i) }), teamId: 'team1' });
+      }
+      for (let i = 0; i < 8; i++) {
+        tx.emit({ kind: 'task_changed', task: task({ id: `t${i}`, title: `Ticket ${i}`, state: 'done', assigneeId: 'emp2', createdAt: daysAgo(2, i), updatedAt: daysAgo(2, i) }), cause: 'state' });
+        tx.emit({ kind: 'run_ended', run: run({ id: `t${i}`, taskId: `t${i}`, employeeId: 'emp2', outcome: 'done', startedAt: daysAgo(2, i), endedAt: daysAgo(2, i) }), teamId: 'team1' });
+      }
+    });
+    // More than thirty runs in the week: all of them.
+    const ada = (await call('GET', '/api/employees/emp1')).json;
+    expect(ada.runs).toHaveLength(40);
+    expect(ada.tasks).toHaveLength(40);
+    // Fewer than thirty: the week's, and what came before, up to thirty. Each task is named, though the board holds five of the finished ones.
+    const grace = (await call('GET', '/api/employees/emp2')).json;
+    expect(grace.runs.map((one: any) => one.id)).toEqual(['old', 't0', 't1', 't2', 't3', 't4', 't5', 't6', 't7']);
+    expect(grace.tasks).toContainEqual({ id: 'old', title: 'Old work', kind: 'work', state: 'done', mergedInto: 'main' });
+    expect(grace.tasks.map((one: any) => one.title).sort()).toEqual(['Old work', ...Array.from({ length: 8 }, (_, i) => `Ticket ${i}`)]);
+    const held = (await call('GET', '/api/snapshot')).json.tasks.filter((one: any) => one.state === 'done');
+    expect(held).toHaveLength(5);
   });
 
   it('cancel fails the task and stops its run', async () => {
