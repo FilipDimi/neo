@@ -21,11 +21,9 @@ export function resolveAfter(db: Db, names: string[] | undefined): string[] {
   for (const raw of names ?? []) {
     const name = raw.trim();
     const byId = work.find((task) => task.id === name);
-    // Among tasks of one title, one that is still open is the one meant; a finished one is waited for no longer anyway.
-    const titled = work.filter((task) => task.state !== 'failed' && task.title.trim().toLowerCase() === name.toLowerCase());
-    const open = titled.filter((task) => !over(task));
-    const found = byId ? [byId] : open.length > 0 ? open : titled.slice(-1);
-    if (found.length === 0) throw new Error(`There is no task "${name}" to wait for. Name it by its id or its exact title`);
+    // A title names a task that is still open: one that is over is named by its id, or a title used before would be taken for the task meant.
+    const found = byId ? [byId] : work.filter((task) => !over(task) && task.title.trim().toLowerCase() === name.toLowerCase());
+    if (found.length === 0) throw new Error(`There is no open task "${name}" to wait for. Name one that is still open by its exact title, or any task by its id`);
     if (found.length > 1) throw new Error(`More than one task is called "${name}". Name the one to wait for by its id: ${found.map((task) => task.id).join(', ')}`);
     if (!ids.includes(found[0]!.id)) ids.push(found[0]!.id);
   }

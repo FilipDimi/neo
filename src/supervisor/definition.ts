@@ -184,6 +184,8 @@ export function buildFirstTurn(input: {
   /** In a chat: true when the one written to is the admin, who changes the setup. */
   admin?: boolean;
   self?: Employee;
+  /** A member's first run on a ticket its lead cut, with a lead there to answer: it is invited to object before it starts. */
+  firstWord?: boolean;
 }): string {
   const { task, mode, team, repo, material = {} } = input;
   const gates = task.gates.map((name) => {
@@ -269,7 +271,7 @@ ${assignable.map((mate) => `- ${mate.name} (assigneeId: ${mate.id}): ${mate.role
     case 'work':
       return `${header}
 ${
-  task.parentId && !team.selfManaged && !material.notes
+  input.firstWord && !material.notes
     ? '\nBefore you change anything: if this is already done (say where: the file and line, or the commit), if it cannot start until something else is done, or if someone else on the team should have it, say so now with mcp__engine__request_decision. Your lead answers at once, and can hand the ticket on or close it. Otherwise carry on.\n'
     : ''
 }

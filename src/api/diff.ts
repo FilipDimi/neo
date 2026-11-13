@@ -28,6 +28,8 @@ export async function diffOf(db: Db, task: Task): Promise<TaskDiff> {
   // The decision files a landing carried are the engine's, not this task's work.
   const engines = [dirOf(repo)].flatMap((dir) => dir ?? []);
   if (task.landed) return (await between(repo.path, `${task.landed.over}..${task.landed.tip}`, engines)) ?? NONE;
+  // A sub-task that waited for others began with their work merged in: its own change is what came after that.
+  if (task.parentId && task.after?.length && task.startedFrom) return (await between(repo.path, `${task.startedFrom}..${task.branch}`, engines)) ?? NONE;
   const base = (task.parentId && store.getTask(db, task.parentId)?.branch) || teamRepo.baseBranch;
   const ahead = await between(repo.path, `${base}...${task.branch}`, engines);
   // A part its parent has taken in is in the same place: measured from where its branch began.

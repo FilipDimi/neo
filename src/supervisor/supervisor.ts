@@ -326,6 +326,9 @@ export class Supervisor {
       tx.emit({ kind: 'task_changed', task: next, cause: 'edited' });
       if (!reassigned || next.state === 'blocked') return;
       for (const request of store.requestsOf(this.db, task.id)) tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: task.id });
+      // A task that still waits for others is not started by changing hands: the engine starts it when they are done.
+      const waits = waitingOn(this.db, next);
+      if (store.runsOf(this.db, task.id).length === 0 && (waits.open.length > 0 || waits.stopped.length > 0)) return;
       const who = requestFor(next, team);
       if ('problem' in who) decisions.raise(tx, this.db, now, { taskId: task.id, kind: 'staffing', text: decisions.staffingText(next, who.problem), options: decisions.optionsFor('staffing') });
       else tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, ...who, reason: 'new' }, now) });
@@ -550,7 +553,7 @@ export class Supervisor {
         teams,
         board: request.mode === 'route' ? companyNow(this.db, now) : undefined,
         // What it waited for and where that is now, at its start; and for a lead that plans, its team's board.
-        ...(!request.resumeSessionId && prepared.after?.length ? { waited: this.flow.waitedLines(prepared) } : {}),
+        ...(!request.resumeSessionId && prepared.after?.length && request.mode !== 'review' && request.mode !== 'route' ? { waited: this.flow.waitedLines(prepared) } : {}),
         ...(request.mode === 'brief' && !request.resumeSessionId ? { plan: planLines(this.db, team, prepared, now) } : {}),
         record: recordSection(this.db, indexFor(this.db, prepared)),
         remainingUsd: countsCost(company) ? Math.max(0, task.capUsd - store.spentOn(this.db, task.id)) : Infinity,
@@ -1040,7 +1043,8 @@ export class Supervisor {
         // An employee that keeps asking is missing something an answer cannot give it. The third question in a row says so,
         // and the buttons it wrote itself go: they have been pressed twice and changed nothing.
         // A lead's answer in between does not break the row: it is the asking that repeats.
-        const earlier = store.runsOf(this.db, run.taskId).filter((other) => other.id !== run.id && other.endedAt !== null && other.mode !== 'review');
+        // Its own asking: a ticket that was handed to it starts with a clean count.
+        const earlier = store.runsOf(this.db, run.taskId).filter((other) => other.id !== run.id && other.endedAt !== null && other.mode !== 'review' && other.employeeId === run.employeeId);
         let inARow = 1;
         for (const other of earlier.reverse()) {
           if (other.reason !== 'question') break;

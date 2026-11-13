@@ -1,4 +1,6 @@
+import fs from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { apply } from '../../src/db/apply.ts';
 import * as store from '../../src/db/store.ts';
 import { validateProposal } from '../../src/supervisor/briefing.ts';
 import { companyNow } from '../../src/supervisor/companyNow.ts';
@@ -120,7 +122,7 @@ describe('what depends on what', () => {
   it('refuses what cannot be an order, in words', () => {
     const setup = planned(() => {}, { selfManaged: true });
     const make = (after: string[]) => () => setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Later', brief: 'x', doneCondition: 'y', after });
-    expect(make(['Nothing like it'])).toThrow(/no task "Nothing like it"/);
+    expect(make(['Nothing like it'])).toThrow(/no open task "Nothing like it"/);
     setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Twin', brief: 'x', doneCondition: 'y' });
     setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Twin', brief: 'x', doneCondition: 'y' });
     expect(make(['Twin'])).toThrow(/More than one task is called "Twin".*by its id/s);
@@ -205,5 +207,103 @@ describe('the first word on a ticket', () => {
     expect(store.runsOf(setup.w.db, greeting!.id).filter((run) => run.mode === 'work').map((run) => run.outcome)).toEqual(['stopped']);
     expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done' });
     expect(companyNow(setup.w.db, setup.w.clock.now())).toContain('dropped by Priya: It is in README.md already.');
+  });
+});
+
+describe('what the review of the plan found', () => {
+  it('does not ask about a stopped dependency, or start the task, while another it waits for is still open', async () => {
+    const setup = planned(() => {}, { selfManaged: true });
+    const a = setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'A', brief: 'x', doneCondition: 'y' });
+    const b = setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp2', title: 'B', brief: 'x', doneCondition: 'y' });
+    const c = setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'C', brief: 'x', doneCondition: 'y', after: [a.id, b.id] });
+    setup.w.sup.cancelTask(a.id);
+    (setup.w.sup as unknown as { flow: { startWaiting(): void } }).flow.startWaiting();
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    expect(store.requestsOf(setup.w.db, c.id)).toEqual([]);
+    // B is done: now there is something to decide.
+    apply(setup.w.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(setup.w.db, b.id)!, state: 'done' }, cause: 'state' }), setup.w.clock.now());
+    for (const request of store.requestsOf(setup.w.db, b.id)) apply(setup.w.db, (tx) => tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: b.id }), setup.w.clock.now());
+    (setup.w.sup as unknown as { flow: { startWaiting(): void } }).flow.startWaiting();
+    expect(store.openDecisions(setup.w.db).map((card) => card.text)).toEqual(['"C" was waiting for "A", which was stopped. Start "C" anyway, or stop it too?']);
+  });
+
+  it('does not start a waiting task because it was given to someone else', () => {
+    const setup = planned(() => {}, { selfManaged: true });
+    const first = setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'First', brief: 'x', doneCondition: 'y' });
+    const second = setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp2', title: 'Second', brief: 'x', doneCondition: 'y', after: [first.id] });
+    setup.w.sup.editTask(second.id, { assigneeId: 'emp1' });
+    expect(store.getTask(setup.w.db, second.id)).toMatchObject({ assigneeId: 'emp1', state: 'queued' });
+    expect(store.requestsOf(setup.w.db, second.id)).toEqual([]);
+  });
+
+  it('names a task to wait for among those still open; one that is over is named by its id', () => {
+    const setup = planned(() => {}, { selfManaged: true });
+    const old = setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Migrate', brief: 'x', doneCondition: 'y' });
+    apply(setup.w.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...store.getTask(setup.w.db, old.id)!, state: 'done' }, cause: 'state' }), setup.w.clock.now());
+    expect(() => setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Later', brief: 'x', doneCondition: 'y', after: ['Migrate'] })).toThrow(/no open task "Migrate".*by its id/s);
+    expect(setup.w.sup.createTask({ teamId: 'team1', assigneeId: 'emp1', title: 'Later', brief: 'x', doneCondition: 'y', after: [old.id] }).after).toEqual([old.id]);
+  });
+
+  it('rebuilds a waited sub-task\'s folder with what it waited for, when the folder was lost before anything was committed', async () => {
+    const split = { subtasks: [sub({ title: 'Greeting', assigneeId: 'emp1', ownership: ['GREETING.md'] }), sub({ title: 'Farewell', assigneeId: 'emp2', ownership: ['FAREWELL.md'], after: ['Greeting'] })] };
+    const reviews: string[] = [];
+    let setup: Setup;
+    setup = planned(async (s) => {
+      if (s.mode === 'brief') return void (await s.engine('propose_subtasks', split));
+      if (s.mode === 'integrate') return void (await s.engine('report_done', { summary: 'Both are in.' }));
+      if (s.mode === 'review') {
+        reviews.push(s.input.prompt);
+        if (!s.input.prompt.includes('has stopped with a question')) return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ticket: {}, ...looked(s) }));
+        // While the lead answers, the member's folder goes missing.
+        const farewell = store.listTasks(setup.w.db).find((task) => task.title === 'Farewell')!;
+        fs.rmSync(farewell.folder!, { recursive: true, force: true });
+        return void (await s.engine('submit_review', { verdict: 'send_back', notes: 'Yes, in plain words.' }));
+      }
+      if (s.who === 'Ada') s.write('GREETING.md', 'hello\n');
+      else if (!s.resumed) return void (await s.engine('request_decision', { question: 'In plain words?', options: [] }));
+      else s.write('FAREWELL.md', `after "${s.read('GREETING.md').trim()}": goodbye\n`);
+      await s.engine('report_done', { summary: `${s.who} wrote a file.` });
+    });
+    const parent = setup.w.sup.createTask({ teamId: 'team1', title: 'Greet and part', brief: 'Two files, the second after the first.', doneCondition: 'Both exist.' });
+    await drain(setup);
+    expect(store.allDecisions(setup.w.db).map((card) => [card.kind, card.text])).toEqual([]);
+    expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done' });
+    expect(fileAt(setup.repoPath, 'team', 'FAREWELL.md')).toBe('after "hello": goodbye');
+    // What it waited for is said to whoever does the work, not to whoever reviews it.
+    expect(reviews.some((prompt) => prompt.includes('This task waited for'))).toBe(false);
+  });
+
+  it('takes one word from the lead on a question, and counts questions for the one who asks', async () => {
+    const replies: { ok: boolean; text: string }[] = [];
+    const asked: string[] = [];
+    const setup = planned(async (s) => {
+      if (s.mode === 'brief') return void (await s.engine('propose_subtasks', { subtasks: [sub({ title: 'Greeting', assigneeId: 'emp1', ownership: ['GREETING.md'] })] }));
+      if (s.mode === 'integrate') return void (await s.engine('report_done', { summary: 'In.' }));
+      if (s.mode === 'review') {
+        if (!s.input.prompt.includes('has stopped with a question')) return void (await s.engine('submit_review', { verdict: 'approve', notes: '', ...looked(s) }));
+        asked.push(/(\w+) is working on this task/.exec(s.input.prompt)?.[1] ?? '?');
+        if (asked.length === 1) return void (await s.engine('submit_review', { verdict: 'send_back', notes: 'Carry on.' }));
+        if (asked.length === 2) {
+          // One word: handing it on after having answered is refused.
+          replies.push(await s.engine('submit_review', { verdict: 'send_back', notes: 'Grace takes it.', ticket: { reassignTo: 'emp2' } }));
+          replies.push(await s.engine('submit_review', { verdict: 'send_back', notes: 'No, carry on after all.' }));
+          return;
+        }
+        return void (await s.engine('submit_review', { verdict: 'send_back', notes: 'Hello will do.' }));
+      }
+      // Ada asks twice, then Grace, to whom it was handed, asks once: three questions on the ticket, one of them hers.
+      if (s.who === 'Ada') return void (await s.engine('request_decision', { question: `Ada's question ${asked.length + 1}`, options: [] }));
+      if (!s.resumed) return void (await s.engine('request_decision', { question: 'Which greeting?', options: ['hello', 'hi'] }));
+      s.write('GREETING.md', 'hello\n');
+      await s.engine('report_done', { summary: 'Grace wrote it.' });
+    });
+    const parent = setup.w.sup.createTask({ teamId: 'team1', title: 'Greet', brief: 'One file.', doneCondition: 'It exists.' });
+    await drain(setup);
+    expect(replies.map((reply) => reply.ok)).toEqual([true, false]);
+    expect(replies[1]!.text).toMatch(/already/);
+    // Grace's question went to the lead like any first question: it is not the third in a row of anyone's.
+    expect(asked).toEqual(['Ada', 'Ada', 'Grace']);
+    expect(store.allDecisions(setup.w.db).map((card) => card.kind)).toEqual([]);
+    expect(store.getTask(setup.w.db, parent.id)).toMatchObject({ state: 'done' });
   });
 });

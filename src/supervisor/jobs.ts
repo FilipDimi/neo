@@ -102,7 +102,10 @@ export function buildJob(input: JobInput): WorkerJob {
   fs.mkdirSync(cwd, { recursive: true });
   const shape = sessionShape({ task, team, employee, mode: run.mode, folder: cwd, company, envFiles: input.envFiles, protect: engineFiles(input.paths) });
   const engineTools = engineToolsFor({ mode: run.mode, deciding: Boolean(task.decisionId), admin, chief: company.chiefOfStaffId === employee.id, lead: team.leadId === employee.id });
-  const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams, board: input.board, chief: company.chiefOfStaffId === employee.id, admin, self: employee });
+  // The first word on a ticket: only at its very start, for a member whose lead is there to read the answer.
+  const lead = team.leadId ? input.teammates.find((mate) => mate.id === team.leadId) : undefined;
+  const firstWord = run.mode === 'work' && request.reason === 'new' && Boolean(task.parentId) && !team.selfManaged && employee.id !== team.leadId && Boolean(lead && !lead.fired && lead.capabilities.includes('read_files'));
+  const first = request.firstTurn ?? buildFirstTurn({ task, mode: run.mode, team, repo: input.repo, teammates: input.teammates, remainingUsd: input.remainingUsd, teams: input.teams, board: input.board, chief: company.chiefOfStaffId === employee.id, admin, self: employee, firstWord });
   // A command may run long, but never longer than the lease: the Bash timeout sits two minutes under it.
   const bashTimeout = String(Math.max(1, run.leaseMinutes - 2) * 60_000);
   return {
