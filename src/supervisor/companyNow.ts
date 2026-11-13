@@ -69,8 +69,11 @@ export function companyNow(db: Db, now: Date): string {
                   : `nobody is on it right now (${name(task.assigneeId ?? team.leadId)} has it)`;
       // Computed, never asked for: how far a split has come, and whether what the task is built on has moved.
       const open = task.state !== 'done' && task.state !== 'failed';
-      const parts = open ? work.filter((child) => child.parentId === task.id && !child.meetingRole && !child.dropped) : [];
-      const progress = parts.length > 0 ? `; ${parts.filter((child) => child.state === 'done').length} of ${parts.length} parts done` : '';
+      const all = open ? work.filter((child) => child.parentId === task.id && !child.meetingRole && !child.dropped) : [];
+      // A part that was stopped is not one that is still to come: the whole goes on without it, or asks.
+      const parts = all.filter((child) => child.state !== 'failed');
+      const stopped = all.length - parts.length;
+      const progress = all.length > 0 ? `; ${parts.filter((child) => child.state === 'done').length} of ${parts.length} parts done${stopped > 0 ? ` (${stopped} stopped)` : ''}` : '';
       const stale = open ? staleLine(movedFor(db, task)) : null;
       lines.push(`- "${task.title}" (${task.state}): ${what}${progress}${stale ? `; ${stale}` : ''}`);
     }

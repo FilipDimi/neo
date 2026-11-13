@@ -160,7 +160,9 @@ export const Task = z.object({
   startedFrom: z.string().optional(),
   landed: z.object({ over: z.string(), tip: z.string() }).optional(),
   /** The decisions its maker named for it (its parent's with them), and the contract's version when it was made. */
-  builtOn: z.object({ decisions: z.array(z.string()), contract: z.string().nullable() }).optional(),
+  builtOn: z.object({ decisions: z.array(z.string()), contract: z.string().nullable(), at: iso.optional() }).optional(),
+  /** What its author was last shown of what moved under it, when a report was held for that: the next report is taken if nothing more has moved. */
+  shownMoved: z.string().optional(),
   /** The contract version the engine handed this ticket: it may change the contract, and must state this version there. */
   contractVersion: z.string().optional(),
   /** The files it has changed and not landed, from the top of the repository: held until it is done or stopped. */
@@ -228,6 +230,10 @@ export const ContractVersion = z.object({
   decisions: z.array(z.string()),
   by: z.string().nullable(),
   at: iso,
+  /** When the work that changed the contract under this version landed. Absent: handed out, and not (or not yet) in the contract's files anywhere. */
+  landedAt: iso.optional(),
+  /** The branches whose contract files are at this version: where it landed, and where the engine carried it. */
+  on: z.array(z.string()).optional(),
 });
 export type ContractVersion = z.infer<typeof ContractVersion>;
 
@@ -320,7 +326,7 @@ export const RunRequest = z.object({
 });
 export type RunRequest = z.infer<typeof RunRequest>;
 
-export const Effect = z.enum(['retry', 'raise_cap', 'allow_once', 'keep_refused', 'merge', 'complete', 'resume_with_answer', 'send_back', 'accept', 'recheck', 'resume_company', 'stop_task', 'raise_daily_cap', 'wait', 'grant_capabilities']);
+export const Effect = z.enum(['retry', 'raise_cap', 'allow_once', 'keep_refused', 'merge', 'complete', 'resume_with_answer', 'send_back', 'accept', 'recheck', 'resume_company', 'stop_task', 'raise_daily_cap', 'wait', 'grant_capabilities', 'carry']);
 export type Effect = z.infer<typeof Effect>;
 
 export const DecisionKind = z.enum(['lease', 'failed', 'cap', 'tool', 'merge', 'question', 'briefing', 'review', 'ownership', 'staffing', 'invariant', 'health', 'usage_limit', 'capability']);

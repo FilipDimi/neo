@@ -290,6 +290,8 @@ function applyEffect(tx: Tx, db: Db, now: Date, decision: Decision, option: Deci
       if (mode === 'integrate' && typeof employeeId === 'string') return void tx.emit({ kind: 'run_requested', request: store.newRequest({ taskId: task.id, mode, employeeId, reason: 'integrate' }, now) });
       return requestAgain(tx, db, now, open, last, 'resume', 'Carry on with the task where you left off.');
     }
+    case 'carry':
+      return; // The supervisor does it: it needs git. The task the card hangs on is over, and stays so.
     case 'merge':
     case 'complete':
     case 'accept':

@@ -294,14 +294,15 @@ export function settleMeeting(tx: Tx, db: Db, now: Date, meeting: Task): void {
   const sentence = (text: string) => text.trim().replace(/[.\s]+$/, '');
   // Who accepted it as it is, when the leads did not all agree, and why: the card's answer says.
   const accepted = store.allDecisions(db).findLast((card) => card.taskId === meeting.id && card.kind === 'review' && card.answer?.optionId === 'accept');
-  const acceptedBy = accepted?.answer?.by ? (store.getEmployee(db, accepted.answer.by)?.name ?? 'the chief of staff') : 'you';
-  const how = agreed(db, meeting)
-    ? `Design agreed: ${m.topic}.`
-    : accepted
-      ? `Design settled: ${m.topic}. The leads did not all agree, and ${acceptedBy} accepted it as it is${accepted.answer?.why ? `: ${sentence(accepted.answer.why)}` : ''}.`
-      : `Design settled: ${m.topic}, with no other lead left to review it.`;
-  const text = [
-    how,
+  const acceptedBy = (reader: 'user' | 'caller'): string => (accepted?.answer?.by ? (store.getEmployee(db, accepted.answer.by)?.name ?? 'the chief of staff') : reader === 'user' ? 'you' : 'the user');
+  const how = (reader: 'user' | 'caller'): string =>
+    agreed(db, meeting)
+      ? `Design agreed: ${m.topic}.`
+      : accepted
+        ? `Design settled: ${m.topic}. The leads did not all agree, and ${acceptedBy(reader)} accepted it as it is${accepted.answer?.why ? `: ${sentence(accepted.answer.why)}` : ''}.`
+        : `Design settled: ${m.topic}, with no other lead left to review it.`;
+  const outcome = (reader: 'user' | 'caller'): string => [
+    how(reader),
     entries.length > 0 ? `Decided ${entries.map((entry) => `${entry.id}: ${sentence(entry.statement)}`).join('; ')}.` : 'Nothing was put on record.',
     meeting.contractVersion ? `Contract ${meeting.contractVersion}.` : '',
     made.length > 0 ? `Tickets: ${made.join(', ')}.` : 'No tickets.',
@@ -309,12 +310,13 @@ export function settleMeeting(tx: Tx, db: Db, now: Date, meeting: Task): void {
   ]
     .filter(Boolean)
     .join(' ');
+  const text = outcome('user');
   const at = now.toISOString();
   if (chief) tx.emit({ kind: 'message_sent', message: { id: store.newId(), fromId: chief.id, toId: 'user', taskId: meeting.id, text, state: 'delivered', at, deliveredAt: at } });
   // Whoever called the meeting is told how it ended, as the user is: its own work was waiting on nothing, and now knows.
   const caller = store.getEmployee(db, m.calledBy);
   const from = chief?.id ?? writer;
-  if (caller && !caller.fired && caller.id !== chief?.id && from) tell(tx, now, { toId: caller.id, fromId: from, taskId: null, text: `The design meeting you called is over. ${text}` });
+  if (caller && !caller.fired && caller.id !== chief?.id && from) tell(tx, now, { toId: caller.id, fromId: from, taskId: null, text: `The design meeting you called is over. ${outcome('caller')}` });
 }
 
 /** What the one who called the meeting is told. */

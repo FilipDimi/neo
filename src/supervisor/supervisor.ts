@@ -33,9 +33,9 @@ import { builtOnFor, indexFor, onContractVersion, onReadDecisions, onRecordDecis
 import { dirOf } from './recordFiles.ts';
 import { holdMeeting, meetingReply, planMeeting, proposalsOf, type MeetingCall, type Proposals } from './meeting.ts';
 import { planLines, resolveAfter, waitingOn } from './planning.ts';
-import { heldBy, holdersOf, sameAsk, waitsFor } from './claims.ts';
+import { heldBy, holdersOf, landingBranch, sameAsk, waitsFor } from './claims.ts';
 import { verifyClaims, type Claims } from './proof.ts';
-import { isStale, movedFor, movedText, upToDate } from './stale.ts';
+import { backfillLanded, isStale, movedFor, movedText, shownAs, upToDate } from './stale.ts';
 import { account, askText, BUDGET, called, looked, MOVES, newWatch, progressed, refusal, refused, resulted, undelivered, type Budget, type Watch } from './progress.ts';
 import { printOf, treeOf } from '../git/tree.ts';
 import { recover } from './recover.ts';
@@ -109,8 +109,6 @@ export class Supervisor {
   private readonly reports = new Map<string, string>();
   /** What each run's report or review said was checked and held, until the run ends. */
   private readonly claims = new Map<string, Claims>();
-  /** Runs whose report was held once because what their ticket is built on had moved: the next one is taken. */
-  private readonly heldStale = new Set<string>();
   /** Stops hearing the engine's own changes. */
   private readonly unhear: () => void;
   /** The progress watch of each live run: what it called since it last got somewhere. */
@@ -186,6 +184,7 @@ export class Supervisor {
   start(): void {
     if (this.timer) return;
     recover(this.db, this.now(), this.processes);
+    backfillLanded(this.db, this.now());
     void this.settleStaleCards();
     const health = () => void this.checkHealth().catch((error) => console.error('health check failed:', error));
     health();
@@ -317,7 +316,9 @@ export class Supervisor {
 
   /** Passes a waiting message to its reader's running session, if there is one: it is that session's next turn. */
   private forward(message: Message): void {
-    const live = store.liveRuns(this.db).find((run) => run.employeeId === message.toId);
+    // A message about a ticket is for the session working that ticket: said into another, it would be answered there and never seen here.
+    // One about no ticket goes to whatever its reader is working on, but not into a chat, whose every turn is a reply to the user.
+    const live = store.liveRuns(this.db).find((run) => run.employeeId === message.toId && (message.taskId ? run.taskId === message.taskId : run.mode !== 'route'));
     this.links.get(live?.id ?? '')?.send({ t: 'message', id: message.id, text: `Message from ${this.nameOf(message.fromId)}: ${message.text}` });
   }
 
@@ -566,7 +567,8 @@ export class Supervisor {
       const mounted = employee.skills.length > 0 ? mountSkills(this.skills().filter((skill) => employee.skills.includes(skill.id)), path.join(this.paths.mounts, employee.id)) : { skills: [], plugins: [] };
       const now = this.now();
       const run = store.newRun(request, now, leaseMinutesFor(request, task, team));
-      const messages = store.waitingMessages(this.db, employee.id);
+      // What waits for this employee about this ticket, or about none: a message about another ticket waits for that ticket's run.
+      const messages = store.waitingMessages(this.db, employee.id).filter((message) => message.taskId === null || message.taskId === task.id);
       const everyone = store.allEmployees(this.db).filter((e) => !e.fired);
       const gatesOf = (t: Team): string[] => (t.repos[0] ? (store.getRepo(this.db, t.repos[0].repoId)?.gates ?? []) : []).map((gate) => gate.name);
       const teams: TeamView[] = store.allTeams(this.db).map((t) => ({ team: t, lead: everyone.find((e) => e.id === t.leadId) ?? null, members: everyone.filter((e) => e.teamId === t.id), gates: gatesOf(t) }));
@@ -586,6 +588,8 @@ export class Supervisor {
         // What it waited for and where that is now, at its start; and for a lead that plans, its team's board.
         ...(!request.resumeSessionId && prepared.after?.length && request.mode !== 'review' && request.mode !== 'route' ? { waited: this.flow.waitedLines(prepared) } : {}),
         ...(request.mode === 'brief' && !request.resumeSessionId ? { plan: planLines(this.db, team, prepared, now) } : {}),
+        // A reviewer is shown what has moved under the ticket as of now, when its run starts: not as of when the review was asked for.
+        ...(request.mode === 'review' && isStale(movedFor(this.db, prepared)) ? { moved: `Since this ticket was made, what it is built on has moved. ${movedText(movedFor(this.db, prepared))} Check the work against what holds now, not against what held when the ticket was written.` } : {}),
         record: recordSection(this.db, indexFor(this.db, prepared)),
         remainingUsd: countsCost(company) ? Math.max(0, task.capUsd - store.spentOn(this.db, task.id)) : Infinity,
         envFiles: store.allRepos(this.db).flatMap((repo) => envFilesUnder(repo.path)),
@@ -1094,17 +1098,22 @@ export class Supervisor {
         // The draft of a meeting's design proposes decisions and tickets; nothing else does.
         const proposed = proposalsOf(this.db, store.getTask(this.db, run.taskId), report);
         if ('refused' in proposed) return { ok: false, text: proposed.refused };
-        // A ticket built on something that has since moved: its report is held once, until its author has answered for the change.
+        // A ticket built on something that has since moved: its report is held until its author has been shown everything that moved.
+        // What was shown is kept on the ticket, so the next report is taken if nothing more has moved, in this run or a later one.
         const reported = store.getTask(this.db, run.taskId);
         const moved = reported && run.mode !== 'review' && run.mode !== 'route' ? movedFor(this.db, reported) : null;
         if (reported && moved && isStale(moved)) {
-          if (!this.heldStale.has(run.id)) {
-            this.heldStale.add(run.id);
-            return { ok: false, text: `Not yet: what this ticket is built on has moved since it was made. ${movedText(moved)} Check your work against it, change what has to change, then report again and say in your summary how your work stands against it.` };
+          const shown = shownAs(moved);
+          if (reported.shownMoved !== shown) {
+            apply(this.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...reported, shownMoved: shown, updatedAt: now.toISOString() }, cause: 'edited' }), now);
+            const branch = landingBranch(this.db, reported);
+            const reach = moved.contract && branch && !store.contractVersions(this.db, reported.repoId ?? '').some((version) => version.version === moved.contract!.to && (version.on ?? []).includes(branch)) ? ` That contract is not on ${branch} yet, so your folder does not have it: say so in your summary.` : '';
+            return { ok: false, text: `Not yet: what this ticket is built on has moved since it was made. ${movedText(moved)}${reach} Check your work against it, change what has to change, then report again in full: the summary of your work with how it stands against this, and your checks.` };
           }
-          // It has been told and reports again: from here the ticket is built on what is current.
-          const current = upToDate(this.db, reported);
-          apply(this.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...reported, ...(current ? { builtOn: current } : {}), updatedAt: now.toISOString() }, cause: 'edited' }), now);
+          // It has been shown exactly this and reports again: the ticket is built on what it was shown.
+          const { shownMoved: _shown, ...rest } = reported;
+          const current = upToDate(this.db, reported, moved, landingBranch(this.db, reported), now);
+          apply(this.db, (tx) => tx.emit({ kind: 'task_changed', task: { ...rest, ...(current ? { builtOn: current } : {}), updatedAt: now.toISOString() }, cause: 'edited' }), now);
         }
         this.reports.set(run.id, report.summary);
         this.claims.set(run.id, claims);
@@ -1275,7 +1284,6 @@ export class Supervisor {
     this.reports.delete(runId);
     this.claims.delete(runId);
     this.watches.delete(runId);
-    this.heldStale.delete(runId);
     this.proposals.delete(runId);
     this.routed.delete(runId);
     this.allowedWrites.delete(runId);

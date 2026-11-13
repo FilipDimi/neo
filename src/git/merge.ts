@@ -68,7 +68,7 @@ export async function landOn(repoPath: string, dir: string, branch: string, targ
   return /untracked|overwritten/i.test(forwarded.out) ? { result: 'checkout_dirty', where: checkout } : { result: 'target_moved' };
 }
 
-export type Carried = 'carried' | 'same' | 'not_in_step' | 'checkout_dirty' | 'moved';
+export type Carried = 'carried' | 'same' | 'not_in_step' | 'checkout_dirty' | 'moved' | 'absent';
 
 /**
  * Carries some paths, as they are at one commit, onto another branch of the user's repository, as one commit of the
@@ -76,25 +76,27 @@ export type Carried = 'carried' | 'same' | 'not_in_step' | 'checkout_dirty' | 'm
  * otherwise something there would be overwritten that nobody looked at, and nothing is done. The branch moves by
  * fast-forward only, and never under someone's uncommitted work. Nothing in the folder's working tree is touched.
  */
-export async function carryPaths(input: { repoPath: string; dir: string; from: string; was: string; branch: string; paths: string[]; message: string; engine: Identity }): Promise<Carried> {
+export async function carryPaths(input: { repoPath: string; dir: string; from: string; was: string; branch: string; paths: string[]; message: string; engine: Identity; force?: boolean }): Promise<Carried> {
   const { repoPath, dir, from, was, branch, paths, engine } = input;
   assertOwnGitDir(dir);
+  // A branch that is not there is not one that moved: there is nothing to carry to.
+  if ((await git(repoPath, ['rev-parse', '-q', '--verify', `refs/heads/${branch}`])).code !== 0) return 'absent';
   if ((await git(dir, ['fetch', '-q', 'origin', `refs/heads/${branch}`])).code !== 0) return 'moved';
   const onto = await must(dir, ['rev-parse', 'FETCH_HEAD']);
-  // What a path is at a commit: the hash of its tree or file, or that it is not there.
-  const at = async (commit: string, file: string): Promise<string> => {
-    const found = await git(dir, ['rev-parse', '-q', '--verify', `${commit}:${file}`]);
-    return found.code === 0 ? found.out.trim() : 'absent';
-  };
+  // What a path is at a commit: its kind, its mode and the hash of what it holds, or that it is not there.
+  const at = async (commit: string, file: string): Promise<string> => (await git(dir, ['ls-tree', commit, '--', file])).out.trim().split('\t')[0] || 'absent';
   let same = true;
   let inStep = true;
   for (const file of paths) {
     const there = await at(onto, file);
     if (there !== (await at(from, file))) same = false;
     if (there !== (await at(was, file))) inStep = false;
+    // A file that stands where one of the path's folders would go would be replaced by the folder: that is not in step either.
+    const above = file.split('/').slice(0, -1);
+    for (let depth = 1; depth <= above.length; depth++) if ((await at(onto, above.slice(0, depth).join('/'))).split(' ')[1] === 'blob') inStep = false;
   }
   if (same) return 'same';
-  if (!inStep) return 'not_in_step';
+  if (!inStep && !input.force) return 'not_in_step';
 
   const index = path.join(os.tmpdir(), `vs-carry-${randomUUID()}`);
   const env = { GIT_INDEX_FILE: index };

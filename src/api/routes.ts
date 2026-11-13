@@ -269,7 +269,7 @@ export function routes(app: FastifyInstance, options: { db: Db; dataDir: string;
     const task = found(store.getTask(db, id(request)), 'such task');
     const events = readEvents(db, 0, 100_000, task.id).slice(-200);
     // What it is built on, with the decisions themselves: the record is not in the snapshot, so the drawer gets what it shows from here.
-    const builtOn = { entries: indexFor(db, task).cited, contract: task.builtOn?.contract ?? null, changesContractTo: task.contractVersion ?? null, moved: staleLine(movedFor(db, task)) };
+    const builtOn = { entries: indexFor(db, task).cited, contract: task.builtOn?.contract ?? null, changesContractTo: task.contractVersion ?? null, moved: task.state === 'done' || task.state === 'failed' ? null : staleLine(movedFor(db, task)) };
     return { task, children: store.listTasks(db, { parentId: task.id }), runs: store.runsOf(db, task.id), events, decisions: store.openDecisions(db, task.id), builtOn };
   });
 

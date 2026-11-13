@@ -7,6 +7,7 @@ import { apply, type Tx } from '../db/apply.ts';
 import type { Db } from '../db/open.ts';
 import * as store from '../db/store.ts';
 import { openWork, sentence, tellTicket } from './tell.ts';
+import { movedFor } from './stale.ts';
 import type { ToolReply } from '../runtime/tools.ts';
 import type { ContractVersion, Decision, RecordEntry, Run, Task } from '../shared/types.ts';
 import { TOOL_INPUT } from '../worker/protocol.ts';
@@ -55,9 +56,17 @@ export function recordDecision(tx: Tx, db: Db, now: Date, input: NewEntry): Reco
   tx.emit({ kind: 'record_changed', entry });
   if (replaced) {
     tx.emit({ kind: 'record_changed', entry: { ...replaced, replacedBy: entry.id } });
-    // Every open ticket built on the old one is told, at once, by whoever decided.
-    for (const task of openWork(db).filter((open) => open.builtOn?.decisions.includes(replaced.id))) {
-      tellTicket(tx, db, now, task, input.by.employeeId ?? 'user', `${replaced.id}, which this ticket is built on, was replaced by ${entry.id}: ${sentence(entry.statement)} Check your work against it.`);
+    // Every open ticket built on what this one now stands in place of, however far back, is told at once, by whoever decided.
+    for (const task of openWork(db)) {
+      const moved = movedFor(db, task).decisions.filter((one) => one.replacedBy === entry.id);
+      if (moved.length === 0) continue;
+      // The ticket the decision was made on needs no telling: its own author made it. It is built on the new one from here.
+      if (task.id === input.taskId && task.builtOn) {
+        const stands = new Map(moved.map((one) => [one.id, one.replacedBy]));
+        tx.emit({ kind: 'task_changed', task: { ...task, builtOn: { ...task.builtOn, decisions: [...new Set(task.builtOn.decisions.map((id) => stands.get(id) ?? id))] }, updatedAt: now.toISOString() }, cause: 'edited' });
+        continue;
+      }
+      for (const one of moved) tellTicket(tx, db, now, task, input.by.employeeId ?? 'user', `${one.id}, which this ticket is built on, was replaced by ${entry.id}: ${sentence(entry.statement)} Check your work against it.`);
     }
   }
   return entry;
@@ -166,6 +175,15 @@ export function contractProblem(input: { own: string | null; parent: string | nu
  * What a new ticket is built on: the decisions its maker named, after its parent's, each once; and the version its
  * repository's contract is at today. Undefined when that is nothing at all. A number nobody recorded is refused.
  */
+/** The version the contract's files are at: the one that landed last (where the counting began is the first). Null: none has. */
+export function landedContract(db: Db, repoId: string): string | null {
+  const landed = store
+    .contractVersions(db, repoId)
+    .flatMap((version) => (version.taskId === null ? [{ version: version.version, at: version.at }] : version.landedAt ? [{ version: version.version, at: version.landedAt }] : []))
+    .sort((a, b) => a.at.localeCompare(b.at));
+  return landed.at(-1)?.version ?? null;
+}
+
 export function builtOnFor(db: Db, input: { decisions?: string[] | undefined; parent?: Task | null | undefined; repoId: string | null }): Task['builtOn'] {
   const named = (input.decisions ?? []).map(normalId);
   const missing = named.find((id) => !store.getEntry(db, id));
@@ -173,7 +191,7 @@ export function builtOnFor(db: Db, input: { decisions?: string[] | undefined; pa
   const decisions = [...new Set([...(input.parent?.builtOn?.decisions ?? []), ...named])];
   // A repository that names no contract has none, whatever versions were once handed out for it.
   const repo = input.repoId ? store.getRepo(db, input.repoId) : undefined;
-  const contract = repo?.contract ? currentContract(db, repo.id) : null;
+  const contract = repo?.contract ? landedContract(db, repo.id) : null;
   return decisions.length === 0 && contract === null ? undefined : { decisions, contract };
 }
 
