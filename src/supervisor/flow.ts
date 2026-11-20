@@ -14,7 +14,7 @@ import { addedLines, changedFiles, commitAll, diffStat, discardChanges, NestedRe
 import { branchName, createFolder, publish, removeFolder } from '../git/folder.ts';
 import type { GateLimits, GateOptions, GateQueue } from '../git/gates.ts';
 import { git, must, type Identity } from '../git/git.ts';
-import { carryPaths, isMerged, landOn, mergeInto, type Carried } from '../git/merge.ts';
+import { carryPaths, isMerged, landOn, mergeInto, sameOn, type Carried } from '../git/merge.ts';
 import { treeOf } from '../git/tree.ts';
 import { outside, owns } from '../git/ownership.ts';
 import type { ToolReply } from '../runtime/tools.ts';
@@ -28,7 +28,7 @@ import { familyOf, movedFor } from './stale.ts';
 import { openWork, tellTicket } from './tell.ts';
 import { compareVersions } from './record.ts';
 import { hasFiles, type Claims } from './proof.ts';
-import { builtOnFor, contractProblem, issueContractVersion } from './record.ts';
+import { builtOnFor, contractProblem, issueContractVersion, landedContract } from './record.ts';
 import { dirOf, entriesFor, padded, underRecord, writeRecordFiles } from './recordFiles.ts';
 import * as decisions from './decisions.ts';
 import { writtenFiles } from '../api/files.ts';
@@ -834,7 +834,8 @@ export class Flow {
 
   /**
    * The contract changes only under a version the engine handed out. False when this work changed it without one, or
-   * holds one its files do not state: it has gone back to its author with the reason.
+   * holds one its files do not state: it has gone back to its author with the reason. Work that holds no version and
+   * has the contract exactly as another team's branch does changed nothing: it brought its branch up to the contract.
    */
   private async contractHolds(task: Task): Promise<boolean> {
     const site = this.site(task)!;
@@ -843,13 +844,19 @@ export class Flow {
     const changed = (await this.changed(task)).filter((file) => owns(paths, file));
     if (changed.length === 0) return true;
     const parent = task.parentId ? store.getTask(this.db, task.parentId) : undefined;
+    const own = task.contractVersion ?? null;
+    const above = parent?.contractVersion ?? null;
+    // A part's version covers the whole it was put into, once that part is done: not one that failed or is still open.
+    const parts = this.partsOfTask(task.id).flatMap((child) => (child.state === 'done' && child.contractVersion ? [child.contractVersion] : []));
+    const at = landedContract(this.db, site.repo.id);
+    const from = !own && !above && parts.length === 0 && at ? await sameOn(site.folder, 'HEAD', this.otherLandings(site.repo, site.teamRepo), this.contractPaths(site.repo)).catch(() => null) : null;
     const problem = contractProblem({
-      own: task.contractVersion ?? null,
-      parent: parent?.contractVersion ?? null,
-      // A part's version covers the whole it was put into, once that part is done: not one that failed or is still open.
-      parts: this.partsOfTask(task.id).flatMap((child) => (child.state === 'done' && child.contractVersion ? [child.contractVersion] : [])),
+      own,
+      parent: above,
+      parts,
       changed,
       added: await addedLines(site.folder, this.baseOf(task, site.teamRepo), paths.map((entry) => entry.replace(/\/\*{1,2}$/, ''))),
+      same: from && at ? { branch: from, version: at } : null,
     });
     if (!problem) return true;
     this.sendBack(task, `${problem}\n\nThen call mcp__engine__report_done again.`, `"${task.title}" changed the contract without its version`);
@@ -1231,8 +1238,11 @@ export class Flow {
           // A contract version landed with it: the contract is carried to the other teams' branches while the folder is still there,
           // and once the task is done whoever was built on an older version is told.
           const carried = await this.carryContract(task, site, target, landing).catch(() => null);
+          // Or it brought the contract here from another team's branch, with no version of its own: what is on that branch is on this one now.
+          const brought = carried ? null : await this.broughtContract(site, target, landing).catch(() => null);
           await this.complete(task.id);
           if (carried) this.tellContract(store.getTask(this.db, task.id)!, site.repo, target, carried, lastRun?.employeeId ?? task.createdBy);
+          if (brought) this.tellBrought(store.getTask(this.db, task.id)!, site.repo, target, brought, lastRun?.employeeId ?? task.createdBy);
           return;
         }
         case 'checkout_dirty':
@@ -1289,6 +1299,43 @@ export class Flow {
 
   private contractPaths(repo: Repo): string[] {
     return (repo.contract?.paths ?? []).map((entry) => entry.replace(/\/\*{1,2}$/, '').replace(/\/+$/, ''));
+  }
+
+  /** The branches the other teams of a repository land on: not the one this team starts from, nor the one it lands on. */
+  private otherLandings(repo: Repo, mine: { baseBranch: string; mergeTarget?: string | null | undefined }, target?: string): string[] {
+    const own = new Set([mine.baseBranch, mine.mergeTarget, target]);
+    const all = store.allTeams(this.db).flatMap((team) => team.repos.filter((entry) => entry.repoId === repo.id).map((entry) => entry.mergeTarget ?? entry.baseBranch));
+    return [...new Set(all)].filter((branch) => !own.has(branch)).sort();
+  }
+
+  /**
+   * A landing that held no version and left the contract's files on its branch exactly as another team's branch has
+   * them: that branch, and the landed versions written down as being there and not yet here. Null when the landing
+   * changed nothing in the contract, or nothing is written down that this branch did not already have.
+   */
+  private async broughtContract(site: { repo: Repo; folder: string; teamRepo: TeamRepo }, target: string, landing: { over: string; tip: string }): Promise<{ from: string; ids: string[]; version: string } | null> {
+    const paths = this.contractPaths(site.repo);
+    if (paths.length === 0) return null;
+    const at = async (commit: string, file: string): Promise<string> => (await git(site.folder, ['ls-tree', commit, '--', file])).out.trim().split('\t')[0] ?? '';
+    let changed = false;
+    for (const file of paths) if ((await at(landing.over, file)) !== (await at(landing.tip, file))) changed = true;
+    if (!changed) return null;
+    const from = await sameOn(site.folder, landing.tip, this.otherLandings(site.repo, site.teamRepo, target), paths);
+    if (!from) return null;
+    const there = store.contractVersions(this.db, site.repo.id).filter((version) => version.landedAt !== undefined && (version.on ?? []).includes(from) && !(version.on ?? []).includes(target));
+    if (there.length === 0) return null;
+    return { from, ids: there.map((one) => one.id), version: there.map((one) => one.version).reduce((highest, one) => (compareVersions(one, highest) > 0 ? one : highest)) };
+  }
+
+  /** Written down: those versions are on this branch too. The open tickets that land there and were built on an older one are told. */
+  private tellBrought(landed: Task, repo: Repo, target: string, brought: { from: string; ids: string[]; version: string }, fromId: string): void {
+    const family = familyOf(this.db, landed);
+    this.change((tx, now) => {
+      for (const one of store.contractVersions(this.db, repo.id).filter((issued) => brought.ids.includes(issued.id))) tx.emit({ kind: 'contract_version_issued', issued: { ...one, on: [...new Set([...(one.on ?? []), target])] } });
+      for (const task of openWork(this.db).filter((open) => open.repoId === repo.id && !family.has(open.id) && landingBranch(this.db, open) === target && movedFor(this.db, open).contract)) {
+        tellTicket(tx, this.db, now, task, fromId, `contract ${brought.version} is on ${target} now: "${landed.title}" brought it from ${brought.from}.`);
+      }
+    });
   }
 
   /**

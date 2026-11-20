@@ -207,6 +207,111 @@ describe('whoever depends on a change is told when it happens', () => {
   });
 });
 
+describe('a branch is brought up to the contract', () => {
+  const NEWER = 'Version 0.2.0\nGET /v1/stages\n';
+  /** The Rust branch holds a newer contract than the iOS branch, and the engine was told the contract is at that version. */
+  const rustAhead = (setup: Setup): void => {
+    const other = `${setup.repoPath}-rust`;
+    gitIn(setup.repoPath, 'worktree', 'add', '-q', other, 'track/rust');
+    fs.writeFileSync(`${other}/docs/contract/api.md`, NEWER);
+    gitIn(other, 'commit', '-q', '-am', 'contract 0.2.0');
+    gitIn(setup.repoPath, 'worktree', 'remove', '--force', other);
+    setup.w.clock.advance(60);
+    apply(setup.w.db, (tx) => tx.emit({ kind: 'contract_version_issued', issued: { id: 'cv1', repoId: 'repo1', version: '0.2.0', change: 'start', summary: '', taskId: null, decisions: [], by: null, at: setup.w.clock.now().toISOString() } }), setup.w.clock.now());
+  };
+
+  it('takes the contract as another team\'s branch has it, file for file, without a version', async () => {
+    const told: string[] = [];
+    const setup = twoTeams(async (s) => {
+      told.push(s.input.prompt);
+      s.write('docs/contract/api.md', NEWER);
+      s.write('app/Stages.swift', '// stages\n');
+      await s.engine('report_done', { summary: 'The app reads stages.' });
+    });
+    rustAhead(setup);
+    const made = setup.w.sup.createTask({ teamId: 'ios', assigneeId: 'ilead', title: 'Show stages', brief: 'x', doneCondition: 'y' });
+    await drain(setup);
+    // Taken at the first report: nobody was sent back and nobody was asked.
+    expect(told).toHaveLength(1);
+    expect(store.getTask(setup.w.db, made.id)).toMatchObject({ state: 'done', mergedInto: 'track/ios' });
+    expect(fileAt(setup.repoPath, 'track/ios', 'docs/contract/api.md')).toBe('Version 0.2.0\nGET /v1/stages');
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    // The contract did not change, so no number was handed out for it.
+    expect(store.contractVersions(setup.w.db, 'repo1').map((one) => one.version)).toEqual(['0.1.0', '0.2.0']);
+  });
+
+  it('sends back a copy that is not what the other branch holds, and lands it once it is', async () => {
+    const told: string[] = [];
+    const setup = twoTeams(async (s) => {
+      told.push(s.input.prompt);
+      s.write('docs/contract/api.md', s.resumed ? NEWER : `${NEWER}GET /v1/extra\n`);
+      await s.engine('report_done', { summary: 'Done.' });
+    });
+    rustAhead(setup);
+    const made = setup.w.sup.createTask({ teamId: 'ios', assigneeId: 'ilead', title: 'Show stages', brief: 'x', doneCondition: 'y' });
+    await drain(setup);
+    expect(told).toHaveLength(2);
+    for (const part of ['without a version', 'needs no version', 'exactly what that branch holds']) expect(told[1], part).toContain(part);
+    expect(store.getTask(setup.w.db, made.id)).toMatchObject({ state: 'done', mergedInto: 'track/ios' });
+    expect(fileAt(setup.repoPath, 'track/ios', 'docs/contract/api.md')).toBe('Version 0.2.0\nGET /v1/stages');
+  });
+
+  it('does not take an older contract back from a branch that is behind', async () => {
+    const told: string[] = [];
+    const setup = twoTeams(async (s) => {
+      told.push(s.input.prompt);
+      // First what the iOS branch still holds, then the Rust branch's own again.
+      s.write('docs/contract/api.md', s.resumed ? NEWER : 'Version 0.1.0\n');
+      s.write('server/stages.rs', '// stages\n');
+      await s.engine('report_done', { summary: 'Done.' });
+    });
+    rustAhead(setup);
+    const made = setup.w.sup.createTask({ teamId: 'rust', assigneeId: 'rlead', title: 'Serve stages', brief: 'x', doneCondition: 'y' });
+    await drain(setup);
+    expect(told).toHaveLength(2);
+    for (const part of ['what track/ios holds', 'do not state 0.2.0']) expect(told[1], part).toContain(part);
+    expect(store.getTask(setup.w.db, made.id)).toMatchObject({ state: 'done', mergedInto: 'track/rust' });
+    expect(fileAt(setup.repoPath, 'track/rust', 'docs/contract/api.md')).toBe('Version 0.2.0\nGET /v1/stages');
+  });
+
+  it('writes down that a landed version is on the branch once a ticket has brought it there, and tells the tickets that waited for it', async () => {
+    const setup = twoTeams(async (s) => {
+      if (titleOf(s) === 'Stages') await s.engine('contract_version', { change: 'adds', summary: 'Stages on cards.' });
+      if (titleOf(s) !== 'Stages' && titleOf(s) !== 'Catch up') return;
+      s.write('docs/contract/api.md', NEWER);
+      await s.engine('report_done', { summary: 'The contract has stages here.' });
+    });
+    // The contract was changed by hand on the iOS branch, so the engine will not carry over it, and the user leaves it.
+    const other = `${setup.repoPath}-ios`;
+    gitIn(setup.repoPath, 'worktree', 'add', '-q', other, 'track/ios');
+    fs.writeFileSync(`${other}/docs/contract/api.md`, 'Version 0.1.0\nedited by hand on iOS\n');
+    gitIn(other, 'commit', '-q', '-am', 'hand edit');
+    gitIn(setup.repoPath, 'worktree', 'remove', '--force', other);
+    const waits = setup.w.sup.createTask({ teamId: 'ios', assigneeId: 'ilead', title: 'Show cards', brief: 'x', doneCondition: 'y' });
+    apply(setup.w.db, (tx) => {
+      for (const request of store.requestsOf(setup.w.db, waits.id)) tx.emit({ kind: 'request_dropped', requestId: request.id, taskId: waits.id });
+      tx.emit({ kind: 'task_changed', task: { ...store.getTask(setup.w.db, waits.id)!, state: 'blocked' }, cause: 'state' });
+    }, setup.w.clock.now());
+    setup.w.sup.createTask({ teamId: 'rust', assigneeId: 'rlead', title: 'Stages', brief: 'x', doneCondition: 'y' });
+    setup.w.clock.advance(60);
+    await drain(setup);
+    const [card] = store.openDecisions(setup.w.db);
+    setup.w.sup.answer(card!.id, { optionId: 'leave' });
+    await setup.w.sup.settle();
+    const landed = () => store.contractVersions(setup.w.db, 'repo1').find((one) => one.version === '0.2.0')!;
+    expect(landed().on).toEqual(['track/rust']);
+
+    const brings = setup.w.sup.createTask({ teamId: 'ios', assigneeId: 'ilead', title: 'Catch up', brief: 'x', doneCondition: 'y' });
+    setup.w.clock.advance(60);
+    await drain(setup);
+    expect(store.getTask(setup.w.db, brings.id)).toMatchObject({ state: 'done', mergedInto: 'track/ios' });
+    expect(fileAt(setup.repoPath, 'track/ios', 'docs/contract/api.md')).toBe('Version 0.2.0\nGET /v1/stages');
+    expect(landed().on).toEqual(['track/rust', 'track/ios']);
+    const told = store.recentMessages(setup.w.db, 20).filter((message) => message.taskId === waits.id);
+    expect(told.at(-1)!.text).toBe('About "Show cards": contract 0.2.0 is on track/ios now: "Catch up" brought it from track/rust.');
+  });
+});
+
 describe('what the review of versions and push found', () => {
   const stagesLand = async (s: Scene) => {
     if (titleOf(s) !== 'Stages') return;

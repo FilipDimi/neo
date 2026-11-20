@@ -7,7 +7,7 @@ import type { ContractVersion } from '../../src/shared/types.ts';
 import { currentContract, issueContractVersion, nextVersion, onContractVersion, states } from '../../src/supervisor/record.ts';
 import { inProcess, type InProcess } from '../fixtures/inProcess.ts';
 import { looked, staged, type Scene } from '../fixtures/staged.ts';
-import { company as companyRow, employee, fileAt, gitRepo, repo, run, T0, task, team, tempDb, world, type World } from '../helpers.ts';
+import { company as companyRow, employee, fileAt, gitIn, gitRepo, repo, run, T0, task, team, tempDb, world, type World } from '../helpers.ts';
 
 // Real git.
 vi.setConfig({ testTimeout: 20_000 });
@@ -113,11 +113,15 @@ const everything = ['read_files', 'run_commands', 'write_code'] as const;
 const people = [employee({ id: 'lead', name: 'Priya', role: 'Leads the team.', capabilities: [...everything] }), employee({ capabilities: [...everything] }), employee({ id: 'emp2', name: 'Grace', capabilities: [...everything] })];
 type Setup = { w: World; fixture: InProcess; repoPath: string };
 
-/** Priya leads Ada and Grace in a repository whose contract is `docs/contract`; finished work lands on `team` by itself. */
-function ledWorld(play: (scene: Scene) => Promise<void> | void, contractPath = 'docs/contract'): Setup {
+/**
+ * Priya leads Ada and Grace in a repository whose contract is `docs/contract`; finished work lands on `team` by itself.
+ * With `ahead`, a second team lands on a branch of that name.
+ */
+function ledWorld(play: (scene: Scene) => Promise<void> | void, contractPath = 'docs/contract', ahead?: string): Setup {
   const fixture = inProcess(staged(play));
-  const repoPath = gitRepo();
-  const w = (open = world(fixture.spawn, { repos: [repo({ path: repoPath, contract: { paths: [contractPath] } })], teams: [team({ leadId: 'lead', repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: 'team' }] })], employees: people }));
+  const repoPath = gitRepo(ahead ? ['team', ahead] : ['team']);
+  const second = ahead ? [team({ id: 'team2', name: 'Server', selfManaged: true, repos: [{ repoId: 'repo1', baseBranch: ahead, mergeTarget: ahead }] })] : [];
+  const w = (open = world(fixture.spawn, { repos: [repo({ path: repoPath, contract: { paths: [contractPath] } })], teams: [team({ leadId: 'lead', repos: [{ repoId: 'repo1', baseBranch: 'team', mergeTarget: 'team' }] }), ...second], employees: people }));
   return { w, fixture, repoPath };
 }
 
@@ -204,6 +208,54 @@ describe('no version, no change to the contract', () => {
     expect(told.Grace).not.toContain('This ticket changes the contract');
     expect(store.getTask(setup.w.db, whole.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
     expect(store.openDecisions(setup.w.db)).toEqual([]);
+  });
+
+  it('lets a part bring the contract over from another team\'s branch, and the whole lands with it, with no version', async () => {
+    const newer = 'Version 0.2.0\nGET /v1/stories\n';
+    const setup = ledWorld(
+      async (s) => {
+        const integrating = s.mode === 'integrate' || (s.mode === 'work' && s.who === 'Priya');
+        if (s.mode === 'brief') {
+          const part = { brief: 'Do it.', doneCondition: 'Done.', priority: 2, capUsd: 0.5, retryAllowed: true, gates: [] };
+          await s.engine('propose_subtasks', {
+            subtasks: [
+              { ...part, title: 'The core', assigneeId: 'emp1', ownership: ['docs/contract', 'core'] },
+              { ...part, title: 'The screens', assigneeId: 'emp2', ownership: ['screens'] },
+            ],
+          });
+        }
+        if (s.mode === 'work' && !integrating) {
+          if (s.who === 'Ada') {
+            s.write('docs/contract/stories.md', newer);
+            s.write('core/stories.txt', 'read\n');
+          } else s.write('screens/news.txt', 'shown\n');
+          await s.engine('report_done', { summary: 'Done.' });
+        }
+        if (integrating) await s.engine('report_done', { summary: 'Together.' });
+        if (s.mode === 'review') await approve(s);
+      },
+      'docs/contract',
+      'server',
+    );
+    // The other team's branch holds the contract at 0.2.0, which is where the engine was told counting begins.
+    const other = `${setup.repoPath}-server`;
+    gitIn(setup.repoPath, 'worktree', 'add', '-q', other, 'server');
+    fs.mkdirSync(path.join(other, 'docs/contract'), { recursive: true });
+    fs.writeFileSync(path.join(other, 'docs/contract/stories.md'), newer);
+    gitIn(other, 'add', '-A');
+    gitIn(other, 'commit', '-q', '-m', 'contract 0.2.0');
+    gitIn(setup.repoPath, 'worktree', 'remove', '--force', other);
+    apply(setup.w.db, (tx) => void issueContractVersion(tx, setup.w.db, T0, { repoId: 'repo1', change: 'start', summary: 'Where counting begins.', taskId: null, by: null, version: '0.2.0' }));
+    const whole = setup.w.sup.createTask({ teamId: 'team1', title: 'Stories', brief: 'Core and screens.', doneCondition: 'Both.', capUsd: 3 });
+    await drain(setup);
+    expect(store.listTasks(setup.w.db, { parentId: whole.id }).map((part) => [part.title, part.state, part.contractVersion])).toEqual([
+      ['The core', 'done', undefined],
+      ['The screens', 'done', undefined],
+    ]);
+    expect(store.getTask(setup.w.db, whole.id)).toMatchObject({ state: 'done', mergedInto: 'team' });
+    expect(fileAt(setup.repoPath, 'team', 'docs/contract/stories.md')).toBe('Version 0.2.0\nGET /v1/stories');
+    expect(store.openDecisions(setup.w.db)).toEqual([]);
+    expect(store.contractVersions(setup.w.db, 'repo1').map((one) => one.version)).toEqual(['0.2.0']);
   });
 
   it('still holds a change to the contract to its version when the files outside the ticket\'s own were accepted', async () => {

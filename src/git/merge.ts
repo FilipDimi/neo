@@ -129,6 +129,26 @@ export async function carryPaths(input: { repoPath: string; dir: string; from: s
   }
 }
 
+/**
+ * The first of some branches of the user's repository that holds some paths exactly as a commit in the folder does:
+ * kind, mode and content, path for path. Null when none does. Paths that are nowhere on both sides are not a match:
+ * something has to be there.
+ */
+export async function sameOn(dir: string, commit: string, branches: string[], paths: string[]): Promise<string | null> {
+  assertOwnGitDir(dir);
+  const at = async (ref: string, file: string): Promise<string> => (await git(dir, ['ls-tree', ref, '--', file])).out.trim().split('\t')[0] || 'absent';
+  const here = await Promise.all(paths.map((file) => at(commit, file)));
+  if (here.every((entry) => entry === 'absent')) return null;
+  for (const branch of branches) {
+    if ((await git(dir, ['fetch', '-q', 'origin', `refs/heads/${branch}`])).code !== 0) continue; // not there: nothing to be the same as
+    const there = await must(dir, ['rev-parse', 'FETCH_HEAD']);
+    let same = true;
+    for (const [index, file] of paths.entries()) if ((await at(there, file)) !== here[index]) same = false;
+    if (same) return branch;
+  }
+  return null;
+}
+
 async function must2(cwd: string, args: string[], env: Record<string, string>): Promise<string> {
   const result = await git(cwd, args, undefined, env);
   if (result.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.out}`);

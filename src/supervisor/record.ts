@@ -157,11 +157,19 @@ export function states(text: string, version: string): boolean {
  * What is wrong with a ticket's change to the contract, in words for its author; null when nothing is. The contract
  * changes only on a ticket the engine gave a version to (or under one: its parent's, or a part's own), and the
  * ticket that holds the version states it in the contract's files.
+ *
+ * Bringing a branch up to the contract is not changing it. `same` names another team's branch whose contract the
+ * work's files now are, file for file, and the version the contract is at: where the files state that version, the
+ * work took the contract over as it stands, and needs no version. Where they do not, it took an older one back.
  */
-export function contractProblem(input: { own: string | null; parent: string | null; parts: string[]; changed: string[]; added: string }): string | null {
+export function contractProblem(input: { own: string | null; parent: string | null; parts: string[]; changed: string[]; added: string; same?: { branch: string; version: string } | null }): string | null {
   if (input.changed.length === 0) return null;
   if (!input.own && !input.parent && input.parts.length === 0) {
-    return `You changed the contract (${input.changed.slice(0, 8).join(', ')}) without a version. A change to the contract needs a version from the engine. On a team with a lead, the lead gets one with mcp__engine__contract_version. Anyone else asks with mcp__engine__request_decision, and the chief of staff can give this ticket one. If the contract did not need to change, take that change out.`;
+    if (input.same && states(input.added, input.same.version)) return null;
+    if (input.same) {
+      return `The contract's files (${input.changed.slice(0, 8).join(', ')}) are now what ${input.same.branch} holds, but they do not state ${input.same.version}, the version the contract is at. An older contract is not brought back this way: take that change out. A change to the contract needs a version from the engine.`;
+    }
+    return `You changed the contract (${input.changed.slice(0, 8).join(', ')}) without a version. A change to the contract needs a version from the engine. On a team with a lead, the lead gets one with mcp__engine__contract_version. Anyone else asks with mcp__engine__request_decision, and the chief of staff can give this ticket one. If the contract did not need to change, take that change out. Bringing the contract over from another team's branch needs no version, but then it has to be exactly what that branch holds, every file of it.`;
   }
   if (input.own && !states(input.added, input.own)) {
     return `The contract's files do not state ${input.own}, the version this change was given. Write it where the contract lists its versions. If a later version has landed since, that one stays the current one: add yours beside it, do not put it in its place.`;
