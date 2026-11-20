@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { engineFiles, type Paths } from '../db/dataDir.ts';
-import { ADMIN_TOOLS } from '../shared/adminTools.ts';
+import { ADMIN_TOOLS, CHIEF_TEAM_TOOLS } from '../shared/adminTools.ts';
 import { plainEnv, withToolchains } from '../runtime/env.ts';
 import type { Company, Employee, Message, Repo, Run, RunMode, RunRequest, Task, Team } from '../shared/types.ts';
 import type { EngineTool, WorkerJob } from '../worker/protocol.ts';
@@ -27,9 +27,11 @@ export const ENGINE_TOOLS_FOR: Record<RunMode, EngineTool[]> = {
  * contract version and calling a design meeting are for those who decide for others: a team's lead and the chief of staff.
  */
 export function engineToolsFor(input: { mode: RunMode; deciding: boolean; admin: boolean; chief: boolean; lead: boolean }): EngineTool[] {
-  // The admin's conversations change the setup: they get the setup tools, and no one else's do.
+  // The admin's conversations change the setup: they get the setup tools. The chief of staff's conversations with the
+  // user get the three that make and change a team, and no one else's get any.
   // A conversation about a card has one thing to do: answer it.
-  const own = input.deciding ? DECIDING_TOOLS : input.admin && input.mode === 'route' ? [...ENGINE_TOOLS_FOR.route, ...ADMIN_TOOLS] : ENGINE_TOOLS_FOR[input.mode];
+  const talking = input.mode === 'route' && !input.deciding;
+  const own = input.deciding ? DECIDING_TOOLS : talking && input.admin ? [...ENGINE_TOOLS_FOR.route, ...ADMIN_TOOLS] : talking && input.chief ? [...ENGINE_TOOLS_FOR.route, ...CHIEF_TEAM_TOOLS] : ENGINE_TOOLS_FOR[input.mode];
   const decides = input.chief || input.lead;
   // A design meeting is called by those who speak for a team, from their own work: not while deciding a card for the user.
   return [...own, 'read_decisions', ...(decides ? (['record_decision', 'contract_version'] as const) : []), ...(decides && !input.deciding && !input.admin ? (['call_meeting'] as const) : [])];

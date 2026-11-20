@@ -16,7 +16,7 @@ import type { HealthReport, Message, Run, RunOutcome, RunRequest, Task, Team } f
 import { TOOL_INPUT, ToSupervisor, type Check, type EngineTool } from '../worker/protocol.ts';
 import { unusable } from '../git/ownership.ts';
 import { GateQueue, type GateLimits } from '../git/gates.ts';
-import { ADMIN_TOOLS } from '../shared/adminTools.ts';
+import { ADMIN_TOOLS, CHIEF_TEAM_TOOLS } from '../shared/adminTools.ts';
 import { XCODE_BUILD_FOLDERS } from '../shared/teams.ts';
 import { adminTool } from './admin.ts';
 import { availableCapabilities, CAPABILITIES, commandLimits, envFilesUnder, grantKey, judgeToolCall } from './blastRadius.ts';
@@ -168,10 +168,20 @@ export class Supervisor {
     });
   }
 
-  /** One of the admin's setup tools. Only the admin's conversations may use them. */
+  /**
+   * One of the setup tools. The admin's conversations may use all of them. The chief of staff's conversations with the
+   * user may use the ones that make and change a team: never while it decides a card, where changing a team's limits
+   * would be the quickest way past the card.
+   */
   private async adminCall(run: Run, name: string, input: unknown): Promise<ToolReply> {
     const company = store.getCompany(this.db);
-    if (!company?.adminId || company.adminId !== run.employeeId || run.mode !== 'route') return { ok: false, text: 'Only the admin changes the setup, from a conversation. Tell the user to ask Morpheus.' };
+    const admin = Boolean(company?.adminId) && company!.adminId === run.employeeId && run.mode === 'route';
+    const chief = !admin && Boolean(company?.chiefOfStaffId) && company!.chiefOfStaffId === run.employeeId && run.mode === 'route';
+    if (chief) {
+      const adminName = (company!.adminId && store.getEmployee(this.db, company!.adminId)?.name) || 'the admin';
+      if (store.getTask(this.db, run.taskId)?.decisionId) return { ok: false, text: "A team is made or changed only when the user asks for it in the company chat, not while a card is being decided. Decide the card; if a team's setup is what stands in the way, say so in your notes and hand the card to the user." };
+      if (!(CHIEF_TEAM_TOOLS as readonly string[]).includes(name)) return { ok: false, text: `The chief of staff makes teams and changes them, and nothing else of the setup. ${name.replace(/_/g, ' ')} is the admin's: tell the user to ask ${adminName}, or to do it on the Hire page.` };
+    } else if (!admin) return { ok: false, text: 'Only the admin changes the setup, from a conversation. Tell the user to ask Morpheus.' };
     const now = this.now();
     apply(this.db, (tx) => tx.emit({ kind: 'run_activity', runId: run.id, taskId: run.taskId, employeeId: run.employeeId, text: `changing the setup: ${name.replace(/_/g, ' ')}` }), now);
     try {

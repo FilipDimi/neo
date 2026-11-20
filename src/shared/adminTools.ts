@@ -7,6 +7,12 @@ import { Capability, Effort, Gate } from './types.ts';
 
 export const ADMIN_TOOLS = ['company_setup', 'create_team', 'update_team', 'remove_team', 'hire', 'update_employee', 'fire', 'update_company', 'add_repository', 'set_gates', 'set_record', 'import_decisions'] as const;
 export type AdminTool = (typeof ADMIN_TOOLS)[number];
+/**
+ * The part of the setup the chief of staff changes too, when the user asks for it in the company chat: it reads the
+ * setup, makes a team and changes one. People, the company's rules and caps, repositories, gates and removing a team
+ * stay the admin's.
+ */
+export const CHIEF_TEAM_TOOLS = ['company_setup', 'create_team', 'update_team'] as const satisfies readonly AdminTool[];
 
 const teamFields = {
   purpose: z.string().optional(),

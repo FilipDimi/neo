@@ -117,6 +117,28 @@ describe('cards go to the chief of staff first', () => {
     expect(store.forUser(setup.w.db)).toEqual([]);
   });
 
+  it('does not change a team while it decides a card: that is done only when the user asks, in the company chat', async () => {
+    const replies: { ok: boolean; text: string }[] = [];
+    const tools: string[][] = [];
+    const setup = company(
+      work(escalate, async (s) => {
+        tools.push(s.input.engineTools?.names ?? []);
+        // The quickest way past a merge card would be to let the team merge by itself.
+        replies.push(await s.engine('update_team', { team: 'Engineering', mergeTarget: 'main' }));
+        replies.push(await s.engine('create_team', { name: 'Shortcut' }));
+        await s.engine('decide', { option: 'ask_user', notes: 'Yours to decide.' });
+        s.say('This one needs you.');
+      }),
+    );
+    greet(setup.w);
+    await drain(setup);
+    expect(replies).toHaveLength(2);
+    for (const reply of replies) expect(reply).toMatchObject({ ok: false, text: expect.stringMatching(/only when the user asks for it in the company chat, not while a card is being decided/) });
+    expect(tools[0]).not.toContain('update_team');
+    expect(store.allTeams(setup.w.db).find((entry) => entry.id === 'team1')!.repos[0]).toMatchObject({ mergeTarget: 'team' });
+    expect(store.allTeams(setup.w.db).map((entry) => entry.name)).not.toContain('Shortcut');
+  });
+
   it('hands the card to the user, with what Neo said, when only the user can decide', async () => {
     const replies: { ok: boolean; text: string }[] = [];
     const setup = company(

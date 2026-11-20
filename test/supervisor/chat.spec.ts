@@ -41,7 +41,7 @@ describe('the company chat', () => {
     expect(store.openRequests(w.db)).toMatchObject([{ mode: 'route', employeeId: 'neo' }]);
     await w.sup.tick();
     await fixture.idle();
-    expect(fixture.jobs[0]).toMatchObject({ mode: 'route', engineTools: ['create_task', 'set_status', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting'], tools: ['Read', 'Glob', 'Grep'] });
+    expect(fixture.jobs[0]).toMatchObject({ mode: 'route', engineTools: ['create_task', 'set_status', 'company_setup', 'create_team', 'update_team', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting'], tools: ['Read', 'Glob', 'Grep'] });
     for (const part of ['Make the open seamless', 'teamId: ios', 'teamId: marketing', 'Mara (id: mw)', 'mcp__engine__create_task']) expect(turn, part).toContain(part);
   });
 
@@ -169,19 +169,67 @@ describe('Morpheus, the admin', () => {
     expect(fixture.jobs[0]!.systemPrompt).not.toContain('## Company rules');
   });
 
-  it('does not lend the setup tools to anyone else, not even the chief of staff', async () => {
+  it("keeps the rest of the setup his: the chief of staff is refused people, the company's rules, and removing a team", async () => {
     const said: string[] = [];
     const { w, fixture } = admin(async (s) => {
       if (s.mode !== 'route') return;
       said.push((await s.engine('remove_team', { team: 'Marketing' })).text);
+      said.push((await s.engine('hire', { team: 'Marketing', name: 'Zed', role: 'Writes.', model: 'claude-haiku-5-5', tools: ['read_files'] })).text);
+      said.push((await s.engine('update_company', { addRule: 'Anything goes.' })).text);
       s.say('Tried.');
     });
-    chat(w.sup, 'remove marketing');
+    chat(w.sup, 'remove marketing, hire Zed and loosen the rules');
     await drain(w, fixture);
-    // The chief of staff has its own tools and the record's; the setup tools stay the admin's.
-    expect(fixture.jobs[0]!.engineTools).toEqual(['create_task', 'set_status', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting']);
-    expect(said[0]).toMatch(/Only the admin changes the setup/);
+    for (const reply of said) expect(reply).toMatch(/The chief of staff makes teams and changes them, and nothing else of the setup\. .* is the admin's: tell the user to ask Morpheus, or to do it on the Hire page\./);
+    expect(said).toHaveLength(3);
     expect(store.allTeams(w.db).map((entry) => entry.name)).toContain('Marketing');
+    expect(store.allEmployees(w.db).map((entry) => entry.name)).not.toContain('Zed');
+    expect(store.getCompany(w.db)!.rules).not.toContain('Anything goes.');
+  });
+});
+
+describe('the chief of staff makes and changes teams', () => {
+  it('makes a team and changes one when the user asks in the company chat, with the three tools for it', async () => {
+    const said: string[] = [];
+    let turn = '';
+    const { w, fixture } = company(async (s) => {
+      if (s.mode !== 'route') return;
+      turn = s.input.prompt;
+      said.push((await s.engine('company_setup', {})).text);
+      said.push((await s.engine('create_team', { name: 'QA', purpose: 'Tests the app before it ships.' })).text);
+      said.push((await s.engine('update_team', { team: 'Marketing', purpose: 'Writes the launch.' })).text);
+      s.say('Done: there is a QA team now, and Marketing writes the launch.');
+    });
+    chat(w.sup, 'make a QA team that tests the app before it ships, and Marketing now writes the launch');
+    await drain(w, fixture);
+    expect(said[0]).toMatch(/Chief of staff: Neo/);
+    expect(said[1]).toMatch(/Created the team QA/);
+    expect(store.allTeams(w.db).find((entry) => entry.name === 'QA')).toMatchObject({ purpose: 'Tests the app before it ships.' });
+    expect(store.allTeams(w.db).find((entry) => entry.name === 'Marketing')).toMatchObject({ purpose: 'Writes the launch.' });
+    // The setup tools it gets are those three, beside its own.
+    expect(fixture.jobs[0]!.engineTools).toEqual(['create_task', 'set_status', 'company_setup', 'create_team', 'update_team', 'read_decisions', 'record_decision', 'contract_version', 'call_meeting']);
+    // It is told what it may do, when, and what is not its to do.
+    expect(turn).toMatch(/mcp__engine__create_team/);
+    expect(turn).toMatch(/only when the user asks for it in this message/i);
+    expect(turn).toMatch(/hired, changed and fired by the user/);
+    // What it did shows while it does it, as the admin's changes do.
+    expect(store.recentMessages(w.db, 5).at(-1)).toMatchObject({ fromId: 'neo', toId: 'user' });
+  });
+
+  it('lends the tools to nobody else: a lead written to directly is refused, and is not offered them', async () => {
+    const said: string[] = [];
+    const { w, fixture } = company(async (s) => {
+      if (s.mode !== 'route') return;
+      said.push((await s.engine('create_team', { name: 'Shadow' })).text);
+      said.push((await s.engine('update_team', { team: 'Marketing', purpose: 'Mine now.' })).text);
+      s.say('Tried.');
+    });
+    messageEmployee(w.sup, 'lead', 'make yourself a second team');
+    await drain(w, fixture);
+    expect(said).toEqual(['Only the admin changes the setup, from a conversation. Tell the user to ask Morpheus.', 'Only the admin changes the setup, from a conversation. Tell the user to ask Morpheus.']);
+    expect(fixture.jobs[0]!.engineTools).not.toContain('create_team');
+    expect(store.allTeams(w.db).map((entry) => entry.name)).not.toContain('Shadow');
+    expect(store.allTeams(w.db).find((entry) => entry.name === 'Marketing')!.purpose).not.toBe('Mine now.');
   });
 });
 
